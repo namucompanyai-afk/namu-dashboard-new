@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import nodemailer from "nodemailer";
 
-const DATA_FILE  = path.join(process.cwd(), "data", "inventory.json");
-const ALERT_EMAILS = ["namucompany.ai@gmail.com"];
+const DATA_FILE = path.join(process.cwd(), "data", "inventory.json");
+const ALERT_EMAILS = ["huguoh8501@gmail.com", "namumedical22@gmail.com", "dlagusdn1991@gmail.com"];
 const SAFETY_DAYS = 14;
 
 export async function GET(request: Request) {
-  // Vercel Cron 보안 헤더 확인
   const authHeader = request.headers.get("authorization");
   const url = new URL(request.url);
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && url.searchParams.get("secret") !== "namu2024") {
@@ -24,29 +24,27 @@ export async function GET(request: Request) {
       return NextResponse.json({ message: "품목 없음" });
     }
 
-    const today       = new Date();
-    const upload      = new Date(uploadDate);
+    const today = new Date();
+    const upload = new Date(uploadDate);
     const elapsedDays = Math.floor((today.getTime() - upload.getTime()) / (1000 * 60 * 60 * 24));
 
-    // 예상 재고 계산
     const calculated = products.map((p: any) => {
       const estimatedStock = Math.max(0, p.stock - p.daily * elapsedDays + p.incoming);
-      const safetyStock    = p.daily * SAFETY_DAYS;
-      const daysLeft       = p.daily > 0 ? Math.floor(estimatedStock / p.daily) : 999;
-      const needRestock    = estimatedStock <= safetyStock && p.daily > 0;
-      const shortage       = Math.max(0, safetyStock - estimatedStock);
+      const safetyStock = p.daily * SAFETY_DAYS;
+      const daysLeft = p.daily > 0 ? Math.floor(estimatedStock / p.daily) : 999;
+      const needRestock = estimatedStock <= safetyStock && p.daily > 0;
+      const shortage = Math.max(0, safetyStock - estimatedStock);
       return { ...p, estimatedStock, safetyStock, daysLeft, needRestock, shortage };
     });
 
     const restockItems = calculated.filter((p: any) => p.needRestock);
-    const urgentItems  = calculated.filter((p: any) => p.daysLeft <= 7);
-    const normalItems  = calculated.filter((p: any) => !p.needRestock);
+    const urgentItems = calculated.filter((p: any) => p.daysLeft <= 7);
+    const normalItems = calculated.filter((p: any) => !p.needRestock);
 
     if (restockItems.length === 0) {
       return NextResponse.json({ message: "모든 품목 정상 - 알림 없음" });
     }
 
-    // Gmail 발송
     const dateStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
     await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
 
@@ -67,11 +65,19 @@ async function sendEmail(
   normalItems: any[],
   elapsedDays: number
 ) {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.GMAIL_USER,
+      pass: process.env.GMAIL_PASS,
+    },
+  });
+
   const restockRows = restockItems.map((p) => {
     const isUrgent = p.daysLeft <= 7;
-    const bg       = isUrgent ? "#fff5f5" : "#fffdf0";
-    const color    = isUrgent ? "#dc2626" : "#d97706";
-    const badge    = isUrgent
+    const bg = isUrgent ? "#fff5f5" : "#fffdf0";
+    const color = isUrgent ? "#dc2626" : "#d97706";
+    const badge = isUrgent
       ? `<span style="background:#fee2e2;color:#b91c1c;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700">긴급</span>`
       : `<span style="background:#fef9c3;color:#92400e;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700">입고필요</span>`;
     return `
@@ -133,20 +139,10 @@ async function sendEmail(
 </div>
 </body></html>`;
 
-  // Resend API로 Gmail 발송
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-    },
-    body: JSON.stringify({
-      from: "나무포털 재고알림 <onboarding@resend.dev>",
-      to: ALERT_EMAILS,
-      subject: `[나무포털] 📦 쿠팡 그로스 입고 알림 ${restockItems.length}건 - ${dateStr}`,
-      html,
-    }),
+  await transporter.sendMail({
+    from: `"나무포털 재고알림" <${process.env.GMAIL_USER}>`,
+    to: ALERT_EMAILS.join(", "),
+    subject: `[나무포털] 📦 쿠팡 그로스 입고 알림 ${restockItems.length}건 - ${dateStr}`,
+    html,
   });
-
-  if (!res.ok) throw new Error("이메일 발송 실패: " + await res.text());
 }
