@@ -1,68 +1,32 @@
-"use client";
+'use client';
+import Link from 'next/link';
 
-import { useMemo, useState } from "react";
-
-type SectionKey = "sales" | "hr";
-
-export default function Page() {
-  const [section, setSection] = useState<SectionKey>("sales");
-
-  const content = useMemo(() => {
-    if (section === "sales") {
-      return {
-        title: "Sales Dashboard",
-        icon: "📊",
-        desc: "판매, 주문 및 채널 실적이 여기에 표시됩니다. (Google Sheets 연동은 곧 제공될 예정입니다.)",
-        card: "💰 Sales data area (Google Sheets 연동 예정)",
-      };
-    }
-    return {
-      title: "HR Dashboard",
-      icon: "👥",
-      desc: "근태, 연차, 인사 데이터가 여기에 표시됩니다. (Google Sheets 연동은 곧 제공될 예정입니다.)",
-      card: "🗂️ HR data area (Google Sheets 연동 예정)",
-    };
-  }, [section]);
-
+function QuickLink({ title, desc, href, emoji }: { title: string; desc: string; href: string; emoji: string }) {
   return (
-    <div className="namu-app">
-      <aside className="namu-sidebar">
-        <div className="namu-brand">
-          <div className="namu-brand-title">🌳 나무컴퍼니 Dashboard</div>
+    <Link href={href} className="flex items-center gap-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md">
+      <div className="h-11 w-11 rounded-2xl bg-neutral-100 flex items-center justify-center text-xl">{emoji}</div>
+      <div className="flex-1">
+        <div className="text-[15px] font-semibold">{title}</div>
+        <div className="mt-1 text-sm text-gray-500">{desc}</div>
+      </div>
+      <div className="text-sm font-medium text-neutral-900">열기 →</div>
+    </Link>
+  );
+}
+
+export default function HomePage() {
+  return (
+    <div>
+      <section className="rounded-3xl border border-gray-200 bg-white p-8 shadow-sm">
+        <h1 className="text-3xl font-semibold">(회사명) 통합 포털</h1>
+        <p className="mt-3 text-sm text-gray-500">Sales / HR 대시보드를 한 곳에서 운영합니다.</p>
+      </section>
+      <section className="mt-7">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <QuickLink title="Sales Dashboard" desc="매출/성과/리포트" href="/sales" emoji="📊" />
+          <QuickLink title="HR Dashboard" desc="근태/휴가/승인/관리" href="/hr" emoji="🧑‍💼" />
         </div>
-
-        <nav className="namu-nav">
-          {/* 요청: Sales가 HR보다 위 */}
-          <button
-            className={`namu-nav-item ${section === "sales" ? "is-active" : ""}`}
-            onClick={() => setSection("sales")}
-            type="button"
-          >
-            📊 <span>Sales Dashboard</span>
-          </button>
-
-          <button
-            className={`namu-nav-item ${section === "hr" ? "is-active" : ""}`}
-            onClick={() => setSection("hr")}
-            type="button"
-          >
-            👥 <span>HR Dashboard</span>
-          </button>
-        </nav>
-      </aside>
-
-      <main className="namu-main">
-        <div className="namu-page">
-          <h1 className="namu-title">
-            <span className="namu-title-icon">{content.icon}</span>
-            {content.title}
-          </h1>
-
-          <p className="namu-desc">{content.desc}</p>
-
-          <section className="namu-card">{content.card}</section>
-        </div>
-      </main>
+      </section>
     </div>
   );
 }
