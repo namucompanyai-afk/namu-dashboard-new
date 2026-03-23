@@ -57,6 +57,11 @@ export default function Sidebar() {
             <span>Sales Dashboard</span>
           </Link>
 
+          <Link href="/inventory" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+            <span>📦</span>
+            <span>재고관리</span>
+          </Link>
+
           <div>
             <button onClick={() => setIsHROpen(!isHROpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/hr') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
               <span>👤</span>
@@ -118,7 +123,6 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* 모바일 상단 바 */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-40 bg-[#2d2d2d] text-white flex items-center px-4 h-14">
         <button onClick={() => setMobileOpen(true)} className="p-2 -ml-2">
           <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -128,12 +132,10 @@ export default function Sidebar() {
         <span className="ml-3 font-semibold">통합 대시보드</span>
       </div>
 
-      {/* 데스크톱 사이드바 */}
       <div className="hidden lg:flex w-64 bg-[#2d2d2d] text-white h-screen flex-col sticky top-0">
         {sidebarContent}
       </div>
 
-      {/* 모바일 오버레이 */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setMobileOpen(false)}></div>
