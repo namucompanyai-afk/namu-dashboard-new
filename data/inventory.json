@@ -1,0 +1,105 @@
+{
+  "products": [
+    {
+      "name": "[쌀쌀쌀 저속식단쌀]",
+      "option": "1개 2kg",
+      "skuId": "56115225",
+      "winner": "아이템위너",
+      "stock": 2667,
+      "incoming": 0,
+      "daily": 72,
+      "sales30": 2164
+    },
+    {
+      "name": "[보배마을] 귀리_그로스",
+      "option": "1개 1kg",
+      "skuId": "62185201",
+      "winner": "아이템위너",
+      "stock": 2477,
+      "incoming": 0,
+      "daily": 83,
+      "sales30": 2484
+    },
+    {
+      "name": "[보배마을 귀리 10곡]",
+      "option": "1개 800g",
+      "skuId": "70438823",
+      "winner": "아이템위너",
+      "stock": 1665,
+      "incoming": 0,
+      "daily": 2,
+      "sales30": 61
+    },
+    {
+      "name": "[보배마을] 흑보리",
+      "option": "1개 1kg",
+      "skuId": "67096174",
+      "winner": "아이템위너",
+      "stock": 1288,
+      "incoming": 0,
+      "daily": 37,
+      "sales30": 1117
+    },
+    {
+      "name": "[보배마을] 오색현미",
+      "option": "1개 1kg",
+      "skuId": "67096372",
+      "winner": "아이템위너",
+      "stock": 1144,
+      "incoming": 0,
+      "daily": 56,
+      "sales30": 1665
+    },
+    {
+      "name": "[쌀쌀쌀 국산 찰흑미]",
+      "option": "1개 2kg",
+      "skuId": "54146619",
+      "winner": "아이템위너",
+      "stock": 1123,
+      "incoming": 0,
+      "daily": 38,
+      "sales30": 1140
+    },
+    {
+      "name": "[보배마을] 호라산밀",
+      "option": "1kg 1kg 1개",
+      "skuId": "41667341",
+      "winner": "아이템위너",
+      "stock": 554,
+      "incoming": 0,
+      "daily": 47,
+      "sales30": 1397
+    },
+    {
+      "name": "[쌀쌀쌀 캐나다산 브라운 렌틸콩]",
+      "option": "1개 2kg",
+      "skuId": "50470320",
+      "winner": "아이템위너",
+      "stock": 457,
+      "incoming": 0,
+      "daily": 26,
+      "sales30": 776
+    },
+    {
+      "name": "[쌀쌀쌀 캐나다산 병아리콩]",
+      "option": "1개 2kg",
+      "skuId": "47846695",
+      "winner": "아이템위너",
+      "stock": 0,
+      "incoming": 1200,
+      "daily": 28,
+      "sales30": 836
+    },
+    {
+      "name": "[보배마을] 흑보리",
+      "option": "1개 1kg",
+      "skuId": "70489377",
+      "winner": "-",
+      "stock": 0,
+      "incoming": 0,
+      "daily": 0,
+      "sales30": 1
+    }
+  ],
+  "uploadDate": "2026-03-23T04:52:06.315Z"
+}
