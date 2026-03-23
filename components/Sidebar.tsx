@@ -55,7 +55,7 @@ export default function Sidebar() {
 
           {/* Sales Dashboard 드롭다운 */}
           <div>
-            <button onClick={() => setIsSalesOpen(!isSalesOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/sales') || isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+            <button onClick={() => setIsSalesOpen(!isSalesOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
               <span>📊</span>
               <span className="flex-1 text-left">Sales Dashboard</span>
               <span className="text-xs">{isSalesOpen ? '▼' : '▶'}</span>
@@ -63,11 +63,14 @@ export default function Sidebar() {
 
             {isSalesOpen && (
               <div className="ml-4 mt-1 space-y-1">
-                <Link href="/sales" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                {/* 매출현황 - 개발중 */}
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 cursor-not-allowed">
                   <span>📈</span>
                   <span>매출 현황</span>
-                </Link>
-                <Link href="/inventory" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">개발중</span>
+                </div>
+
+                <Link href="/sales" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>📦</span>
                   <span>재고관리</span>
                 </Link>
