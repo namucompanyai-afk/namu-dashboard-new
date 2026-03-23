@@ -67,7 +67,6 @@ export default function Sidebar() {
                   <span>📈</span>
                   <span>매출 현황</span>
                 </Link>
-
                 <Link href="/inventory" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>📦</span>
                   <span>재고관리</span>
@@ -90,36 +89,32 @@ export default function Sidebar() {
                   <span>🌴</span>
                   <span>연차 신청</span>
                 </Link>
-
                 <Link href="/hr/calendar" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/hr/calendar') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>📅</span>
                   <span>팀원 휴가 캘린더</span>
                 </Link>
-
-                {userRole === '관리자' && (
-                  <>
-                    <div className="border-t border-gray-600 my-2"></div>
-                    <div className="text-xs text-gray-400 px-3 py-1">관리</div>
-
-                    <Link href="/hr/leave/admin" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/hr/leave/admin') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-                      <span>✅</span>
-                      <span>전체 히스토리</span>
-                    </Link>
-
-                    <Link href="/hr/users" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/hr/users') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-                      <span>👥</span>
-                      <span>가입자 관리</span>
-                    </Link>
-
-                    <Link href="/hr/settings" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/hr/settings') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-                      <span>⚙️</span>
-                      <span>설정</span>
-                    </Link>
-                  </>
-                )}
               </div>
             )}
           </div>
+
+          {/* 관리 메뉴 - 관리자만, 항상 표시 */}
+          {userRole === '관리자' && (
+            <>
+              <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider mt-4">관리</div>
+              <Link href="/hr/leave/admin" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (isActive('/hr/leave/admin') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                <span>✅</span>
+                <span>전체 히스토리</span>
+              </Link>
+              <Link href="/hr/users" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (isActive('/hr/users') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                <span>👥</span>
+                <span>가입자 관리</span>
+              </Link>
+              <Link href="/hr/settings" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (isActive('/hr/settings') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                <span>⚙️</span>
+                <span>설정</span>
+              </Link>
+            </>
+          )}
         </div>
       </nav>
 
