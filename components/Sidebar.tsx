@@ -7,6 +7,7 @@ import { usePathname, useRouter } from 'next/navigation';
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const [isSalesOpen, setIsSalesOpen] = useState(true);
   const [isHROpen, setIsHROpen] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
@@ -52,16 +53,30 @@ export default function Sidebar() {
         <div className="space-y-1">
           <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider">분석</div>
 
-          <Link href="/sales" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (isActive('/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-            <span>📊</span>
-            <span>Sales Dashboard</span>
-          </Link>
+          {/* Sales Dashboard 드롭다운 */}
+          <div>
+            <button onClick={() => setIsSalesOpen(!isSalesOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/sales') || isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+              <span>📊</span>
+              <span className="flex-1 text-left">Sales Dashboard</span>
+              <span className="text-xs">{isSalesOpen ? '▼' : '▶'}</span>
+            </button>
 
-          <Link href="/inventory" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-            <span>📦</span>
-            <span>재고관리</span>
-          </Link>
+            {isSalesOpen && (
+              <div className="ml-4 mt-1 space-y-1">
+                <Link href="/sales" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>📈</span>
+                  <span>매출 현황</span>
+                </Link>
 
+                <Link href="/inventory" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/inventory') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>📦</span>
+                  <span>재고관리</span>
+                </Link>
+              </div>
+            )}
+          </div>
+
+          {/* HR Dashboard 드롭다운 */}
           <div>
             <button onClick={() => setIsHROpen(!isHROpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/hr') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
               <span>👤</span>
