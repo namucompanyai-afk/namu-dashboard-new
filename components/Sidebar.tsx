@@ -74,6 +74,11 @@ export default function Sidebar() {
                   <span>📦</span>
                   <span>재고관리</span>
                 </Link>
+
+                <Link href="/meta" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/meta') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>📣</span>
+                  <span>Meta 광고</span>
+                </Link>
               </div>
             )}
           </div>

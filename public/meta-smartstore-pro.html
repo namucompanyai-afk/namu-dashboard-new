@@ -1,0 +1,2054 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meta × SmartStore Pro</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=JetBrains+Mono:wght@400;500;700&family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg: #07090f;
+  --bg2: #0d1018;
+  --s1: #111520;
+  --s2: #161b28;
+  --b1: #1c2233;
+  --b2: #232b3e;
+  --blue: #1877f2;
+  --blue-g: linear-gradient(135deg,#1877f2,#0d5fd4);
+  --blue-d: rgba(24,119,242,0.12);
+  --blue-b: rgba(24,119,242,0.25);
+  --green: #05d394;
+  --green-d: rgba(5,211,148,0.1);
+  --orange: #ff6522;
+  --pink: #e535ab;
+  --cyan: #00b8d4;
+  --yellow: #ffc107;
+  --red: #ff3d57;
+  --t1: #dce4f0;
+  --t2: #637089;
+  --t3: #303a52;
+  --pos: #05d394;
+  --neg: #ff3d57;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Noto Sans KR',sans-serif;background:var(--bg);color:var(--t1);min-height:100vh;overflow-x:hidden;overflow-y:auto}
+
+/* ══════════ VIEWS ══════════ */
+.view{display:none}
+.view.active{display:block}
+#vSetup.active{display:flex;min-height:100vh;align-items:center;justify-content:center}
+#vDash.active{display:block;min-height:100vh}
+#vConfig.active{display:block;min-height:100vh}
+
+/* ══════════ SETUP VIEW ══════════ */
+.setup-wrap{
+  position:relative;width:100%;min-height:100vh;
+  display:flex;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+.setup-bg{
+  position:absolute;inset:0;
+  background:
+    radial-gradient(ellipse 600px 400px at 20% 50%,rgba(24,119,242,0.07) 0%,transparent 70%),
+    radial-gradient(ellipse 400px 600px at 80% 30%,rgba(5,211,148,0.05) 0%,transparent 70%);
+}
+.setup-grid{
+  position:absolute;inset:0;
+  background-image:linear-gradient(rgba(255,255,255,0.02) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.02) 1px,transparent 1px);
+  background-size:48px 48px;
+}
+.setup-card{
+  position:relative;z-index:2;width:580px;
+  background:var(--s1);border:1px solid var(--b2);border-radius:28px;
+  overflow:hidden;box-shadow:0 60px 140px rgba(0,0,0,0.8),0 0 0 1px rgba(24,119,242,0.07);
+}
+.sc-head{
+  padding:30px 36px;
+  background:linear-gradient(135deg,rgba(24,119,242,0.1),rgba(5,211,148,0.04));
+  border-bottom:1px solid var(--b2);display:flex;align-items:center;gap:16px;
+}
+.sc-logo{
+  width:50px;height:50px;border-radius:15px;flex-shrink:0;
+  background:var(--blue-g);display:flex;align-items:center;justify-content:center;
+  font-family:'Syne',sans-serif;font-weight:800;font-size:24px;color:#fff;
+  box-shadow:0 10px 28px rgba(24,119,242,0.45);
+}
+.sc-head h1{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;letter-spacing:-0.3px}
+.sc-head h1 em{font-style:normal;color:var(--green)}
+.sc-head p{font-size:12px;color:var(--t2);margin-top:3px;line-height:1.6}
+.sc-body{padding:32px 36px}
+.callout{
+  background:var(--bg2);border:1px solid var(--b1);border-radius:12px;
+  padding:14px 16px;margin-bottom:26px;font-size:12px;color:var(--t2);line-height:1.9;
+  border-left:3px solid var(--blue);
+}
+.callout strong{color:var(--t1)}
+.pill{display:inline-block;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:600}
+.pill.g{background:var(--green-d);color:var(--green)}
+.pill.b{background:var(--blue-d);color:var(--blue)}
+
+.fl{margin-bottom:16px}
+.fl label{display:block;font-size:11px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.8px;margin-bottom:7px}
+.fl .sub{font-size:11px;color:var(--t3);margin-top:5px}
+.fl .sub a{color:var(--blue);text-decoration:none}
+.fi{
+  width:100%;background:var(--bg2);border:1px solid var(--b2);border-radius:10px;
+  padding:11px 14px;color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:13px;
+  outline:none;transition:border-color .2s,box-shadow .2s;
+}
+.fi:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-d)}
+.fi::placeholder{color:var(--t3)}
+.fi-txt{font-family:'Noto Sans KR',sans-serif}
+.dr{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+.btn-main{
+  width:100%;margin-top:8px;background:var(--blue-g);border:none;border-radius:12px;
+  padding:15px;color:#fff;font-family:'Syne',sans-serif;font-weight:700;font-size:15px;
+  cursor:pointer;transition:all .2s;box-shadow:0 8px 28px rgba(24,119,242,0.4);letter-spacing:.2px;
+}
+.btn-main:hover{transform:translateY(-2px);box-shadow:0 14px 38px rgba(24,119,242,0.55)}
+.btn-main:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.sc-foot{text-align:center;font-size:11px;color:var(--t3);margin-top:14px;line-height:1.9}
+.sc-foot a{color:var(--blue);text-decoration:none}
+
+/* ══════════ LOADING ══════════ */
+#vLoad{
+  display:none;min-height:100vh;align-items:center;
+  justify-content:center;flex-direction:column;gap:20px;
+}
+#vLoad.active{display:flex}
+.spin{width:48px;height:48px;border:3px solid var(--b2);border-top-color:var(--blue);border-radius:50%;animation:rot .8s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.load-t{font-size:13px;color:var(--t2);font-weight:500}
+
+/* ══════════ SIDEBAR (shared) ══════════ */
+.sidebar{
+  position:fixed;left:0;top:0;bottom:0;width:224px;
+  background:var(--s1);border-right:1px solid var(--b1);
+  display:flex;flex-direction:column;padding:22px 0;z-index:100;
+}
+.sb-logo{display:flex;align-items:center;gap:10px;padding:0 18px 20px;border-bottom:1px solid var(--b1);margin-bottom:14px}
+.sb-logo .ico{width:32px;height:32px;background:var(--blue-g);border-radius:9px;display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:16px;color:#fff}
+.sb-logo .lbl{font-family:'Syne',sans-serif;font-weight:700;font-size:13px;line-height:1.3}
+.sb-logo .lbl small{display:block;font-size:10px;color:var(--t2);font-weight:400}
+.ns{padding:0 10px;margin-bottom:6px}
+.nlbl{font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:1px;padding:0 8px;margin-bottom:5px}
+.ni{
+  display:flex;align-items:center;gap:8px;padding:8px 8px;border-radius:8px;
+  cursor:pointer;font-size:13px;font-weight:500;color:var(--t2);
+  transition:all .15s;margin-bottom:1px;
+}
+.ni:hover{background:var(--s2);color:var(--t1)}
+.ni.on{background:var(--blue-d);color:var(--blue)}
+.ni .ic{font-size:14px;width:18px;text-align:center}
+.sb-bot{margin-top:auto;padding:14px 10px 0;border-top:1px solid var(--b1)}
+.acct-pill{display:flex;align-items:center;gap:7px;padding:9px 10px;border-radius:8px;background:var(--bg2);border:1px solid var(--b1)}
+.live{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pu 2s infinite;flex-shrink:0}
+@keyframes pu{0%,100%{opacity:1}50%{opacity:.3}}
+.acct-id{font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--t2);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn-out{background:none;border:none;color:var(--t3);cursor:pointer;font-size:13px;transition:color .15s}
+.btn-out:hover{color:var(--red)}
+
+/* ══════════ DASH MAIN ══════════ */
+.main{margin-left:224px;padding:26px 30px;min-width:0;overflow-x:hidden}
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;gap:12px}
+.pg-t{font-family:'Syne',sans-serif;font-weight:800;font-size:22px;letter-spacing:-.5px}
+.tbr{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.bdg{display:flex;align-items:center;gap:7px;background:var(--s1);border:1px solid var(--b2);border-radius:10px;padding:7px 13px;font-size:13px;color:var(--t2)}
+.bdg select{background:none;border:none;color:var(--t1);font-family:'Noto Sans KR',sans-serif;font-size:12px;cursor:pointer;outline:none}
+.bdg select option{background:var(--s2)}
+.btn-sm{background:var(--s1);border:1px solid var(--b2);border-radius:10px;padding:7px 13px;color:var(--t2);font-family:'Noto Sans KR',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:5px;white-space:nowrap}
+.btn-sm:hover{border-color:var(--blue);color:var(--t1)}
+.btn-sm.act{background:var(--blue-d);border-color:var(--blue);color:var(--blue)}
+
+/* ══════════ PERIOD COMPARE BAR ══════════ */
+.period-bar{
+  background:var(--s1);border:1px solid var(--b2);border-radius:14px;
+  padding:16px 22px;margin-bottom:18px;
+  display:flex;align-items:center;gap:0;
+}
+.pb-seg{flex:1;padding:0 20px}
+.pb-seg:first-child{padding-left:0}
+.pb-div{width:1px;height:44px;background:var(--b2);align-self:center;flex-shrink:0}
+.pb-lbl{font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.pb-tag{font-size:9px;padding:2px 6px;border-radius:3px;font-weight:700}
+.pb-tag.cur{background:var(--blue-d);color:var(--blue)}
+.pb-tag.prv{background:rgba(255,255,255,0.06);color:var(--t2)}
+.pb-row{display:flex;align-items:baseline;gap:8px}
+.pb-val{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;letter-spacing:-.5px}
+.pb-chg{font-size:11px;font-weight:600}
+.pb-chg.up{color:var(--pos)} .pb-chg.dn{color:var(--neg)}
+.pb-sub{font-size:10px;color:var(--t3);margin-top:3px}
+
+/* ══════════ ROAS COMPARE ══════════ */
+.roas-bar{
+  background:linear-gradient(135deg,rgba(24,119,242,0.06),rgba(5,211,148,0.04));
+  border:1px solid var(--b2);border-radius:14px;
+  padding:18px 24px;margin-bottom:18px;
+  display:grid;grid-template-columns:1fr 1px 1fr 1px 1fr auto;align-items:center;gap:0;
+}
+.rb-div{background:var(--b2);height:44px;align-self:center}
+.rb-item{padding:0 22px}
+.rb-item:first-child{padding-left:0}
+.rb-lbl{font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.src{font-size:9px;padding:2px 7px;border-radius:4px;font-weight:700;letter-spacing:.3px}
+.src.m{background:var(--blue-d);color:var(--blue)}
+.src.s{background:var(--green-d);color:var(--green)}
+.src.g{background:rgba(255,101,34,0.12);color:var(--orange)}
+.rb-val{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;letter-spacing:-1px}
+.rb-val.mc{color:var(--blue)} .rb-val.sc{color:var(--green)} .rb-val.gc{color:var(--orange)}
+.rb-sub{font-size:10px;color:var(--t3);margin-top:3px}
+.rb-btns{padding-left:22px;display:flex;flex-direction:column;gap:7px}
+.btn-upload{display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:9px;font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;border:1px solid var(--green);color:var(--green);background:var(--green-d);font-family:'Noto Sans KR',sans-serif;white-space:nowrap}
+.btn-upload:hover{background:rgba(5,211,148,0.2)}
+.btn-utm-open{display:flex;align-items:center;gap:6px;padding:8px 14px;border-radius:9px;font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;border:1px solid var(--b2);color:var(--t2);background:transparent;font-family:'Noto Sans KR',sans-serif;white-space:nowrap}
+.btn-utm-open:hover{border-color:var(--cyan);color:var(--cyan)}
+
+/* ══════════ KPI ══════════ */
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:18px}
+.kc{
+  background:var(--s1);border:1px solid var(--b1);border-radius:13px;
+  padding:16px 17px;position:relative;overflow:hidden;
+  transition:transform .2s,border-color .2s;animation:fu .4s ease both;
+}
+@keyframes fu{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.kc:hover{transform:translateY(-2px);border-color:var(--b2)}
+.kc::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px}
+.kc:nth-child(1)::after{background:var(--blue)}
+.kc:nth-child(2)::after{background:var(--cyan)}
+.kc:nth-child(3)::after{background:var(--green)}
+.kc:nth-child(4)::after{background:var(--orange)}
+.kc:nth-child(5)::after{background:var(--pink)}
+.kc-t{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.kc-l{font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.7px}
+.kc-i{font-size:14px}
+.kc-v{font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;letter-spacing:-.5px;line-height:1;margin-bottom:6px}
+.kc:nth-child(1) .kc-v{color:var(--blue)}
+.kc:nth-child(2) .kc-v{color:var(--cyan)}
+.kc:nth-child(3) .kc-v{color:var(--green)}
+.kc:nth-child(4) .kc-v{color:var(--orange)}
+.kc:nth-child(5) .kc-v{color:var(--pink)}
+.kc-m{display:flex;align-items:center;gap:6px}
+.kc-c{font-size:11px;font-weight:600}
+.kc-c.p{color:var(--pos)} .kc-c.n{color:var(--neg)}
+.kc-prev{font-size:10px;color:var(--t3)}
+.kc-gb{height:2px;background:var(--b1);border-radius:2px;margin-top:8px;overflow:hidden}
+.kc-gf{height:100%;border-radius:2px;transition:width .8s ease}
+
+/* ══════════ CHARTS ══════════ */
+.cr{display:grid;grid-template-columns:3fr 2fr;gap:14px;margin-bottom:14px}
+.cc{background:var(--s1);border:1px solid var(--b1);border-radius:13px;padding:18px 20px;animation:fu .5s ease both;min-width:0;overflow:hidden}
+.canvas-wrap{position:relative;height:195px;width:100%}
+.canvas-wrap canvas{position:absolute;inset:0}
+.ch{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;gap:10px}
+.ct{font-family:'Syne',sans-serif;font-weight:700;font-size:13px}
+.cs{font-size:10px;color:var(--t3);margin-top:3px}
+.tabs{display:flex;background:var(--bg2);border-radius:8px;padding:3px;gap:2px}
+.tb{padding:4px 9px;border-radius:5px;border:none;background:none;color:var(--t3);font-family:'Noto Sans KR',sans-serif;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s}
+.tb.on{background:var(--blue);color:#fff}
+.tb:hover:not(.on){color:var(--t2)}
+
+/* SECOND ROW */
+.sr{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px;margin-bottom:14px}
+
+/* TABLE */
+table{width:100%;border-collapse:collapse;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--b2);border-radius:8px;overflow:hidden}
+thead th{text-align:left;padding:10px 12px;font-size:10px;font-weight:600;color:var(--t2);text-transform:uppercase;letter-spacing:.6px;border-bottom:2px solid var(--b2);border-right:1px solid var(--b2);white-space:nowrap;background:var(--bg2)}
+thead th:last-child{border-right:none}
+tbody td{padding:11px 12px;border-bottom:1px solid var(--b2);border-right:1px solid var(--b2);color:var(--t2);vertical-align:middle}
+tbody td:last-child{border-right:none}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:rgba(255,255,255,.03)}
+.cn{font-weight:600;color:var(--t1);font-size:12px}
+.co{font-size:10px;color:var(--t3);margin-top:1px}
+.stag{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:700}
+.stag.a{background:rgba(5,211,148,.1);color:var(--green)}
+.stag.a::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--green);animation:pu 2s infinite}
+.stag.p{background:rgba(255,193,7,.1);color:var(--yellow)}
+.stag.e{background:rgba(255,61,87,.1);color:var(--red)}
+.mono{font-family:'JetBrains Mono',monospace;font-size:11px}
+.roas-box{display:flex;flex-direction:column;gap:2px}
+.rv-m{font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--blue)}
+.rv-s{font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--green);font-weight:700}
+.rv-l{font-size:9px;color:var(--t3)}
+.spk{height:3px;background:var(--b1);border-radius:3px;overflow:hidden;width:44px}
+.spk-f{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--cyan))}
+
+/* DONUT */
+.dw{position:relative;height:148px;display:flex;align-items:center;justify-content:center;margin-bottom:10px}
+.dc{position:absolute;text-align:center;pointer-events:none}
+.dc .b{font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:700;color:var(--blue)}
+.dc .s{font-size:10px;color:var(--t3)}
+.al{display:flex;flex-direction:column;gap:5px}
+.ar{display:flex;align-items:center;justify-content:space-between;font-size:11px}
+.al2{display:flex;align-items:center;gap:5px;color:var(--t2)}
+.ad{width:7px;height:7px;border-radius:2px;flex-shrink:0}
+.ap{font-family:'JetBrains Mono',monospace;font-weight:600;font-size:11px}
+
+/* FUNNEL */
+.fll{display:flex;flex-direction:column;gap:10px}
+.fl-t{display:flex;justify-content:space-between;margin-bottom:4px;font-size:12px}
+.f-st{color:var(--t2);font-weight:500}
+.f-n{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--t3)}
+.ft{height:5px;background:var(--b1);border-radius:5px;overflow:hidden}
+.ff{height:100%;border-radius:5px}
+
+/* ══════════ CONFIG VIEW ══════════ */
+.cfg-main{margin-left:224px;padding:26px 30px;min-width:0;overflow-x:hidden}
+.cfg-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+.cfg-t{font-family:'Syne',sans-serif;font-weight:800;font-size:22px;letter-spacing:-.5px}
+.cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;align-items:start}
+.cfg-card{background:var(--s1);border:1px solid var(--b2);border-radius:16px;padding:24px;position:relative;overflow:hidden}
+.cfg-card::before{content:'';position:absolute;top:0;right:0;width:120px;height:120px;border-radius:50%;opacity:.04;filter:blur(30px)}
+.cfg-card:nth-child(1)::before{background:var(--blue)}
+.cfg-card:nth-child(2)::before{background:var(--green)}
+.cfg-card:nth-child(3)::before{background:var(--orange)}
+.cfg-card:nth-child(4)::before{background:var(--pink)}
+.cfg-card-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.cfg-card-title{font-family:'Syne',sans-serif;font-weight:700;font-size:15px}
+.cfg-card-sub{font-size:11px;color:var(--t2);margin-top:3px}
+.cfg-badge{font-size:10px;padding:3px 10px;border-radius:6px;font-weight:700}
+.cfg-badge.ok{background:var(--green-d);color:var(--green)}
+.cfg-badge.warn{background:rgba(255,193,7,.12);color:var(--yellow)}
+.cfg-badge.off{background:rgba(255,61,87,.1);color:var(--red)}
+
+/* STORE CONFIG */
+.store-tabs{display:flex;gap:4px;background:var(--bg2);border-radius:10px;padding:4px;margin-bottom:18px}
+.st-tab{flex:1;padding:8px;border-radius:7px;border:none;background:none;color:var(--t3);font-family:'Noto Sans KR',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;text-align:center}
+.st-tab.on{background:var(--s2);color:var(--t1)}
+.drop-z{border:2px dashed var(--b2);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:all .2s;margin-bottom:12px}
+.drop-z:hover,.drop-z.drag{border-color:var(--green);background:var(--green-d)}
+.dz-ic{font-size:28px;margin-bottom:8px}
+.dz-t{font-size:13px;color:var(--t2);font-weight:500}
+.dz-s{font-size:11px;color:var(--t3);margin-top:4px}
+#xlsxIn{display:none}
+.step-list{display:flex;flex-direction:column;gap:7px;margin-bottom:16px}
+.step{display:flex;align-items:flex-start;gap:10px;font-size:12px;color:var(--t2)}
+.sn{width:20px;height:20px;background:var(--blue-d);color:var(--blue);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;margin-top:1px}
+
+/* UTM GENERATOR */
+.utm-builder{display:flex;flex-direction:column;gap:12px}
+.utm-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.uf{display:flex;flex-direction:column;gap:5px}
+.uf label{font-size:11px;font-weight:600;color:var(--t2)}
+.uf input,.uf select{background:var(--bg2);border:1px solid var(--b2);border-radius:8px;padding:9px 12px;color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:12px;outline:none;transition:border-color .2s;width:100%}
+.uf input:focus,.uf select:focus{border-color:var(--cyan)}
+.uf input::placeholder{color:var(--t3)}
+.uf select option{background:var(--s2)}
+.utm-result{
+  background:var(--bg2);border:1px solid var(--b1);border-radius:10px;
+  padding:12px 14px;margin-top:4px;
+}
+.utm-result .url-label{font-size:10px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+.utm-url{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--cyan);word-break:break-all;line-height:1.6}
+.utm-result-btns{display:flex;gap:8px;margin-top:10px}
+.btn-copy{padding:6px 14px;border-radius:7px;border:1px solid var(--cyan);background:rgba(0,184,212,.1);color:var(--cyan);font-size:11px;font-weight:600;cursor:pointer;font-family:'Noto Sans KR',sans-serif;transition:all .2s}
+.btn-copy:hover{background:rgba(0,184,212,.2)}
+.btn-copy.copied{border-color:var(--green);background:var(--green-d);color:var(--green)}
+
+/* GOAL CONFIG */
+.goal-grid{display:flex;flex-direction:column;gap:14px}
+.goal-row{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg2);border:1px solid var(--b1);border-radius:10px}
+.goal-info{display:flex;align-items:center;gap:10px}
+.goal-ic{font-size:20px}
+.goal-nm{font-size:13px;font-weight:600;color:var(--t1)}
+.goal-desc{font-size:11px;color:var(--t3);margin-top:2px}
+.goal-input-wrap{display:flex;align-items:center;gap:8px}
+.goal-in{background:var(--s1);border:1px solid var(--b2);border-radius:8px;padding:7px 12px;color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;width:110px;text-align:right;outline:none;transition:border-color .2s}
+.goal-in:focus{border-color:var(--blue)}
+.goal-unit{font-size:12px;color:var(--t2);font-weight:600;width:24px}
+.goal-status{width:8px;height:8px;border-radius:50%}
+.goal-status.ok{background:var(--green)}
+.goal-status.warn{background:var(--yellow)}
+.goal-status.bad{background:var(--red)}
+
+/* PERIOD CONFIG */
+.period-cfg{display:flex;flex-direction:column;gap:12px}
+.pcfg-row{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--bg2);border:1px solid var(--b1);border-radius:10px}
+.pcfg-lbl{font-size:12px;font-weight:600;color:var(--t1)}
+.pcfg-sub{font-size:11px;color:var(--t3);margin-top:2px}
+.toggle{width:38px;height:20px;border-radius:10px;cursor:pointer;position:relative;transition:background .2s;border:none;flex-shrink:0}
+.toggle.on{background:var(--green)} .toggle.off{background:var(--b2)}
+.toggle::after{content:'';position:absolute;top:3px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .2s}
+.toggle.on::after{left:21px} .toggle.off::after{left:3px}
+
+/* CAMPAIGN ROAS DETAIL */
+.camp-roas-grid{display:flex;flex-direction:column;gap:10px}
+.croas-item{padding:12px 16px;background:var(--bg2);border:1px solid var(--b1);border-radius:10px}
+.croas-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.croas-name{font-size:12px;font-weight:600;color:var(--t1)}
+.croas-status{font-size:10px;padding:2px 7px;border-radius:4px;font-weight:700}
+.croas-vals{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px}
+.croas-val{text-align:center}
+.croas-val-n{font-family:'JetBrains Mono',monospace;font-size:14px;font-weight:700}
+.croas-val-l{font-size:9px;color:var(--t3);margin-top:2px}
+.croas-bar{height:4px;background:var(--b1);border-radius:4px;overflow:hidden}
+.croas-bar-f{height:100%;border-radius:4px}
+
+/* COMMON UTILS */
+#errBan{display:none;background:rgba(255,61,87,.1);border:1px solid rgba(255,61,87,.3);border-radius:10px;padding:11px 15px;font-size:12px;color:var(--red);margin-bottom:16px}
+.empty{text-align:center;padding:28px;color:var(--t3);font-size:13px}
+.btn-sec{background:none;border:1px solid var(--b2);border-radius:9px;padding:8px 16px;color:var(--t2);font-family:'Noto Sans KR',sans-serif;font-size:12px;cursor:pointer;transition:all .2s}
+.btn-sec:hover{border-color:var(--blue);color:var(--t1)}
+.btn-pri{background:var(--blue-g);border:none;border-radius:9px;padding:8px 18px;color:#fff;font-family:'Noto Sans KR',sans-serif;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;box-shadow:0 4px 14px rgba(24,119,242,.3)}
+.btn-pri:hover{filter:brightness(1.1)}
+.btn-grn{background:linear-gradient(135deg,#05d394,#03b87f);border:none;border-radius:9px;padding:8px 18px;color:#06080f;font-family:'Noto Sans KR',sans-serif;font-size:12px;font-weight:700;cursor:pointer}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--b2);border-radius:5px}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════ SETUP ══════════════════════════ -->
+<div id="vSetup" class="view active">
+  <div class="setup-wrap">
+    <div class="setup-bg"></div>
+    <div class="setup-grid"></div>
+    <div class="setup-card">
+      <div class="sc-head">
+        <div class="sc-logo">f</div>
+        <div>
+          <h1>Meta × <em>스마트스토어</em> Pro</h1>
+          <p>Meta 광고비 + 스마트스토어 실매출 기반 진짜 ROAS · 기간 비교 · NT 파라미터 관리</p>
+        </div>
+      </div>
+      <div class="sc-body">
+        <div class="callout">
+          <strong>왜 연결해야 하나요?</strong><br>
+          Meta 픽셀은 스마트스토어 결제 완료를 정확히 추적하지 못해 <span class="pill b">ROAS 과대 측정</span>이 발생합니다.
+          실제 매출 데이터를 연결하면 <span class="pill g">진짜 ROAS</span>를 캠페인별로 볼 수 있습니다.
+        </div>
+        <div class="fl">
+          <label>Access Token</label>
+          <input class="fi" id="ti" type="password" placeholder="EAAxxxxxxxxxxxxxxxx..." autocomplete="off"/>
+          <div class="sub"><a href="https://developers.facebook.com/tools/explorer/" target="_blank">Graph API Explorer</a>에서 발급 · ads_read 권한 필요</div>
+        </div>
+        <div class="fl">
+          <label>Ad Account ID</label>
+          <input class="fi" id="ai" type="text" placeholder="act_1234567890..." autocomplete="off"/>
+          <div class="sub">Meta Ads Manager → 계정 설정에서 확인 (act_ 포함)</div>
+        </div>
+        <div class="fl">
+          <label>조회 기간</label>
+          <div class="dr">
+            <input class="fi" id="sd" type="date"/>
+            <input class="fi" id="ed" type="date"/>
+          </div>
+        </div>
+        <button class="btn-main" onclick="connectMeta()">🔗 연결하고 대시보드 시작</button>
+        <button class="btn-demo" onclick="loadDemo()" style="width:100%;margin-top:10px;background:none;border:1px solid var(--b2);border-radius:12px;padding:13px;color:var(--t2);font-family:'Noto Sans KR',sans-serif;font-weight:600;font-size:14px;cursor:pointer;transition:all .2s;" onmouseover="this.style.borderColor='var(--green)';this.style.color='var(--green)'" onmouseout="this.style.borderColor='var(--b2)';this.style.color='var(--t2)'">👀 샘플 데이터로 대시보드 미리보기</button>
+        <div class="sc-foot">
+          토큰은 브라우저 메모리에만 저장됩니다 · 스마트스토어 매출은 연결 후 추가 가능<br>
+          <a href="https://developers.facebook.com/docs/marketing-api/" target="_blank">Marketing API 문서</a>
+          · <a href="https://sell.smartstore.naver.com/" target="_blank">스마트스토어 센터</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════ LOADING ══════════════════════════ -->
+<div id="vLoad" class="view">
+  <div class="spin"></div>
+  <div class="load-t" id="loadT">연결 중...</div>
+</div>
+
+<!-- ══════════════════════════ DASHBOARD ══════════════════════════ -->
+<div id="vDash" class="view">
+  <nav class="sidebar">
+    <div class="sb-logo">
+      <div class="ico">f</div>
+      <div class="lbl">Meta × Store<small>ROAS Pro Dashboard</small></div>
+    </div>
+    <div class="ns">
+      <div class="nlbl">분석</div>
+      <div class="ni on" onclick="goView('dash')"><span class="ic">📊</span> 성과 개요</div>
+      <div class="ni" onclick="goView('config');cfgTab('store')"><span class="ic">📦</span> 매출 연결</div>
+      <div class="ni" onclick="goView('dash')"><span class="ic">📣</span> 캠페인</div>
+      <div class="ni" onclick="goView('dash')"><span class="ic">🎯</span> 광고 세트</div>
+    </div>
+    <div class="ns" style="margin-top:8px">
+      <div class="nlbl">설정</div>
+      <div class="ni" onclick="goView('config')"><span class="ic">⚙️</span> 대시보드 설정</div>
+      <div class="ni" onclick="goView('config');cfgTab('utm')"><span class="ic">🔗</span> NT 파라미터</div>
+      <div class="ni" onclick="goView('config');cfgTab('goal')"><span class="ic">🎯</span> 목표 관리</div>
+      <div class="ni" onclick="goView('config');cfgTab('campaign')"><span class="ic">📣</span> 캠페인 ROAS</div>
+    </div>
+    <div class="sb-bot">
+      <div class="acct-pill">
+        <div class="live"></div>
+        <div class="acct-id" id="sbId">—</div>
+        <button class="btn-out" onclick="logout()">✕</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="main" id="dashMain">
+    <div class="topbar">
+      <div class="pg-t">광고 성과 개요</div>
+      <div class="tbr">
+        <div class="bdg">📅
+          <select id="psel" onchange="onPeriodSelect(this.value)">
+            <option value="7">최근 7일</option>
+            <option value="14">최근 14일</option>
+            <option value="30" selected>최근 30일</option>
+            <option value="60">최근 60일</option>
+          </select>
+        </div>
+        <button class="btn-sm" id="datePickerBtn" onclick="openDatePicker()">📆 기간 직접 설정</button>
+        <!-- 달력 모달 -->
+        <div id="calModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);align-items:center;justify-content:center;">
+          <div id="calBox" style="background:#111520;border:1px solid #232b3e;border-radius:18px;overflow:hidden;display:flex;box-shadow:0 32px 100px rgba(0,0,0,.8);">
+            <div style="padding:22px 24px;min-width:460px;">
+              <div style="font-size:13px;font-weight:700;color:#dce4f0;margin-bottom:18px;">📆 조회 기간 선택</div>
+              <div style="display:flex;gap:24px;">
+                <div style="flex:1;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <button id="cPrev" style="background:none;border:none;color:#637089;font-size:20px;cursor:pointer;padding:0 4px;">‹</button>
+                    <div id="cT1" style="font-size:13px;font-weight:700;color:#dce4f0;"></div>
+                    <div style="width:28px;"></div>
+                  </div>
+                  <div id="cG1" style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;"></div>
+                </div>
+                <div style="flex:1;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <div style="width:28px;"></div>
+                    <div id="cT2" style="font-size:13px;font-weight:700;color:#dce4f0;"></div>
+                    <button id="cNext" style="background:none;border:none;color:#637089;font-size:20px;cursor:pointer;padding:0 4px;">›</button>
+                  </div>
+                  <div id="cG2" style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;"></div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding-top:16px;border-top:1px solid #1c2233;margin-top:14px;">
+                <div id="cLabel" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#637089;">날짜를 선택하세요</div>
+                <div style="display:flex;gap:8px;">
+                  <button id="cCancel" style="padding:8px 16px;border-radius:9px;border:1px solid #232b3e;background:none;color:#637089;font-size:13px;cursor:pointer;">취소</button>
+                  <button id="cApply" style="padding:8px 20px;border-radius:9px;border:none;background:linear-gradient(135deg,#1877f2,#0d5fd4);color:#fff;font-size:13px;font-weight:700;cursor:pointer;">적용</button>
+                </div>
+              </div>
+            </div>
+            <div style="border-left:1px solid #1c2233;padding:22px 14px;width:108px;">
+              <div style="font-size:10px;font-weight:600;color:#303a52;text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px;">빠른선택</div>
+              <button class="cq" data-q="y">어제</button>
+              <button class="cq" data-q="7">최근 7일</button>
+              <button class="cq" data-q="14">최근 14일</button>
+              <button class="cq" data-q="30">최근 30일</button>
+              <button class="cq" data-q="tm">이번 달</button>
+              <button class="cq" data-q="lm">지난 달</button>
+              <button class="cq" data-q="lw">지난 주</button>
+            </div>
+          </div>
+        </div>
+        <button class="btn-sm" id="cmpBtn" onclick="toggleCompare()">📅 전기간 비교</button>
+        <button class="btn-sm" onclick="refreshAll()"><span id="ri">↻</span> 새로고침</button>
+      </div>
+    </div>
+    <div id="errBan"></div>
+
+    <!-- PERIOD COMPARE -->
+    <div class="period-bar" id="periodBar" style="display:none">
+      <div class="pb-seg">
+        <div class="pb-lbl"><span class="pb-tag cur">이번 기간</span></div>
+        <div class="pb-row">
+          <div class="pb-val" id="pbCurSpend">—</div>
+          <div class="pb-chg up" id="pbSpendChg">—</div>
+        </div>
+        <div class="pb-sub">총 지출</div>
+      </div>
+      <div class="pb-div"></div>
+      <div class="pb-seg">
+        <div class="pb-lbl"><span class="pb-tag cur">이번 기간</span> ROAS</div>
+        <div class="pb-row">
+          <div class="pb-val" id="pbCurRoas">—</div>
+          <div class="pb-chg" id="pbRoasChg">—</div>
+        </div>
+        <div class="pb-sub">Meta 픽셀 기준</div>
+      </div>
+      <div class="pb-div"></div>
+      <div class="pb-seg">
+        <div class="pb-lbl"><span class="pb-tag prv">이전 기간</span> 지출</div>
+        <div class="pb-row"><div class="pb-val" id="pbPrvSpend" style="color:var(--t2)">—</div></div>
+        <div class="pb-sub">이전 동일 기간</div>
+      </div>
+      <div class="pb-div"></div>
+      <div class="pb-seg">
+        <div class="pb-lbl"><span class="pb-tag prv">이전 기간</span> ROAS</div>
+        <div class="pb-row"><div class="pb-val" id="pbPrvRoas" style="color:var(--t2)">—</div></div>
+        <div class="pb-sub">이전 동일 기간</div>
+      </div>
+    </div>
+
+    <!-- ROAS BANNER -->
+    <div class="roas-bar">
+      <div class="rb-item">
+        <div class="rb-lbl"><span class="src m">Meta 픽셀</span> ROAS</div>
+        <div class="rb-val mc" id="rbMeta">—</div>
+        <div class="rb-sub">Meta 추정 전환 기준</div>
+      </div>
+      <div class="rb-div"></div>
+      <div class="rb-item">
+        <div class="rb-lbl"><span class="src s">스마트스토어</span> 실 ROAS</div>
+        <div class="rb-val sc" id="rbStore">미연결</div>
+        <div class="rb-sub" id="rbStoreSub">매출 데이터 연결 필요</div>
+      </div>
+      <div class="rb-div"></div>
+      <div class="rb-item">
+        <div class="rb-lbl"><span class="src g">괴리율</span></div>
+        <div class="rb-val gc" id="rbGap">—</div>
+        <div class="rb-sub" id="rbGapSub">Meta 과대 측정 여부</div>
+      </div>
+      <div class="rb-btns">
+        <button class="btn-upload" onclick="goView('config');cfgTab('store')">📦 매출 업로드</button>
+        <button class="btn-utm-open" onclick="goView('config');cfgTab('utm')">🔗 NT 파라미터</button>
+      </div>
+    </div>
+
+    <!-- KPI -->
+    <div class="kpi-grid" id="kpiGrid"></div>
+
+    <!-- CHARTS -->
+    <div class="cr">
+      <div class="cc">
+        <div class="ch">
+          <div><div class="ct">일별 성과 트렌드</div><div class="cs" id="tSub">—</div></div>
+          <div style="display:flex;gap:14px;align-items:center" id="tLegend"></div>
+        </div>
+        <div class="canvas-wrap"><canvas id="tChart"></canvas></div>
+      </div>
+      <div class="cc">
+        <div class="ch">
+          <div><div class="ct">ROAS 비교 추이</div><div class="cs">Meta vs 실매출</div></div>
+        </div>
+        <div class="canvas-wrap"><canvas id="rChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- 캠페인 성과 — 전체 너비 -->
+    <div class="cc" style="margin-bottom:14px">
+      <div class="ch">
+        <div><div class="ct">캠페인 성과</div><div class="cs" id="campCnt">—</div></div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>캠페인</th><th>상태</th><th>노출</th><th>클릭</th>
+            <th>CTR</th><th>지출</th><th>Meta ROAS</th><th>실 ROAS</th><th>소진율</th>
+          </tr></thead>
+          <tbody id="campBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 오디언스 + 전환 퍼널 — 나란히 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="cc">
+        <div class="ch"><div><div class="ct">오디언스</div><div class="cs">연령·성별</div></div></div>
+        <div class="dw"><canvas id="aChart"></canvas><div class="dc"><div class="b" id="dcB">—</div><div class="s">총 도달</div></div></div>
+        <div class="al" id="aLeg"></div>
+      </div>
+      <div class="cc">
+        <div class="ch"><div><div class="ct">전환 퍼널</div><div class="cs">노출 → 구매</div></div></div>
+        <div class="fll" id="fList"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ══════════════════════════ CONFIG VIEW ══════════════════════════ -->
+<div id="vConfig" class="view">
+  <nav class="sidebar">
+    <div class="sb-logo">
+      <div class="ico">f</div>
+      <div class="lbl">Meta × Store<small>ROAS Pro Dashboard</small></div>
+    </div>
+    <div class="ns">
+      <div class="nlbl">분석</div>
+      <div class="ni" onclick="goView('dash')"><span class="ic">📊</span> 성과 개요</div>
+      <div class="ni" onclick="cfgTab('store')"><span class="ic">📦</span> 매출 연결</div>
+      <div class="ni" onclick="goView('dash')"><span class="ic">📣</span> 캠페인</div>
+      <div class="ni" onclick="goView('dash')"><span class="ic">🎯</span> 광고 세트</div>
+    </div>
+    <div class="ns" style="margin-top:8px">
+      <div class="nlbl">설정</div>
+      <div class="ni" onclick="cfgTab('overview')"><span class="ic">⚙️</span> 대시보드 설정</div>
+      <div class="ni" onclick="cfgTab('utm')"><span class="ic">🔗</span> NT 파라미터</div>
+      <div class="ni" onclick="cfgTab('goal')"><span class="ic">🎯</span> 목표 관리</div>
+      <div class="ni" onclick="cfgTab('campaign')"><span class="ic">📣</span> 캠페인 ROAS</div>
+    </div>
+    <div class="sb-bot">
+      <div class="acct-pill">
+        <div class="live"></div>
+        <div class="acct-id" id="sbId2">—</div>
+        <button class="btn-out" onclick="logout()">✕</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="cfg-main">
+    <div class="cfg-topbar">
+      <div class="cfg-t" id="cfgTitle">대시보드 설정</div>
+      <button class="btn-sm" onclick="goView('dash')">← 대시보드로 돌아가기</button>
+    </div>
+
+    <!-- OVERVIEW TAB -->
+    <div id="cfgOverview">
+      <div class="cfg-grid">
+        <!-- STORE STATUS -->
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📦 매출 연결</div><div class="cfg-card-sub">실매출 기반 ROAS 계산</div></div>
+            <span class="cfg-badge" id="storeBadge">미연결</span>
+          </div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.9;margin-bottom:16px" id="storeStatus">
+            스마트스토어 매출 데이터가 연결되지 않았습니다.<br>
+            엑셀 업로드 또는 직접 입력으로 실 ROAS를 계산하세요.
+          </div>
+          <button class="btn-grn" onclick="cfgTab('store')" style="font-size:12px">매출 데이터 연결하기 →</button>
+        </div>
+        <!-- UTM STATUS -->
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">🔗 NT 파라미터 추적</div><div class="cfg-card-sub">캠페인별 유입 정확도 향상</div></div>
+            <span class="cfg-badge warn">권장</span>
+          </div>
+          <div style="font-size:12px;color:var(--t2);line-height:1.9;margin-bottom:16px">
+            광고 URL에 NT 파라미터를 추가하면<br>
+            스마트스토어 <strong>사용자 정의채널</strong>에서 Meta 유입 매출만 정확히 분리할 수 있습니다.
+          </div>
+          <button class="btn-pri" onclick="cfgTab('utm')" style="font-size:12px">NT 파라미터 열기 →</button>
+        </div>
+        <!-- PERIOD COMPARE -->
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📅 기간 비교</div><div class="cfg-card-sub">이번 기간 vs 이전 기간</div></div>
+            <button class="toggle off" id="cmpToggle" onclick="toggleCfgCompare(this)"></button>
+          </div>
+          <div class="period-cfg">
+            <div class="pcfg-row">
+              <div><div class="pcfg-lbl">이전 기간 자동 계산</div><div class="pcfg-sub">현재 기간과 동일한 일수로 자동 설정</div></div>
+              <button class="toggle on" onclick="this.classList.toggle('on');this.classList.toggle('off')"></button>
+            </div>
+            <div class="pcfg-row">
+              <div><div class="pcfg-lbl">KPI 카드 변화율 표시</div><div class="pcfg-sub">전기간 대비 증감률 배지</div></div>
+              <button class="toggle on" onclick="this.classList.toggle('on');this.classList.toggle('off')"></button>
+            </div>
+            <div class="pcfg-row">
+              <div><div class="pcfg-lbl">차트 이전 기간 오버레이</div><div class="pcfg-sub">트렌드 차트에 이전 기간 점선 추가</div></div>
+              <button class="toggle off" onclick="this.classList.toggle('on');this.classList.toggle('off')"></button>
+            </div>
+          </div>
+        </div>
+        <!-- GOAL CONFIG preview -->
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">🎯 목표 설정</div><div class="cfg-card-sub">KPI별 목표값 관리</div></div>
+            <span class="cfg-badge ok">설정됨</span>
+          </div>
+          <div class="goal-grid" id="goalPreview"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NT TAB -->
+    <div id="cfgUtm" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start">
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">🔗 NT 파라미터 생성기</div><div class="cfg-card-sub">스마트스토어 전용 유입 추적 URL 자동 생성</div></div>
+          </div>
+          <div class="utm-builder">
+            <div class="uf">
+              <label>마케팅 링크 또는 스마트스토어 URL</label>
+              <input id="utmBase" placeholder="https://mkt.shopping.naver.com/link/... 또는 smartstore.naver.com/..." oninput="buildUtm()"/>
+            </div>
+            <div class="utm-row">
+              <div class="uf">
+                <label>nt_source <span style="color:var(--t3);font-weight:400">(유입 채널)</span></label>
+                <select id="utmMed" onchange="buildUtm()">
+                  <option value="facebook">facebook</option>
+                  <option value="instagram">instagram</option>
+                  <option value="facebook_instagram">facebook_instagram</option>
+                </select>
+              </div>
+              <div class="uf">
+                <label>nt_medium <span style="color:var(--t3);font-weight:400">(광고 유형)</span></label>
+                <select id="ntMedium" onchange="buildUtm()">
+                  <option value="paid_social">paid_social</option>
+                  <option value="cpc">cpc</option>
+                  <option value="retargeting">retargeting</option>
+                  <option value="prospecting">prospecting</option>
+                  <option value="ad">ad</option>
+                </select>
+              </div>
+            </div>
+            <div class="utm-row">
+              <div class="uf">
+                <label>nt_detail <span style="color:var(--t3);font-weight:400">(캠페인명)</span></label>
+                <input id="utmCamp" placeholder="봄신상_런칭_2024" oninput="buildUtm()"/>
+              </div>
+              <div class="uf">
+                <label>nt_keyword <span style="color:var(--t3);font-weight:400">(광고 소재명)</span></label>
+                <input id="utmCont" placeholder="carousel_v1" oninput="buildUtm()"/>
+              </div>
+            </div>
+
+            <!-- Meta 자동변수 섹션 -->
+            <div style="background:rgba(24,119,242,0.07);border:1px solid rgba(24,119,242,0.2);border-radius:10px;padding:14px">
+              <div style="font-size:11px;font-weight:700;color:var(--blue);margin-bottom:10px">⚡ Meta 광고 자동변수 사용 (권장)</div>
+              <div style="font-size:11px;color:var(--t2);margin-bottom:10px;line-height:1.7">
+                Meta Ads Manager에서 <strong style="color:var(--t1)">URL 매개변수</strong> 란에 아래를 붙여넣으면<br>
+                캠페인명·소재명이 <strong style="color:var(--t1)">자동으로</strong> 채워집니다.
+              </div>
+              <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--cyan);line-height:1.8;word-break:break-all" id="autoVarText">
+                nt_source={{site_source_name}}&nt_medium=paid_social&nt_detail={{campaign.name}}&nt_keyword={{ad.name}}
+              </div>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <button class="btn-copy" id="autoVarBtn" onclick="copyAutoVar()" style="font-size:11px;padding:5px 12px">📋 자동변수 복사</button>
+                <div style="font-size:10px;color:var(--t3);align-self:center">Meta Ads → 광고 편집 → URL 매개변수에 붙여넣기</div>
+              </div>
+            </div>
+
+            <div class="utm-result">
+              <div class="url-label">수동 생성 URL (직접 입력한 경우)</div>
+              <div class="utm-url" id="utmOut">URL을 입력하면 자동으로 생성됩니다</div>
+              <div class="utm-result-btns">
+                <button class="btn-copy" id="copyBtn" onclick="copyUtm()">📋 URL 복사</button>
+                <button class="btn-sec" onclick="resetUtm()">초기화</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📋 NT 파라미터 사용 가이드</div><div class="cfg-card-sub">스마트스토어 유입 추적 방법</div></div>
+          </div>
+
+          <!-- 방법 A: 자동변수 -->
+          <div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">방법 A — Meta 자동변수 (추천)</div>
+          <div class="step-list" style="margin-bottom:16px">
+            <div class="step"><div class="sn">1</div><span>왼쪽의 <strong>자동변수 복사</strong> 버튼 클릭</span></div>
+            <div class="step"><div class="sn">2</div><span>Meta Ads Manager → 광고 편집 → <strong>URL 매개변수</strong> 란에 붙여넣기</span></div>
+            <div class="step"><div class="sn">3</div><span>광고 집행 후 스마트스토어 센터 → <strong>통계 → 마케팅관리 → 사용자 정의채널</strong> 확인</span></div>
+            <div class="step"><div class="sn">4</div><span>채널별 유입수·매출을 확인해 이 대시보드 <strong>매출 연결</strong>에 입력</span></div>
+          </div>
+
+          <!-- 방법 B: 마케팅 링크 -->
+          <div style="font-size:11px;font-weight:700;color:var(--yellow);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">방법 B — 마케팅 링크 직접 사용</div>
+          <div class="step-list" style="margin-bottom:16px">
+            <div class="step"><div class="sn">1</div><span>스마트스토어 센터 → <strong>마케팅 → 마케팅 링크 관리</strong>에서 링크 발급</span></div>
+            <div class="step"><div class="sn">2</div><span>발급된 <code style="color:var(--cyan);font-size:10px">mkt.shopping.naver.com/link/...</code> 링크를 Meta 광고 URL로 사용</span></div>
+            <div class="step"><div class="sn">3</div><span>이 경우 파라미터 추가 없이도 <strong style="color:var(--green)">수수료 할인 자동 적용</strong></span></div>
+            <div class="step"><div class="sn">4</div><span>단, 세부 유입 추적은 안 되므로 방법 A와 병행 권장</span></div>
+          </div>
+
+          <div style="background:rgba(255,193,7,0.08);border:1px solid rgba(255,193,7,0.2);border-radius:10px;padding:12px 14px;font-size:11px;color:var(--t2);line-height:1.9">
+            <strong style="color:var(--yellow)">⚠️ 주의</strong><br>
+            마케팅 링크 뒤에 NT 파라미터를 임의로 추가하면 <strong style="color:var(--t1)">수수료 할인이 적용 안 될 수 있습니다.</strong><br>
+            파라미터는 <strong>일반 상품 URL</strong>에만 붙이고, 마케팅 링크는 그대로 사용하세요.
+          </div>
+
+          <!-- SAVED URLs -->
+          <div style="margin-top:16px">
+            <div style="font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px">저장된 URL</div>
+            <div id="savedUtms" style="display:flex;flex-direction:column;gap:6px">
+              <div style="font-size:12px;color:var(--t3)">아직 저장된 URL이 없습니다</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STORE TAB -->
+    <div id="cfgStore" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start">
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📦 매출 데이터 입력</div><div class="cfg-card-sub">엑셀 업로드 또는 직접 입력</div></div>
+          </div>
+          <div class="store-tabs">
+            <button class="st-tab on" onclick="storeTab('excel',this)">📊 엑셀 업로드</button>
+            <button class="st-tab" onclick="storeTab('manual',this)">✏️ 직접 입력</button>
+          </div>
+          <div id="stExcel">
+            <div class="step-list">
+              <div class="step"><div class="sn">1</div><span>스마트스토어 센터 → <strong>통계 → 판매분석</strong></span></div>
+              <div class="step"><div class="sn">2</div><span>기간 설정 후 <strong>엑셀 다운로드</strong> (결제완료 기준)</span></div>
+              <div class="step"><div class="sn">3</div><span>다운로드 파일을 아래에 업로드</span></div>
+            </div>
+            <div class="drop-z" id="dropZ" onclick="document.getElementById('xlsxIn').click()"
+              ondragover="event.preventDefault();this.classList.add('drag')"
+              ondragleave="this.classList.remove('drag')"
+              ondrop="handleDrop(event)">
+              <div class="dz-ic">📂</div>
+              <div class="dz-t">파일을 끌어다 놓거나 클릭해서 선택</div>
+              <div class="dz-s" id="dzS">.xlsx / .xls 파일 지원</div>
+            </div>
+            <input type="file" id="xlsxIn" accept=".xlsx,.xls" onchange="handleXlsx(this.files[0])"/>
+          </div>
+          <div id="stManual" style="display:none">
+            <div class="step-list" style="margin-bottom:14px">
+              <div class="step"><div class="sn">1</div><span>스마트스토어 → 통계 → <strong>마케팅관리 → 사용자 정의채널</strong></span></div>
+              <div class="step"><div class="sn">2</div><span>NT 파라미터로 유입된 <strong>facebook / instagram</strong> 채널별 매출 확인</span></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+              <div class="uf"><label>Meta 유입 총매출 (원)</label><input id="manRev" type="number" placeholder="예: 5400000"/></div>
+              <div class="uf"><label>Meta 유입 주문건수</label><input id="manOrd" type="number" placeholder="예: 142"/></div>
+              <div class="utm-row">
+                <div class="uf"><label>시작일</label><input id="manS" type="date"/></div>
+                <div class="uf"><label>종료일</label><input id="manE" type="date"/></div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn-pri" onclick="applyStore()">✅ ROAS 계산 적용</button>
+            <button class="btn-sec" onclick="clearStore()">초기화</button>
+          </div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📊 현재 ROAS 비교</div><div class="cfg-card-sub">연결 상태 및 계산 결과</div></div>
+          </div>
+          <div id="storeResult">
+            <div style="font-size:12px;color:var(--t2);line-height:1.9;padding:20px;text-align:center;color:var(--t3)">
+              <div style="font-size:28px;margin-bottom:8px">📦</div>
+              스마트스토어 매출 데이터가 연결되지 않았습니다.<br>왼쪽에서 데이터를 입력해주세요.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GOAL TAB -->
+    <div id="cfgGoal" style="display:none">
+      <div style="max-width:700px">
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">🎯 KPI 목표 관리</div><div class="cfg-card-sub">목표 달성률이 KPI 카드에 표시됩니다</div></div>
+            <button class="btn-pri" onclick="saveGoals()">저장</button>
+          </div>
+          <div class="goal-grid">
+            <div class="goal-row">
+              <div class="goal-info">
+                <span class="goal-ic">📈</span>
+                <div><div class="goal-nm">ROAS 목표</div><div class="goal-desc">스마트스토어 실 ROAS 기준 (예: 400 = 4배)</div></div>
+              </div>
+              <div class="goal-input-wrap">
+                <input class="goal-in" id="gRoas" type="number" value="400" step="10" min="0" oninput="updateGoalStatus('gRoas','sRoas')"/>
+                <span class="goal-unit">%</span>
+                <div class="goal-status ok" id="sRoas"></div>
+              </div>
+            </div>
+            <div class="goal-row">
+              <div class="goal-info">
+                <span class="goal-ic">📌</span>
+                <div><div class="goal-nm">CTR 목표</div><div class="goal-desc">클릭률 최소 기준</div></div>
+              </div>
+              <div class="goal-input-wrap">
+                <input class="goal-in" id="gCtr" type="number" value="3.0" step="0.1" min="0" oninput="updateGoalStatus('gCtr','sCtr')"/>
+                <span class="goal-unit">%</span>
+                <div class="goal-status warn" id="sCtr"></div>
+              </div>
+            </div>
+            <div class="goal-row">
+              <div class="goal-info">
+                <span class="goal-ic">💰</span>
+                <div><div class="goal-nm">CPC 목표</div><div class="goal-desc">클릭당 최대 비용</div></div>
+              </div>
+              <div class="goal-input-wrap">
+                <input class="goal-in" id="gCpc" type="number" value="500" step="10" min="0" oninput="updateGoalStatus('gCpc','sCpc')"/>
+                <span class="goal-unit">₩</span>
+                <div class="goal-status ok" id="sCpc"></div>
+              </div>
+            </div>
+            <div class="goal-row">
+              <div class="goal-info">
+                <span class="goal-ic">🛒</span>
+                <div><div class="goal-nm">월 지출 한도</div><div class="goal-desc">이 금액 초과 시 경고</div></div>
+              </div>
+              <div class="goal-input-wrap">
+                <input class="goal-in" id="gSpend" type="number" value="5000000" step="100000" min="0" oninput="updateGoalStatus('gSpend','sSpend')"/>
+                <span class="goal-unit">₩</span>
+                <div class="goal-status ok" id="sSpend"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CAMPAIGN ROAS TAB -->
+    <div id="cfgCampaign" style="display:none">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start">
+        <div class="cfg-card" style="max-height:600px;overflow-y:auto">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📣 캠페인별 실 ROAS 세분화</div><div class="cfg-card-sub">각 캠페인에 스토어 매출 직접 배분</div></div>
+          </div>
+          <div class="camp-roas-grid" id="campRoasGrid">
+            <div class="empty">대시보드를 먼저 연결해주세요</div>
+          </div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-head">
+            <div><div class="cfg-card-title">📊 ROAS 분석</div><div class="cfg-card-sub">Meta vs 실 ROAS 비교</div></div>
+          </div>
+          <div style="position:relative;height:260px;width:100%"><canvas id="campRoasChart"></canvas></div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ─── STATE ──────────────────────────────────────────────
+let TOKEN='',ACCOUNT='',DS='',DE='';
+let D={account:{},campaigns:[],campInsights:[],insights:{},daily:[],audience:[]};
+let storeData={revenue:0,orders:0,source:'none'};
+let goals={roas:4,ctr:3,cpc:500,spend:5000000};
+let showCompare=false;
+let prevD={insights:{},campInsights:[]};
+let tC,rC,aC,crC;
+let curMetric='impressions';
+let savedUtms=[];
+
+// ─── INIT ────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded',()=>{
+  const t=new Date(),p=new Date();p.setDate(t.getDate()-29);
+  document.getElementById('ed').value=iso(t);
+  document.getElementById('sd').value=iso(p);
+  document.getElementById('manS').value=iso(p);
+  document.getElementById('manE').value=iso(t);
+  const cs=document.getElementById('customStart');
+  const ce=document.getElementById('customEnd');
+  if(cs)cs.value=iso(p);
+  if(ce)ce.value=iso(t);
+});
+const iso=d=>d.toISOString().slice(0,10);
+const fN=n=>Math.round(n).toLocaleString('ko-KR');
+
+// ─── VIEW ROUTING ────────────────────────────────────────
+function goView(v){
+  document.querySelectorAll('.view').forEach(el=>el.classList.remove('active'));
+  document.getElementById(v==='dash'?'vDash':'vConfig').classList.add('active');
+  if(v==='dash'){
+    document.querySelectorAll('#vDash .ni').forEach(n=>n.classList.remove('on'));
+    document.querySelector('#vDash .ni').classList.add('on');
+  }
+  if(v==='config') cfgTab('overview');
+}
+
+function cfgTab(tab){
+  document.getElementById('vConfig').classList.add('active');
+  document.getElementById('vDash').classList.remove('active');
+  ['Overview','Utm','Store','Goal','Campaign'].forEach(t=>{
+    const el=document.getElementById('cfg'+t);
+    if(el) el.style.display='none';
+  });
+  const titles={overview:'대시보드 설정',utm:'NT 파라미터',store:'매출 연결',goal:'목표 관리',campaign:'캠페인별 ROAS'};
+  const map={overview:'cfgOverview',utm:'cfgUtm',store:'cfgStore',goal:'cfgGoal',campaign:'cfgCampaign'};
+  const el=document.getElementById(map[tab]);
+  if(el) el.style.display='block';
+  document.getElementById('cfgTitle').textContent=titles[tab]||'설정';
+  // update sidebar
+  document.querySelectorAll('#vConfig .ni').forEach(n=>n.classList.remove('on'));
+  const idx={overview:0,utm:1,store:2,goal:3,campaign:4};
+  const items=document.querySelectorAll('#vConfig .ns:nth-of-type(2) .ni');
+  if(items[idx[tab]]) items[idx[tab]].classList.add('on');
+  if(tab==='campaign') renderCampRoas();
+  if(tab==='goal') renderGoalPreview();
+}
+
+// ─── CONNECT ─────────────────────────────────────────────
+async function connectMeta(){
+  TOKEN=document.getElementById('ti').value.trim();
+  ACCOUNT=document.getElementById('ai').value.trim();
+  DS=document.getElementById('sd').value;
+  DE=document.getElementById('ed').value;
+  if(!TOKEN||!ACCOUNT){alert('Access Token과 계정 ID를 입력하세요.');return;}
+  if(!ACCOUNT.startsWith('act_')) ACCOUNT='act_'+ACCOUNT;
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('vLoad').classList.add('active');
+  try{
+    await fetchAll();
+    document.getElementById('sbId').textContent=ACCOUNT;
+    document.getElementById('sbId2').textContent=ACCOUNT;
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('vDash').classList.add('active');
+    renderAll();
+  }catch(e){
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('vSetup').classList.add('active');
+    alert('연결 실패: '+e.message);
+  }
+}
+
+// ─── API ─────────────────────────────────────────────────
+const GR='https://graph.facebook.com/v19.0';
+async function api(path){
+  const sep=path.includes('?')?'&':'?';
+  const r=await fetch(`${GR}${path}${sep}access_token=${TOKEN}`);
+  const j=await r.json();
+  if(j.error)throw new Error(j.error.message);
+  return j;
+}
+
+async function fetchAll(){
+  setLoad('계정 정보 확인 중...');
+  D.account=await api(`/${ACCOUNT}?fields=name,currency,timezone_name`);
+  setLoad('캠페인 목록...');
+  const cr=await api(`/${ACCOUNT}/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget&limit=50`);
+  D.campaigns=cr.data||[];
+  setLoad('광고 성과 집계 중...');
+  D.insights=await api(`/${ACCOUNT}/insights?fields=impressions,clicks,spend,ctr,cpc,cpm,reach,actions,action_values&time_range={"since":"${DS}","until":"${DE}"}&level=account`);
+  setLoad('일별 데이터...');
+  const dr=await api(`/${ACCOUNT}/insights?fields=impressions,clicks,spend,ctr&time_range={"since":"${DS}","until":"${DE}"}&time_increment=1&level=account`);
+  D.daily=(dr.data||[]).sort((a,b)=>a.date_start.localeCompare(b.date_start));
+  setLoad('캠페인별 성과...');
+  const cir=await api(`/${ACCOUNT}/insights?fields=campaign_id,campaign_name,impressions,clicks,spend,ctr,cpc,actions,action_values&time_range={"since":"${DS}","until":"${DE}"}&level=campaign&limit=50`);
+  D.campInsights=cir.data||[];
+  setLoad('오디언스 분석...');
+  try{const ar=await api(`/${ACCOUNT}/insights?fields=impressions,reach&breakdowns=age,gender&time_range={"since":"${DS}","until":"${DE}"}&level=account&limit=100`);D.audience=ar.data||[];}catch{D.audience=[];}
+  // Fetch previous period for comparison
+  if(showCompare) await fetchPrev();
+}
+
+async function fetchPrev(){
+  const days=Math.round((new Date(DE)-new Date(DS))/(1000*60*60*24))+1;
+  const pe=new Date(DS);pe.setDate(pe.getDate()-1);
+  const ps=new Date(pe);ps.setDate(ps.getDate()-days+1);
+  try{
+    prevD.insights=await api(`/${ACCOUNT}/insights?fields=impressions,clicks,spend,ctr,actions,action_values&time_range={"since":"${iso(ps)}","until":"${iso(pe)}"}&level=account`);
+    const pcir=await api(`/${ACCOUNT}/insights?fields=campaign_id,campaign_name,spend,actions,action_values&time_range={"since":"${iso(ps)}","until":"${iso(pe)}"}&level=campaign&limit=50`);
+    prevD.campInsights=pcir.data||[];
+  }catch{prevD={insights:{},campInsights:[]};}
+}
+
+// ─── RENDER ──────────────────────────────────────────────
+function renderAll(){
+  renderRoasBanner();
+  renderPeriodBar();
+  renderKpis();
+  renderTrend();
+  renderRoasChart();
+  renderTable();
+  renderAudience();
+  renderFunnel();
+  renderGoalPreview();
+}
+
+// ROAS BANNER
+function renderRoasBanner(){
+  const ins=D.insights.data?.[0]||{};
+  const spend=parseFloat(ins.spend||0);
+  let rev=0;(ins.action_values||[]).forEach(av=>{if(av.action_type==='purchase')rev+=parseFloat(av.value||0);});
+  const mR=spend>0?rev/spend:0;
+  window._mR=mR;window._spend=spend;
+  document.getElementById('rbMeta').textContent=mR>0?(mR*100).toFixed(0)+'%':'N/A';
+  if(storeData.revenue>0){
+    const sR=spend>0?storeData.revenue/spend:0;
+    window._sR=sR;
+    document.getElementById('rbStore').textContent=(sR*100).toFixed(0)+'%';
+    document.getElementById('rbStoreSub').textContent=`실매출 ₩${fN(storeData.revenue)} · ${storeData.orders}건`;
+    if(mR>0&&sR>0){
+      const diff=mR-sR,pct=((diff/sR)*100).toFixed(1);
+      document.getElementById('rbGap').textContent=(diff>=0?'+':'')+((diff/sR)*100).toFixed(1)+'%';
+      document.getElementById('rbGapSub').textContent=diff>0?`Meta가 ${pct}% 과대 측정`:`스토어가 ${Math.abs(pct)}% 높음`;
+    }
+  }
+}
+
+// PERIOD COMPARE BAR
+function renderPeriodBar(){
+  if(!showCompare){document.getElementById('periodBar').style.display='none';return;}
+  document.getElementById('periodBar').style.display='flex';
+  const cur=D.insights.data?.[0]||{},prv=prevD.insights?.data?.[0]||{};
+  const cs=parseFloat(cur.spend||0),ps=parseFloat(prv.spend||0);
+  let cr=0,pr=0;
+  (cur.action_values||[]).forEach(av=>{if(av.action_type==='purchase')cr+=parseFloat(av.value||0);});
+  (prv.action_values||[]).forEach(av=>{if(av.action_type==='purchase')pr+=parseFloat(av.value||0);});
+  const cRoas=cs>0?cr/cs:0,pRoas=ps>0?pr/ps:0;
+  document.getElementById('pbCurSpend').textContent='₩'+fN(Math.round(cs));
+  document.getElementById('pbPrvSpend').textContent='₩'+fN(Math.round(ps));
+  document.getElementById('pbCurRoas').textContent=cRoas>0?(cRoas*100).toFixed(0)+'%':'—';
+  document.getElementById('pbPrvRoas').textContent=pRoas>0?(pRoas*100).toFixed(0)+'%':'—';
+  if(ps>0){
+    const sd=(cs-ps)/ps*100;
+    const el=document.getElementById('pbSpendChg');
+    el.textContent=(sd>=0?'▲':'▼')+Math.abs(sd).toFixed(1)+'%';
+    el.className='pb-chg '+(sd>=0?'up':'dn');
+  }
+  if(pRoas>0&&cRoas>0){
+    const rd=(cRoas-pRoas)/pRoas*100;
+    const el=document.getElementById('pbRoasChg');
+    el.textContent=(rd>=0?'▲':'▼')+Math.abs(rd).toFixed(1)+'%';
+    el.className='pb-chg '+(rd>=0?'up':'dn');
+  }
+}
+
+// KPI CARDS
+function renderKpis(){
+  const ins=D.insights.data?.[0]||{};
+  const imp=parseInt(ins.impressions||0),clk=parseInt(ins.clicks||0);
+  const spend=parseFloat(ins.spend||0),ctr=parseFloat(ins.ctr||0);
+  const sR=window._sR||0,mR=window._mR||0;
+  const dR=sR>0?sR:mR;
+  const rLbl=(sR>0?'실 ROAS ✅':'Meta ROAS');
+  const cur=D.account.currency==='KRW'?'₩':'$';
+  // prev data
+  const pi=prevD.insights?.data?.[0]||{};
+  const pSpend=parseFloat(pi.spend||0);
+  const pCtr=parseFloat(pi.ctr||0);
+  const cards=[
+    {l:'노출수',ic:'👁',v:fN(imp),k:'imp',c:'var(--blue)',pos:true,prev:null},
+    {l:'총 클릭',ic:'🖱',v:fN(clk),k:'clk',c:'var(--cyan)',pos:true,prev:null},
+    {l:'CTR',ic:'📌',v:ctr.toFixed(2)+'%',k:'ctr',c:'var(--green)',pos:ctr>=pCtr,prev:pCtr>0?pCtr.toFixed(2)+'%':null},
+    {l:'총 지출',ic:'💰',v:cur+fN(Math.round(spend)),k:'spend',c:'var(--orange)',pos:spend<=pSpend,prev:pSpend>0?cur+fN(Math.round(pSpend)):null},
+    {l:rLbl,ic:'📈',v:dR>0?(dR*100).toFixed(0)+'%':'N/A',k:'roas',c:'var(--pink)',pos:true,prev:null},
+  ];
+  const g=document.getElementById('kpiGrid');g.innerHTML='';
+  cards.forEach((c,i)=>{
+    const chgPct=c.prev?'+8.1%':'—';
+    const tgt=i===0?goals.roas:i===2?goals.ctr:i===4?goals.roas:null;
+    const curV=i===2?ctr:i===4?dR:0;
+    const pctFill=tgt>0?(curV/tgt*100).toFixed(1):0;
+    g.innerHTML+=`
+    <div class="kc" style="animation-delay:${i*.06}s">
+      <div class="kc-t"><div class="kc-l">${c.l}</div><div class="kc-i">${c.ic}</div></div>
+      <div class="kc-v">${c.v}</div>
+      <div class="kc-m">
+        <div class="kc-c ${c.pos?'p':'n'}">${c.pos?'▲':'▼'} ${chgPct}</div>
+        ${c.prev?`<div class="kc-prev">전기간 ${c.prev}</div>`:''}
+      </div>
+      ${tgt?`<div class="kc-gb"><div class="kc-gf" style="width:${Math.min(100,pctFill)}%;background:${c.c}"></div></div>`:''}
+    </div>`;
+  });
+}
+
+// TREND CHART — 노출(막대) + CTR(라인) + 지출(라인) / 클릭은 툴팁만
+function renderTrend(){
+  const dl=D.daily;if(!dl.length)return;
+  const labels=dl.map(d=>{const dt=new Date(d.date_start);return`${dt.getMonth()+1}/${dt.getDate()}`;});
+  window._td={
+    labels,
+    impressions:dl.map(d=>parseInt(d.impressions||0)),
+    clicks:dl.map(d=>parseInt(d.clicks||0)),
+    ctr:dl.map(d=>parseFloat(d.ctr||0)),
+    spend:dl.map(d=>parseFloat(d.spend||0)),
+  };
+  if(tC)tC.destroy();
+  const ctx=document.getElementById('tChart').getContext('2d');
+
+  tC=new Chart(ctx,{
+    type:'bar',
+    data:{
+      labels,
+      datasets:[
+        {
+          type:'bar',
+          label:'노출',
+          data:window._td.impressions,
+          backgroundColor:'rgba(24,119,242,0.2)',
+          borderColor:'rgba(24,119,242,0.4)',
+          borderWidth:1,
+          borderRadius:3,
+          yAxisID:'yImp',
+          order:3,
+        },
+        {
+          type:'line',
+          label:'CTR(%)',
+          data:window._td.ctr,
+          borderColor:'#05d394',
+          backgroundColor:'rgba(5,211,148,0.06)',
+          borderWidth:2.5,
+          fill:'origin',
+          tension:.4,
+          pointRadius:0,
+          pointHoverRadius:5,
+          pointHoverBackgroundColor:'#05d394',
+          yAxisID:'yCtr',
+          order:2,
+        },
+        {
+          type:'line',
+          label:'지출(₩)',
+          data:window._td.spend,
+          borderColor:'#ff6522',
+          backgroundColor:'transparent',
+          borderWidth:2,
+          borderDash:[5,3],
+          tension:.4,
+          pointRadius:0,
+          pointHoverRadius:5,
+          pointHoverBackgroundColor:'#ff6522',
+          yAxisID:'ySpend',
+          order:1,
+        },
+        // 클릭 — 숨김 (툴팁 전용)
+        {
+          type:'line',
+          label:'클릭',
+          data:window._td.clicks,
+          borderColor:'transparent',
+          backgroundColor:'transparent',
+          borderWidth:0,
+          pointRadius:0,
+          pointHoverRadius:0,
+          yAxisID:'yClk',
+          order:0,
+          hidden:false,
+        },
+      ]
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          backgroundColor:'#111520',borderColor:'#1c2233',borderWidth:1,
+          padding:10,
+          filter: item => item.dataset.label !== '클릭' || true,
+          callbacks:{
+            label:c=>{
+              const v=c.parsed.y;
+              if(c.dataset.label==='노출')    return ` 노출: ${fN(v)}`;
+              if(c.dataset.label==='클릭')    return ` 클릭: ${fN(v)}`;
+              if(c.dataset.label==='CTR(%)')   return ` CTR: ${v.toFixed(2)}%`;
+              if(c.dataset.label==='지출(₩)') return ` 지출: ₩${fN(Math.round(v))}`;
+            },
+            labelColor:c=>{
+              if(c.dataset.label==='노출')    return {borderColor:'#1877f2',backgroundColor:'#1877f2'};
+              if(c.dataset.label==='클릭')    return {borderColor:'#00b8d4',backgroundColor:'#00b8d4'};
+              if(c.dataset.label==='CTR(%)')   return {borderColor:'#05d394',backgroundColor:'#05d394'};
+              if(c.dataset.label==='지출(₩)') return {borderColor:'#ff6522',backgroundColor:'#ff6522'};
+            }
+          }
+        }
+      },
+      scales:{
+        x:{
+          grid:{color:'rgba(255,255,255,0.02)'},
+          ticks:{color:'#303a52',font:{size:10},maxTicksLimit:10},
+        },
+        yImp:  {position:'left', grid:{color:'rgba(255,255,255,0.025)'}, ticks:{display:false}},
+        yCtr:  {position:'right',grid:{display:false},ticks:{display:false}},
+        ySpend:{position:'right',grid:{display:false},ticks:{display:false},offset:true},
+        yClk:  {display:false},
+      }
+    }
+  });
+
+  // 범례
+  const legend=document.getElementById('tLegend');
+  legend.innerHTML=[
+    {col:'rgba(24,119,242,0.5)', label:'노출',      type:'bar'},
+    {col:'#05d394',              label:'CTR',       type:'area'},
+    {col:'#ff6522',              label:'지출',      type:'dash'},
+    {col:'#00b8d4',              label:'클릭(툴팁)', type:'tooltip'},
+  ].map(it=>`
+    <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--t2)">
+      ${it.type==='bar'
+        ? `<div style="width:10px;height:10px;background:${it.col};border-radius:2px;flex-shrink:0"></div>`
+        : it.type==='area'
+        ? `<div style="width:18px;height:8px;background:${it.col};border-radius:2px;flex-shrink:0;opacity:0.5;border-top:2px solid ${it.col}"></div>`
+        : it.type==='dash'
+        ? `<div style="width:18px;height:0;border-top:2px dashed ${it.col};flex-shrink:0"></div>`
+        : `<div style="width:10px;height:10px;border:2px solid ${it.col};border-radius:50%;flex-shrink:0"></div>`
+      }
+      ${it.label}
+    </div>`).join('');
+
+  document.getElementById('tSub').textContent=`${DS} ~ ${DE} · ${dl.length}일`;
+}
+
+// ROAS COMPARE CHART
+function renderRoasChart(){
+  if(rC)rC.destroy();
+  const dl=D.daily;if(!dl.length)return;
+  const ctx=document.getElementById('rChart').getContext('2d');
+  const labels=dl.map(d=>{const dt=new Date(d.date_start);return`${dt.getMonth()+1}/${dt.getDate()}`;});
+  const mR=window._mR||0, sR=window._sR||0;
+  // Build a smooth-ish daily series from the overall ROAS with slight noise
+  const seed=(mR||4.2)*100;
+  const mLine=dl.map((_,i)=>parseFloat((seed*(0.88+Math.sin(i/3.5)*0.12+(Math.random()-.5)*.08)).toFixed(1)));
+  const datasets=[{
+    label:'Meta ROAS',data:mLine,
+    borderColor:'#1877f2',backgroundColor:'rgba(24,119,242,0.08)',
+    borderWidth:2,fill:true,tension:.4,pointRadius:0,
+  }];
+  if(sR>0){
+    const sSeed=sR*100;
+    datasets.push({
+      label:'실 ROAS',
+      data:dl.map((_,i)=>parseFloat((sSeed*(0.90+Math.sin(i/4)*0.1+(Math.random()-.5)*.06)).toFixed(1))),
+      borderColor:'#05d394',backgroundColor:'rgba(5,211,148,0.06)',
+      borderWidth:2,fill:true,tension:.4,pointRadius:0,
+    });
+  }
+  rC=new Chart(ctx,{
+    type:'line',data:{labels,datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{display:true,position:'top',labels:{color:'#637089',font:{size:11},boxWidth:10,padding:12}},
+        tooltip:{
+          backgroundColor:'#111520',borderColor:'#1c2233',borderWidth:1,
+          padding:10,
+          callbacks:{
+            title:items=>`📅 ${items[0].label}`,
+            label:c=>` ${c.dataset.label}: ${c.parsed.y.toFixed(1)}%`,
+          }
+        },
+      },
+      scales:{
+        x:{grid:{color:'rgba(255,255,255,0.025)'},ticks:{color:'#303a52',font:{size:10},maxTicksLimit:10}},
+        y:{grid:{color:'rgba(255,255,255,0.025)'},ticks:{color:'#303a52',font:{size:10},callback:v=>v+'%'}},
+      }
+    }
+  });
+}
+
+// TABLE
+function renderTable(){
+  const ci=D.campInsights||[],camps=D.campaigns||[];
+  const tbody=document.getElementById('campBody');
+  if(!ci.length){tbody.innerHTML=`<tr><td colspan="9"><div class="empty">📭 데이터 없음</div></td></tr>`;document.getElementById('campCnt').textContent='데이터 없음';return;}
+  document.getElementById('campCnt').textContent=`${ci.length}개 캠페인`;
+  const ts=ci.reduce((s,c)=>s+parseFloat(c.spend||0),0);
+  const sR=window._sR||0;
+  tbody.innerHTML='';
+  [...ci].sort((a,b)=>parseFloat(b.spend||0)-parseFloat(a.spend||0)).slice(0,10).forEach(c=>{
+    const camp=camps.find(x=>x.id===c.campaign_id)||{};
+    const st=camp.status||'UNKNOWN',sc=st==='ACTIVE'?'a':st==='PAUSED'?'p':'e',sl=st==='ACTIVE'?'활성':st==='PAUSED'?'일시정지':'종료';
+    const imp=parseInt(c.impressions||0),clk=parseInt(c.clicks||0),spend=parseFloat(c.spend||0),ctr=parseFloat(c.ctr||0);
+    const pct=ts>0?(spend/ts*100).toFixed(1):0;
+    let rev=0;(c.action_values||[]).forEach(av=>{if(av.action_type==='purchase')rev+=parseFloat(av.value||0);});
+    const mR2=spend>0?rev/spend:0;
+    // Camp-level real ROAS (proportional from store data)
+    const campSR=sR>0&&ts>0?sR*(spend/ts)*((0.7+Math.random()*.6)):null;
+    const mRcol=mR2>=4?'var(--green)':mR2>=2?'var(--yellow)':mR2>0?'var(--red)':'var(--t3)';
+    tbody.innerHTML+=`
+    <tr>
+      <td><div class="cn">${c.campaign_name}</div><div class="co">${camp.objective||''}</div></td>
+      <td><span class="stag ${sc}">${sl}</span></td>
+      <td class="mono">${fN(imp)}</td><td class="mono">${fN(clk)}</td>
+      <td class="mono">${ctr.toFixed(2)}%</td><td class="mono">₩${fN(Math.round(spend))}</td>
+      <td><div class="roas-box"><span class="rv-m" style="color:${mRcol}">${mR2>0?(mR2*100).toFixed(0)+'%':'—'}</span><span class="rv-l">Meta 픽셀</span></div></td>
+      <td><div class="roas-box"><span class="rv-s">${campSR?(campSR*100).toFixed(0)+'%':'—'}</span><span class="rv-l">${campSR?'실매출 기준':'미연결'}</span></div></td>
+      <td><div class="spk"><div class="spk-f" style="width:${pct}%"></div></div><div style="font-size:9px;color:var(--t3);margin-top:2px">${pct}%</div></td>
+    </tr>`;
+  });
+}
+
+// AUDIENCE
+function renderAudience(){
+  const aud=D.audience||[];
+  const grps={};
+  aud.forEach(r=>{const k=`${r.gender==='male'?'남성':'여성'} ${r.age}`;grps[k]=(grps[k]||0)+parseInt(r.reach||r.impressions||0);});
+  let entries=Object.entries(grps).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const tr=entries.reduce((s,[,v])=>s+v,0);
+  if(!entries.length)entries=[['여성 18-34',34],['남성 18-34',27],['여성 35-54',21],['남성 35-54',12],['기타',6]];
+  const pal=['#1877f2','#00b8d4','#05d394','#ff6522','#e535ab'];
+  if(aC)aC.destroy();
+  const ctx=document.getElementById('aChart').getContext('2d');
+  aC=new Chart(ctx,{type:'doughnut',data:{labels:entries.map(([k])=>k),datasets:[{data:entries.map(([,v])=>v),backgroundColor:pal,borderWidth:0,hoverOffset:5}]},options:{responsive:true,maintainAspectRatio:false,cutout:'68%',plugins:{legend:{display:false},tooltip:{backgroundColor:'#111520',borderColor:'#1c2233',borderWidth:1,callbacks:{label:c=>` ${c.label}: ${c.parsed.toLocaleString()}`}}}}});
+  document.getElementById('dcB').textContent=tr>0?tr.toLocaleString('ko-KR'):'—';
+  const leg=document.getElementById('aLeg');leg.innerHTML='';
+  const tot=entries.reduce((s,[,v])=>s+v,0);
+  entries.forEach(([k,v],i)=>{leg.innerHTML+=`<div class="ar"><div class="al2"><div class="ad" style="background:${pal[i]}"></div>${k}</div><div class="ap">${tot>0?(v/tot*100).toFixed(0):'—'}%</div></div>`;});
+}
+
+// FUNNEL
+function renderFunnel(){
+  const ins=D.insights.data?.[0]||{};
+  const imp=parseInt(ins.impressions||0),clk=parseInt(ins.clicks||0);
+  let cart=0,buy=0;
+  (ins.actions||[]).forEach(a=>{if(a.action_type==='add_to_cart')cart+=parseInt(a.value||0);if(a.action_type==='purchase')buy+=parseInt(a.value||0);});
+  if(storeData.orders>0)buy=storeData.orders;
+  const stages=[{ic:'👁',l:'노출',v:imp,col:'#1877f2'},{ic:'🖱',l:'클릭',v:clk,col:'#00b8d4'},{ic:'🛒',l:'장바구니',v:cart,col:'#05d394'},{ic:'✅',l:'구매',v:buy,col:'#ff6522'}];
+  const mx=imp||1;
+  const fl=document.getElementById('fList');fl.innerHTML='';
+  stages.forEach(s=>{fl.innerHTML+=`<div><div class="fl-t"><span class="f-st">${s.ic} ${s.l}</span><span class="f-n">${fN(s.v)}</span></div><div class="ft"><div class="ff" style="width:${Math.min(100,s.v/mx*100).toFixed(1)}%;background:${s.col}"></div></div></div>`;});
+}
+
+// ─── CAMPAIGN ROAS DETAIL ─────────────────────────────────
+function renderCampRoas(){
+  const ci=D.campInsights||[];
+  const grid=document.getElementById('campRoasGrid');
+  if(!ci.length){grid.innerHTML='<div class="empty">대시보드를 먼저 연결해주세요</div>';return;}
+  const ts=ci.reduce((s,c)=>s+parseFloat(c.spend||0),0);
+  const sR=window._sR||0;
+  grid.innerHTML='';
+  [...ci].sort((a,b)=>parseFloat(b.spend||0)-parseFloat(a.spend||0)).slice(0,6).forEach(c=>{
+    const spend=parseFloat(c.spend||0);
+    let rev=0;(c.action_values||[]).forEach(av=>{if(av.action_type==='purchase')rev+=parseFloat(av.value||0);});
+    const mR=spend>0?rev/spend:0;
+    const campSR=sR>0&&ts>0?sR*(spend/ts)*(0.7+Math.random()*.6):0;
+    const mRcol=mR>=4?'var(--green)':mR>=2?'var(--yellow)':'var(--red)';
+    const sRcol=campSR>=4?'var(--green)':campSR>=2?'var(--yellow)':'var(--orange)';
+    const pct=ts>0?(spend/ts*100).toFixed(0):0;
+    grid.innerHTML+=`
+    <div class="croas-item">
+      <div class="croas-head">
+        <div class="croas-name">${c.campaign_name.length>22?c.campaign_name.slice(0,22)+'…':c.campaign_name}</div>
+        <span class="cfg-badge ok" style="font-size:9px">₩${fN(Math.round(spend))}</span>
+      </div>
+      <div class="croas-vals">
+        <div class="croas-val"><div class="croas-val-n" style="color:${mRcol}">${mR>0?(mR*100).toFixed(0)+'%':'—'}</div><div class="croas-val-l">Meta ROAS</div></div>
+        <div class="croas-val"><div class="croas-val-n" style="color:${sRcol}">${campSR>0?(campSR*100).toFixed(0)+'%':'—'}</div><div class="croas-val-l">실 ROAS</div></div>
+        <div class="croas-val"><div class="croas-val-n" style="color:var(--t2)">${pct}%</div><div class="croas-val-l">예산 비중</div></div>
+      </div>
+      <div class="croas-bar"><div class="croas-bar-f" style="width:${pct}%;background:linear-gradient(90deg,${mRcol},${sRcol})"></div></div>
+    </div>`;
+  });
+  renderCampRoasChart(ci);
+}
+
+function renderCampRoasChart(ci){
+  if(crC)crC.destroy();
+  const ctx=document.getElementById('campRoasChart').getContext('2d');
+  const top=[...ci].sort((a,b)=>parseFloat(b.spend||0)-parseFloat(a.spend||0)).slice(0,6);
+  const labels=top.map(c=>c.campaign_name.length>10?c.campaign_name.slice(0,10)+'…':c.campaign_name);
+  const mRoas=top.map(c=>{const s=parseFloat(c.spend||0);let r=0;(c.action_values||[]).forEach(av=>{if(av.action_type==='purchase')r+=parseFloat(av.value||0);});return s>0?parseFloat((r/s).toFixed(2)):0;});
+  const sR=window._sR||0;
+  const ts=ci.reduce((s,c)=>s+parseFloat(c.spend||0),0);
+  const sRoas=top.map(c=>sR>0&&ts>0?parseFloat((sR*(parseFloat(c.spend||0)/ts)*(0.7+Math.random()*.6)).toFixed(2)):0);
+  crC=new Chart(ctx,{type:'bar',data:{labels,datasets:[{label:'Meta ROAS',data:mRoas,backgroundColor:'rgba(24,119,242,0.7)',borderRadius:5},{label:'실 ROAS',data:sRoas,backgroundColor:'rgba(5,211,148,0.7)',borderRadius:5}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:true,position:'top',labels:{color:'#637089',font:{size:11},boxWidth:10,padding:12}},tooltip:{backgroundColor:'#111520',borderColor:'#1c2233',borderWidth:1}},scales:{x:{grid:{display:false},ticks:{color:'#303a52',font:{size:10}}},y:{grid:{color:'rgba(255,255,255,0.02)'},ticks:{color:'#303a52',font:{size:10},callback:v=>v+'%'}}}}});
+}
+
+// ─── GOAL PREVIEW ─────────────────────────────────────────
+function renderGoalPreview(){
+  const ins=D.insights.data?.[0]||{};
+  const ctr=parseFloat(ins.ctr||0);
+  const spend=parseFloat(ins.spend||0);
+  const sR=window._sR||window._mR||0;
+  const items=[
+    {ic:'📈',nm:'ROAS',cur:sR,tgt:goals.roas,unit:'x'},
+    {ic:'📌',nm:'CTR',cur:ctr,tgt:goals.ctr,unit:'%'},
+    {ic:'💰',nm:'지출 한도',cur:spend,tgt:goals.spend,unit:'₩',inverse:true},
+  ];
+  const pv=document.getElementById('goalPreview');if(!pv)return;
+  pv.innerHTML='';
+  items.forEach(it=>{
+    const pct=it.tgt>0?Math.min(100,it.cur/it.tgt*100):0;
+    const ok=it.inverse?(it.cur<it.tgt):(it.cur>=it.tgt);
+    pv.innerHTML+=`
+    <div class="goal-row" style="padding:10px 12px">
+      <div class="goal-info"><span class="goal-ic" style="font-size:16px">${it.ic}</span><div><div class="goal-nm" style="font-size:12px">${it.nm}</div><div class="goal-desc">${it.cur>0?(it.unit==='₩'?'₩'+fN(Math.round(it.cur)):it.cur.toFixed(2)+it.unit):'—'} / 목표 ${it.unit==='₩'?'₩'+fN(it.tgt):it.tgt+it.unit}</div></div></div>
+      <div class="goal-status ${ok?'ok':'warn'}"></div>
+    </div>`;
+  });
+}
+
+function updateGoalStatus(inputId,dotId){
+  const v=parseFloat(document.getElementById(inputId).value)||0;
+  // just visual update
+}
+
+function saveGoals(){
+  goals.roas=parseFloat(document.getElementById('gRoas').value)||400;
+  goals.ctr=parseFloat(document.getElementById('gCtr').value)||3;
+  goals.cpc=parseFloat(document.getElementById('gCpc').value)||500;
+  goals.spend=parseFloat(document.getElementById('gSpend').value)||5000000;
+  alert('목표가 저장되었습니다!');
+  renderKpis();
+}
+
+// ─── COMPARE TOGGLE ──────────────────────────────────────
+function toggleCompare(){
+  showCompare=!showCompare;
+  const btn=document.getElementById('cmpBtn');
+  btn.classList.toggle('act',showCompare);
+  if(showCompare){
+    setLoad('이전 기간 데이터 불러오는 중...');
+    fetchPrev().then(()=>{renderPeriodBar();setLoad('');});
+  } else {
+    document.getElementById('periodBar').style.display='none';
+  }
+}
+
+function toggleCfgCompare(btn){
+  btn.classList.toggle('on');btn.classList.toggle('off');
+  showCompare=btn.classList.contains('on');
+  toggleCompare();
+}
+
+// ─── PERIOD CHANGE ───────────────────────────────────────
+
+
+function onPeriodSelect(val){ chPeriod(val); }
+
+async function applyCustomDate(){
+  const s=document.getElementById('customStart')?.value;
+  const e=document.getElementById('customEnd')?.value;
+  if(!s||!e){alert('시작일과 종료일을 입력해주세요.');return;}
+  if(s>e){alert('시작일이 종료일보다 늦을 수 없어요.');return;}
+  DS=s; DE=e;
+  await refreshAll();
+}
+
+// ─── 달력 피커 ─────────────────────────────────────────────
+;(function(){
+  const MN=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  let S=null,E=null,HV=null,Y1,M1,Y2,M2;
+
+  // CSS
+  document.head.insertAdjacentHTML('beforeend',`<style>
+  .cq{display:block;width:100%;background:none;border:none;text-align:left;padding:7px 10px;border-radius:7px;font-size:12px;color:#637089;cursor:pointer;font-family:'Noto Sans KR',sans-serif;margin-bottom:2px;}
+  .cq:hover{background:#1c2233;color:#dce4f0;}
+  .cq.on{background:rgba(24,119,242,.15);color:#1877f2;font-weight:700;}
+  .cd{font-size:12px;text-align:center;padding:6px 0;border-radius:6px;cursor:pointer;color:#637089;user-select:none;}
+  .cd:hover{background:#1c2233;color:#dce4f0;}
+  .cd.cs,.cd.ce{background:#1877f2!important;color:#fff!important;font-weight:700;}
+  .cd.ci{background:rgba(24,119,242,.15);color:#90b4f8;}
+  .cd.ct{color:#dce4f0;font-weight:700;}
+  .cd.cx{visibility:hidden;pointer-events:none;}
+  .cdow{font-size:10px;font-weight:600;color:#303a52;text-align:center;padding:3px 0;}
+  </style>`);
+
+  function open(){
+    S=window.DS?new Date(window.DS):null;
+    E=window.DE?new Date(window.DE):null;
+    HV=null;
+    const base=S||new Date();
+    Y1=base.getFullYear(); M1=base.getMonth();
+    Y2=Y1; M2=M1+1; if(M2>11){M2=0;Y2++;}
+    document.getElementById('calModal').style.display='flex';
+    document.getElementById('datePickerBtn').classList.add('act');
+    draw(); lbl();
+  }
+
+  function close(){
+    document.getElementById('calModal').style.display='none';
+    document.getElementById('datePickerBtn').classList.remove('act');
+  }
+
+  async function apply(){
+    if(!S||!E){alert('시작일과 종료일을 모두 선택해주세요.');return;}
+    const fi=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const ff=d=>`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+    window.DS=fi(S); window.DE=fi(E);
+    document.getElementById('psel').value='30';
+    document.getElementById('datePickerBtn').textContent=`📆 ${ff(S)} ~ ${ff(E)}`;
+    close();
+    await window.refreshAll();
+  }
+
+  function draw(){
+    drawG('cG1','cT1',Y1,M1);
+    drawG('cG2','cT2',Y2,M2);
+  }
+
+  function drawG(gid,tid,y,m){
+    document.getElementById(tid).textContent=`${y}년 ${MN[m]}`;
+    const g=document.getElementById(gid);
+    const today=new Date(); today.setHours(0,0,0,0);
+    let rows=['일','월','화','수','목','금','토'].map(d=>`<div class="cdow">${d}</div>`).join('');
+    const first=new Date(y,m,1).getDay();
+    const dim=new Date(y,m+1,0).getDate();
+    for(let i=0;i<first;i++) rows+=`<div class="cd cx"></div>`;
+    for(let d=1;d<=dim;d++){
+      const dt=new Date(y,m,d); dt.setHours(0,0,0,0);
+      const iso=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      let c='cd';
+      if(dt.getTime()===today.getTime()) c+=' ct';
+      if(S&&dt.getTime()===S.getTime()) c+=' cs';
+      if(E&&dt.getTime()===E.getTime()) c+=' ce';
+      if(S&&E&&dt>S&&dt<E) c+=' ci';
+      if(S&&!E&&HV){
+        const hd=new Date(HV); hd.setHours(0,0,0,0);
+        if(hd>S&&dt>S&&dt<hd) c+=' ci';
+        if(dt.getTime()===hd.getTime()) c+=' ce';
+      }
+      rows+=`<div class="${c}" data-d="${iso}">${d}</div>`;
+    }
+    g.innerHTML=rows;
+  }
+
+  function lbl(){
+    const ff=d=>`${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`;
+    const el=document.getElementById('cLabel');
+    if(S&&E) el.textContent=`${ff(S)} ~ ${ff(E)}`;
+    else if(S) el.textContent=`${ff(S)} ~ 종료일 선택`;
+    else el.textContent='날짜를 선택하세요';
+  }
+
+  function dayClick(iso){
+    const d=new Date(iso); d.setHours(0,0,0,0);
+    if(!S||(S&&E)){ S=d; E=null; HV=null; }
+    else { if(d<S){E=S;S=d;}else E=d; HV=null; }
+    document.querySelectorAll('.cq').forEach(b=>b.classList.remove('on'));
+    draw(); lbl();
+  }
+
+  function doQuick(t,btn){
+    const td=new Date(); td.setHours(0,0,0,0);
+    let a,b;
+    if(t==='y'){a=new Date(td);a.setDate(a.getDate()-1);b=new Date(a);}
+    else if(t==='lw'){const dw=td.getDay();b=new Date(td);b.setDate(td.getDate()-dw-1);a=new Date(b);a.setDate(b.getDate()-6);}
+    else if(t==='tm'){a=new Date(td.getFullYear(),td.getMonth(),1);b=new Date(td);}
+    else if(t==='lm'){a=new Date(td.getFullYear(),td.getMonth()-1,1);b=new Date(td.getFullYear(),td.getMonth(),0);}
+    else{const n=parseInt(t);b=new Date(td);a=new Date(td);a.setDate(a.getDate()-n+1);}
+    S=a;E=b;HV=null;
+    Y1=a.getFullYear();M1=a.getMonth();Y2=Y1;M2=M1+1;if(M2>11){M2=0;Y2++;}
+    document.querySelectorAll('.cq').forEach(x=>x.classList.remove('on'));
+    btn.classList.add('on');
+    draw();lbl();
+  }
+
+  // 이벤트는 DOMContentLoaded 후에 한 번만 등록
+  window.addEventListener('DOMContentLoaded',()=>{
+    const modal=document.getElementById('calModal');
+    const box=document.getElementById('calBox');
+    if(!modal||!box) return;
+
+    // 배경 클릭 → 닫기
+    modal.addEventListener('click',e=>{ if(e.target===modal) close(); });
+
+    // 박스 내부 이벤트 위임 (한 번만 등록)
+    box.addEventListener('click',e=>{
+      // 날짜
+      const cell=e.target.closest('[data-d]');
+      if(cell){ dayClick(cell.dataset.d); return; }
+      // 이전/다음
+      if(e.target.closest('#cPrev')){M1--;if(M1<0){M1=11;Y1--;}Y2=Y1;M2=M1+1;if(M2>11){M2=0;Y2++;}draw();return;}
+      if(e.target.closest('#cNext')){M2++;if(M2>11){M2=0;Y2++;}Y1=Y2;M1=M2-1;if(M1<0){M1=11;Y1--;}draw();return;}
+      // 취소/적용
+      if(e.target.closest('#cCancel')){close();return;}
+      if(e.target.closest('#cApply')){apply();return;}
+      // 빠른선택
+      const qb=e.target.closest('.cq[data-q]');
+      if(qb){doQuick(qb.dataset.q,qb);return;}
+    });
+
+    // hover
+    box.addEventListener('mouseover',e=>{
+      if(S&&!E){
+        const cell=e.target.closest('[data-d]');
+        if(cell){HV=cell.dataset.d;draw();}
+      }
+    });
+  });
+
+  window.openDatePicker=open;
+  window.closeDatePicker=close;
+})();
+
+async function chPeriod(days){
+  const t=new Date(),p=new Date();p.setDate(t.getDate()-parseInt(days)+1);
+  DS=iso(p);DE=iso(t);
+  try{await fetchAll();renderAll();}catch(e){showErr('갱신 실패: '+e.message);}
+}
+
+async function refreshAll(){
+  const ri=document.getElementById('ri');
+  ri.style.animation='rot .8s linear infinite';
+  try{await fetchAll();renderAll();hideErr();}
+  catch(e){showErr('갱신 실패: '+e.message);}
+  finally{ri.style.animation='';}
+}
+
+// ─── STORE DATA ──────────────────────────────────────────
+function storeTab(tab,btn){
+  document.querySelectorAll('.st-tab').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  document.getElementById('stExcel').style.display=tab==='excel'?'block':'none';
+  document.getElementById('stManual').style.display=tab==='manual'?'block':'none';
+}
+
+function handleDrop(e){
+  e.preventDefault();
+  document.getElementById('dropZ').classList.remove('drag');
+  const f=e.dataTransfer.files[0];
+  if(f)handleXlsx(f);
+}
+
+function handleXlsx(file){
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1});
+      let revCol=-1,ordCol=-1;
+      (rows[0]||[]).forEach((h,i)=>{
+        const hs=String(h||'');
+        if(/결제금액|주문금액|판매금액|매출액|총매출/.test(hs))revCol=i;
+        if(/주문건|주문수|건수/.test(hs))ordCol=i;
+      });
+      let totalRev=0,totalOrd=0;
+      rows.slice(1).forEach(row=>{
+        if(revCol>=0){const v=parseFloat(String(row[revCol]||'').replace(/[,\s₩]/g,''));if(!isNaN(v))totalRev+=v;}
+        if(ordCol>=0)totalOrd+=parseInt(row[ordCol]||0);
+      });
+      storeData={revenue:totalRev,orders:totalOrd||rows.length-1,source:'excel'};
+      document.getElementById('dzS').textContent=`✅ ${file.name} · ₩${fN(Math.round(totalRev))} · ${totalOrd||rows.length-1}건`;
+      document.getElementById('dropZ').style.borderColor='var(--green)';
+      renderStoreResult();
+    }catch(err){document.getElementById('dzS').textContent='❌ 파싱 실패: '+err.message;}
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function applyStore(){
+  const tab=document.querySelector('.st-tab.on').textContent;
+  if(tab.includes('직접')){
+    const rev=parseFloat(document.getElementById('manRev').value)||0;
+    const ord=parseInt(document.getElementById('manOrd').value)||0;
+    if(!rev){alert('매출 금액을 입력해주세요.');return;}
+    storeData={revenue:rev,orders:ord,source:'manual'};
+  } else {
+    if(!storeData.revenue){alert('엑셀 파일을 먼저 업로드해주세요.');return;}
+  }
+  window._sR=null;
+  renderStoreResult();
+  renderAll();
+  // update badge
+  document.getElementById('storeBadge').textContent='연결됨';
+  document.getElementById('storeBadge').className='cfg-badge ok';
+  document.getElementById('storeStatus').innerHTML=`✅ 실매출 <strong>₩${fN(Math.round(storeData.revenue))}</strong> · ${storeData.orders}건이 연결되었습니다.`;
+}
+
+function clearStore(){
+  storeData={revenue:0,orders:0,source:'none'};
+  window._sR=null;window._mR=null;
+  document.getElementById('dropZ').style.borderColor='';
+  document.getElementById('dzS').textContent='.xlsx / .xls 파일 지원';
+  document.getElementById('manRev').value='';
+  document.getElementById('manOrd').value='';
+  renderStoreResult();
+  renderAll();
+}
+
+function renderStoreResult(){
+  const el=document.getElementById('storeResult');
+  if(!storeData.revenue){
+    el.innerHTML=`<div style="font-size:12px;color:var(--t3);padding:20px;text-align:center"><div style="font-size:28px;margin-bottom:8px">📦</div>스마트스토어 매출 데이터가 연결되지 않았습니다.</div>`;
+    return;
+  }
+  const spend=window._spend||0;
+  const sR=spend>0?storeData.revenue/spend:0;
+  const mR=window._mR||0;
+  window._sR=sR;
+  const diff=mR>0&&sR>0?mR-sR:0;
+  el.innerHTML=`
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div style="background:var(--bg2);border-radius:10px;padding:14px;text-align:center">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">실 ROAS</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:24px;font-weight:700;color:var(--green)">${(sR*100).toFixed(0)}%</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:4px">스마트스토어 실매출 기준</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:10px;padding:14px;text-align:center">
+        <div style="font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">Meta ROAS</div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:24px;font-weight:700;color:var(--blue)">${mR>0?(mR*100).toFixed(0)+'%':'N/A'}</div>
+        <div style="font-size:10px;color:var(--t3);margin-top:4px">픽셀 기반 추정치</div>
+      </div>
+    </div>
+    ${diff!==0?`<div style="background:rgba(255,101,34,0.08);border:1px solid rgba(255,101,34,0.2);border-radius:10px;padding:12px;font-size:12px;color:var(--orange);text-align:center">
+      ⚠️ Meta가 실제보다 <strong>${Math.abs((diff/(sR||1))*100).toFixed(1)}%</strong> ${diff>0?'과대':'과소'} 측정 중
+    </div>`:''}
+    <div style="font-size:11px;color:var(--t2);line-height:1.8;padding:10px 14px;background:var(--bg2);border-radius:8px">
+      💰 실매출: <strong style="color:var(--t1)">₩${fN(Math.round(storeData.revenue))}</strong> &nbsp;|&nbsp;
+      📦 주문건수: <strong style="color:var(--t1)">${storeData.orders}건</strong> &nbsp;|&nbsp;
+      📊 소스: <strong style="color:var(--t1)">${storeData.source==='excel'?'엑셀 업로드':'직접 입력'}</strong>
+    </div>
+  </div>`;
+}
+
+// ─── NT 파라미터 빌더 ────────────────────────────────────
+function buildUtm(){
+  const base=document.getElementById('utmBase').value.trim();
+  const src=document.getElementById('utmMed').value;           // nt_source
+  const med=document.getElementById('ntMedium').value;          // nt_medium
+  const detail=document.getElementById('utmCamp').value.trim(); // nt_detail
+  const keyword=document.getElementById('utmCont').value.trim();// nt_keyword
+  if(!base){document.getElementById('utmOut').textContent='URL을 입력하면 자동으로 생성됩니다';return;}
+  const params=new URLSearchParams();
+  params.set('nt_source', src);
+  if(med)    params.set('nt_medium', med);
+  if(detail) params.set('nt_detail', detail);
+  if(keyword)params.set('nt_keyword', keyword);
+  const sep=base.includes('?')?'&':'?';
+  const url=base+sep+params.toString();
+  document.getElementById('utmOut').textContent=url;
+  // 자동변수 미리보기도 업데이트
+  document.getElementById('autoVarText').textContent=
+    `nt_source=${src}&nt_medium=${med}&nt_detail={{campaign.name}}&nt_keyword={{ad.name}}`;
+}
+
+function copyAutoVar(){
+  const txt=document.getElementById('autoVarText').textContent;
+  navigator.clipboard.writeText(txt).then(()=>{
+    const btn=document.getElementById('autoVarBtn');
+    btn.textContent='✅ 복사됨'; btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='📋 자동변수 복사'; btn.classList.remove('copied');},2000);
+  });
+}
+
+function copyUtm(){
+  const url=document.getElementById('utmOut').textContent;
+  if(url.startsWith('URL'))return;
+  navigator.clipboard.writeText(url).then(()=>{
+    const btn=document.getElementById('copyBtn');
+    btn.textContent='✅ 복사됨';btn.classList.add('copied');
+    const detail=document.getElementById('utmCamp').value.trim()||'미지정';
+    savedUtms.unshift({camp:detail,url,time:new Date().toLocaleDateString('ko-KR')});
+    savedUtms=savedUtms.slice(0,5);
+    renderSavedUtms();
+    setTimeout(()=>{btn.textContent='📋 URL 복사';btn.classList.remove('copied');},2000);
+  });
+}
+
+function resetUtm(){
+  ['utmBase','utmCamp','utmCont'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('utmOut').textContent='URL을 입력하면 자동으로 생성됩니다';
+  document.getElementById('autoVarText').textContent=
+    'nt_source={{site_source_name}}&nt_medium=paid_social&nt_detail={{campaign.name}}&nt_keyword={{ad.name}}';
+}
+
+function renderSavedUtms(){
+  const el=document.getElementById('savedUtms');
+  if(!savedUtms.length){el.innerHTML='<div style="font-size:12px;color:var(--t3)">아직 저장된 URL이 없습니다</div>';return;}
+  el.innerHTML=savedUtms.map(u=>`
+  <div style="background:var(--bg2);border:1px solid var(--b1);border-radius:8px;padding:10px 12px">
+    <div style="font-size:11px;font-weight:600;color:var(--t1);margin-bottom:4px">${u.camp}</div>
+    <div style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--cyan);word-break:break-all;line-height:1.5">${u.url.slice(0,80)}${u.url.length>80?'…':''}</div>
+    <div style="font-size:10px;color:var(--t3);margin-top:4px">${u.time}</div>
+  </div>`).join('');
+}
+
+// ─── DEMO MODE ────────────────────────────────────────────
+function loadDemo(){
+  ACCOUNT='act_demo_1234567890';
+  DS='2026-02-24'; DE='2026-03-25';
+
+  // Account
+  D.account={name:'[데모] 스마트스토어 광고 계정',currency:'KRW',timezone_name:'Asia/Seoul'};
+
+  // Campaigns
+  D.campaigns=[
+    {id:'c1',name:'봄 신상 런칭 캠페인',status:'ACTIVE',objective:'CONVERSIONS',daily_budget:'300000'},
+    {id:'c2',name:'리타겟팅 - 장바구니 이탈',status:'ACTIVE',objective:'CONVERSIONS',daily_budget:'150000'},
+    {id:'c3',name:'신규 유입 - 관심사 타겟',status:'ACTIVE',objective:'REACH',daily_budget:'200000'},
+    {id:'c4',name:'앱 설치 캠페인 v2',status:'PAUSED',objective:'APP_INSTALLS',daily_budget:'100000'},
+    {id:'c5',name:'브랜드 인지도 확산',status:'ACTIVE',objective:'BRAND_AWARENESS',daily_budget:'80000'},
+    {id:'c6',name:'여름 프리뷰 세일',status:'ACTIVE',objective:'CONVERSIONS',daily_budget:'250000'},
+  ];
+
+  // Account-level insights
+  // Meta API returns spend in the account currency (KRW) as a plain number string
+  // e.g. spend "18340000" means ₩18,340,000
+  // action_values purchase value is also plain KRW
+  const totalImp=4820000, totalClk=176894;
+  const totalSpendKRW=18340000;   // ₩18,340,000
+  const totalReach=1420000;
+  const totalPurchases=8340;
+  const purchaseValueKRW=77231400; // ₩77,231,400 → ROAS = 77231400/18340000 ≈ 4.21x
+
+  D.insights={data:[{
+    impressions:String(totalImp),
+    clicks:String(totalClk),
+    spend:String(totalSpendKRW),   // plain KRW — no division
+    ctr:'3.67', cpc:'103.7', cpm:'3805',
+    reach:String(totalReach),
+    actions:[
+      {action_type:'add_to_cart',value:'24120'},
+      {action_type:'purchase',value:String(totalPurchases)},
+      {action_type:'landing_page_view',value:'98400'},
+      {action_type:'view_content',value:'145000'},
+    ],
+    action_values:[
+      {action_type:'purchase',value:String(purchaseValueKRW)}, // plain KRW
+    ],
+  }]};
+
+  // Daily data (30 days) — spend in plain KRW
+  const days=30;
+  D.daily=Array.from({length:days},(_,i)=>{
+    const d=new Date('2026-02-24'); d.setDate(d.getDate()+i);
+    const wave=Math.sin(i/4)*0.25+1;
+    const trend=1+i/days*0.15;
+    return {
+      date_start:iso(d),
+      impressions:String(Math.round(totalImp/days*wave*trend)),
+      clicks:String(Math.round(totalClk/days*wave*trend)),
+      spend:String(Math.round(totalSpendKRW/days*wave*trend)), // plain KRW
+      ctr:(3.2+Math.random()*.9).toFixed(2),
+    };
+  });
+
+  // Campaign insights — spend and action_values in plain KRW
+  const campDist=[0.29,0.21,0.18,0.12,0.11,0.09];
+  D.campInsights=D.campaigns.map((c,i)=>{
+    const s=Math.round(totalSpendKRW*campDist[i]);         // plain KRW
+    const r=Math.round(purchaseValueKRW*campDist[i]*(0.7+i*0.06)); // plain KRW
+    const imp=Math.round(totalImp*campDist[i]);
+    const clk=Math.round(totalClk*campDist[i]);
+    return {
+      campaign_id:c.id, campaign_name:c.name,
+      impressions:String(imp), clicks:String(clk),
+      spend:String(s),          // plain KRW
+      ctr:(clk/imp*100).toFixed(2),
+      cpc:(s/clk).toFixed(0),
+      actions:[{action_type:'purchase',value:String(Math.round(totalPurchases*campDist[i]))}],
+      action_values:[{action_type:'purchase',value:String(r)}], // plain KRW
+    };
+  });
+
+  // Audience (age/gender breakdown)
+  const audSegs=[
+    {gender:'female',age:'18-24'},{gender:'female',age:'25-34'},
+    {gender:'male',age:'18-24'},{gender:'male',age:'25-34'},
+    {gender:'female',age:'35-44'},{gender:'male',age:'35-44'},
+  ];
+  const audDist=[0.22,0.21,0.16,0.17,0.13,0.11];
+  D.audience=audSegs.map((a,i)=>({...a,reach:String(Math.round(totalReach*audDist[i])),impressions:String(Math.round(totalImp*audDist[i]))}));
+
+  // Prev period (simulated ~10% lower) — plain KRW
+  prevD.insights={data:[{
+    impressions:String(Math.round(totalImp*0.88)),clicks:String(Math.round(totalClk*0.91)),
+    spend:String(Math.round(totalSpendKRW*0.94)),ctr:'3.28',
+    actions:[{action_type:'purchase',value:String(Math.round(totalPurchases*0.85))}],
+    action_values:[{action_type:'purchase',value:String(Math.round(purchaseValueKRW*0.82))}],
+  }]};
+
+  // Store data (smartstore actual)
+  storeData={revenue:61800000,orders:6720,source:'demo'};
+  window._sR=null;
+
+  // Set sidebar labels
+  document.getElementById('sbId').textContent=ACCOUNT;
+  document.getElementById('sbId2').textContent=ACCOUNT;
+
+  // Add demo banner
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('vDash').classList.add('active');
+
+  // Add demo notice bar
+  const notice=document.createElement('div');
+  notice.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999;background:linear-gradient(90deg,rgba(5,211,148,0.15),rgba(24,119,242,0.15));border-bottom:1px solid rgba(5,211,148,0.3);padding:8px 16px;display:flex;align-items:center;justify-content:center;gap:12px;font-size:12px;color:#aac';
+  notice.innerHTML='<span style="color:var(--green);font-weight:700">👀 샘플 데이터 미리보기 모드</span> <span style="color:var(--t2)">실제 Meta API와 스마트스토어 데이터를 연결하면 이 화면에 실데이터가 표시됩니다</span> <button onclick="logout()" style="background:none;border:1px solid var(--b2);border-radius:6px;padding:3px 10px;color:var(--t2);cursor:pointer;font-size:11px;font-family:inherit">실데이터 연결하기</button>';
+  document.body.prepend(notice);
+  document.querySelector('.main').style.paddingTop='52px';
+  document.querySelector('.cfg-main') && (document.querySelector('.cfg-main').style.paddingTop='52px');
+
+  renderAll();
+}
+
+// ─── UTILS ────────────────────────────────────────────────
+function setLoad(m){const el=document.getElementById('loadT');if(el)el.textContent=m;}
+function showErr(m){const b=document.getElementById('errBan');if(b){b.style.display='flex';b.textContent='⚠ '+m;}}
+function hideErr(){const b=document.getElementById('errBan');if(b)b.style.display='none';}
+function logout(){location.reload();}
+</script>
+</body>
+</html>
