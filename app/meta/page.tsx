@@ -53,7 +53,7 @@ export default function MetaDashboardPage() {
   async function connectReal() {
     if (!token || !accountId) { alert('Access Token과 계정 ID를 입력하세요.'); return; }
     setLoading(true);
-    const G = 'https://graph.facebook.com/v19.0';
+    const G = 'https://graph.facebook.com/v21.0';
     const acct = accountId.startsWith('act_') ? accountId : 'act_' + accountId;
     const DS = '2026-02-24', DE = '2026-03-25';
     try {
