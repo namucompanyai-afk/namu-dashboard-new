@@ -7,52 +7,104 @@ const DATA_FILE = path.join(process.cwd(), "data", "inventory.json");
 const ALERT_EMAILS = ["huguoh8501@gmail.com", "namumedical22@gmail.com", "dlagusdn1991@gmail.com"];
 const SAFETY_DAYS = 14;
 
+// ✅ GET: 두 가지 역할
+// 1) 크론/알림 호출 (secret 파라미터 있을 때) → 이메일 발송
+// 2) 일반 페이지 호출 → 저장된 데이터 반환
 export async function GET(request: Request) {
-  const authHeader = request.headers.get("authorization");
   const url = new URL(request.url);
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && url.searchParams.get("secret") !== "namu2024") {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const authHeader = request.headers.get("authorization");
+  const isCron =
+    authHeader === `Bearer ${process.env.CRON_SECRET}` ||
+    url.searchParams.get("secret") === "namu2024";
+
+  // 크론 호출이면 기존 이메일 발송 로직
+  if (isCron) {
+    try {
+      if (!fs.existsSync(DATA_FILE)) {
+        return NextResponse.json({ message: "데이터 없음" });
+      }
+
+      const { products, uploadDate } = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
+      if (!products || products.length === 0) {
+        return NextResponse.json({ message: "품목 없음" });
+      }
+
+      const today = new Date();
+      const upload = new Date(uploadDate);
+      const elapsedDays = Math.floor(
+        (today.getTime() - upload.getTime()) / (1000 * 60 * 60 * 24)
+      );
+
+      const calculated = products.map((p: any) => {
+        const estimatedStock = Math.max(0, p.stock - p.daily * elapsedDays + p.incoming);
+        const safetyStock = p.daily * SAFETY_DAYS;
+        const daysLeft = p.daily > 0 ? Math.floor(estimatedStock / p.daily) : 999;
+        const needRestock = estimatedStock <= safetyStock && p.daily > 0;
+        const shortage = Math.max(0, safetyStock - estimatedStock);
+        return { ...p, estimatedStock, safetyStock, daysLeft, needRestock, shortage };
+      });
+
+      const restockItems = calculated.filter((p: any) => p.needRestock);
+      const urgentItems = calculated.filter((p: any) => p.daysLeft <= 7);
+      const normalItems = calculated.filter((p: any) => !p.needRestock);
+
+      if (restockItems.length === 0) {
+        return NextResponse.json({ message: "모든 품목 정상 - 알림 없음" });
+      }
+
+      const dateStr = today.toLocaleDateString("ko-KR", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
+
+      return NextResponse.json({
+        ok: true,
+        message: `알림 발송 완료 - 입고필요: ${restockItems.length}건`,
+      });
+    } catch (err) {
+      return NextResponse.json({ error: String(err) }, { status: 500 });
+    }
   }
 
+  // ✅ 일반 페이지 호출: 저장된 데이터 반환
   try {
     if (!fs.existsSync(DATA_FILE)) {
-      return NextResponse.json({ message: "데이터 없음" });
+      return NextResponse.json({ products: [], uploadDate: null });
+    }
+    const raw = fs.readFileSync(DATA_FILE, "utf-8");
+    const { products, uploadDate } = JSON.parse(raw);
+    return NextResponse.json({ products: products || [], uploadDate: uploadDate || null });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
+}
+
+// ✅ POST: 엑셀 업로드 시 데이터 저장
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { products } = body;
+
+    if (!products || !Array.isArray(products)) {
+      return NextResponse.json({ error: "잘못된 데이터" }, { status: 400 });
     }
 
-    const { products, uploadDate } = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-    if (!products || products.length === 0) {
-      return NextResponse.json({ message: "품목 없음" });
+    // data 폴더 없으면 생성
+    const dataDir = path.join(process.cwd(), "data");
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    const today = new Date();
-    const upload = new Date(uploadDate);
-    const elapsedDays = Math.floor((today.getTime() - upload.getTime()) / (1000 * 60 * 60 * 24));
+    const payload = {
+      products,
+      uploadDate: new Date().toISOString(),
+    };
 
-    const calculated = products.map((p: any) => {
-      const estimatedStock = Math.max(0, p.stock - p.daily * elapsedDays + p.incoming);
-      const safetyStock = p.daily * SAFETY_DAYS;
-      const daysLeft = p.daily > 0 ? Math.floor(estimatedStock / p.daily) : 999;
-      const needRestock = estimatedStock <= safetyStock && p.daily > 0;
-      const shortage = Math.max(0, safetyStock - estimatedStock);
-      return { ...p, estimatedStock, safetyStock, daysLeft, needRestock, shortage };
-    });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), "utf-8");
 
-    const restockItems = calculated.filter((p: any) => p.needRestock);
-    const urgentItems = calculated.filter((p: any) => p.daysLeft <= 7);
-    const normalItems = calculated.filter((p: any) => !p.needRestock);
-
-    if (restockItems.length === 0) {
-      return NextResponse.json({ message: "모든 품목 정상 - 알림 없음" });
-    }
-
-    const dateStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
-    await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
-
-    return NextResponse.json({
-      ok: true,
-      message: `알림 발송 완료 - 입고필요: ${restockItems.length}건`,
-    });
-
+    return NextResponse.json({ ok: true, count: products.length });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
@@ -73,14 +125,15 @@ async function sendEmail(
     },
   });
 
-  const restockRows = restockItems.map((p) => {
-    const isUrgent = p.daysLeft <= 7;
-    const bg = isUrgent ? "#fff5f5" : "#fffdf0";
-    const color = isUrgent ? "#dc2626" : "#d97706";
-    const badge = isUrgent
-      ? `<span style="background:#fee2e2;color:#b91c1c;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700">긴급</span>`
-      : `<span style="background:#fef9c3;color:#92400e;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700">입고필요</span>`;
-    return `
+  const restockRows = restockItems
+    .map((p) => {
+      const isUrgent = p.daysLeft <= 7;
+      const bg = isUrgent ? "#fff5f5" : "#fffdf0";
+      const color = isUrgent ? "#dc2626" : "#d97706";
+      const badge = isUrgent
+        ? `<span style="background:#fee2e2;color:#b91c1c;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700">긴급</span>`
+        : `<span style="background:#fef9c3;color:#92400e;padding:2px 8px;border-radius:100px;font-size:11px;font-weight:700">입고필요</span>`;
+      return `
     <tr style="background:${bg}">
       <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6"><strong>${p.name}</strong><br><span style="font-size:11px;color:#9ca3af">${p.option}</span></td>
       <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;font-size:12px;color:#9ca3af">${p.skuId}</td>
@@ -91,7 +144,8 @@ async function sendEmail(
       <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#dc2626;font-weight:700">${p.shortage.toLocaleString()}</td>
       <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6">${badge}</td>
     </tr>`;
-  }).join("");
+    })
+    .join("");
 
   const html = `
 <!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"></head>
