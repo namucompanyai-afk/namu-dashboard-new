@@ -41,55 +41,13 @@ export interface StoreData {
   revenue: number;
   orders: number;
   source: string;
-  campaignRevenue?: Record<string, number>;
-  adRevenue?: Record<string, number>;
 }
 
 export interface GoalSettings {
-  roas: number;
-  ctr: number;
-  cpc: number;
-  spend: number;
-}
-
-// ─── NT 파라미터 매칭용 타입 ────────────────────────────
-export interface NtRow {
-  nt_source: string;
-  nt_medium: string;
-  nt_detail: string;
-  nt_keyword: string;
-  revenue: number;
-  orders: number;
-}
-
-export interface AdLeaf {
-  adName: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  result: number;
-  revenue: number;
-  ntKeyword: string;
-}
-
-export interface AdsetNode {
-  adsetName: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  result: number;
-  revenue: number;
-  ads: AdLeaf[];
-}
-
-export interface CampaignNode {
-  campaignName: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  result: number;
-  revenue: number;
-  adsets: AdsetNode[];
+  roas: number;   // %
+  ctr: number;    // %
+  cpc: number;    // ₩
+  spend: number;  // ₩
 }
 
 // ─── 유틸리티 ────────────────────────────────────────
@@ -99,6 +57,3 @@ export const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 export const fmtDate = (d: Date) =>
   `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
-
-export const normalizeNt = (s: string) =>
-  s.toLowerCase().replace(/\s+/g, ' ').trim();
