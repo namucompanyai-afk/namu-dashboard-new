@@ -17,6 +17,7 @@ export default function MetaDashboardPage() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [showNt, setShowNt] = useState(false);
   const [showStore, setShowStore] = useState(false);
+  const [usdToKrw, setUsdToKrw] = useState(1380);
 
   useEffect(() => {
     fetch('/api/meta').then(r => r.json()).then(data => {
@@ -70,7 +71,6 @@ export default function MetaDashboardPage() {
     reader.readAsArrayBuffer(file);
   }
 
-  const usdToKrw = 1380;
   const totalSpend = metaAdRows.reduce((s, r) => s + Number(r['지출 금액 (USD)'] || 0), 0);
   const totalSpendKrw = totalSpend * usdToKrw;
   const totalClicks = metaAdRows.reduce((s, r) => s + Number(r['결과'] || 0), 0);
@@ -82,6 +82,7 @@ export default function MetaDashboardPage() {
       <div className="text-xs font-medium text-gray-500">META</div>
       <h1 className="mt-1 text-2xl font-semibold tracking-tight">Meta 광고 성과</h1>
 
+      {/* 업로드 + 환율 입력 */}
       <div className="mt-5 flex flex-wrap gap-3 items-center">
         <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border cursor-pointer transition-colors text-sm font-medium ${metaFileName ? 'border-indigo-300 bg-indigo-50 text-indigo-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
           📊 {metaFileName || '메타 광고 엑셀 업로드'}
@@ -102,14 +103,27 @@ export default function MetaDashboardPage() {
           🔗 NT 파라미터 생성기
         </button>
 
+        {/* 환율 입력 */}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 bg-white">
+          <span className="text-xs text-gray-400 whitespace-nowrap">USD 환율</span>
+          <input
+            type="number"
+            value={usdToKrw}
+            onChange={e => setUsdToKrw(Number(e.target.value))}
+            className="w-20 text-sm font-mono text-gray-700 focus:outline-none text-right"
+          />
+          <span className="text-xs text-gray-400">₩</span>
+        </div>
+
         {savedAt && (
           <span className="text-xs text-gray-400 ml-auto">마지막 저장: {savedAt}</span>
         )}
       </div>
 
+      {/* 요약 카드 */}
       <div className="mt-5 grid grid-cols-4 gap-3">
         {[
-          { label: '총 광고비', val: totalSpendKrw > 0 ? `₩${Math.round(totalSpendKrw).toLocaleString()}` : '-', sub: totalSpend > 0 ? `$${totalSpend.toFixed(0)}` : '메타 엑셀 업로드 필요' },
+          { label: '총 광고비', val: totalSpendKrw > 0 ? `₩${Math.round(totalSpendKrw).toLocaleString()}` : '-', sub: totalSpend > 0 ? `$${totalSpend.toFixed(0)} × ${usdToKrw}` : '메타 엑셀 업로드 필요' },
           { label: '총 매출 (스스)', val: totalRevenue > 0 ? `₩${Math.round(totalRevenue).toLocaleString()}` : '-', sub: 'NT 파라미터 기준' },
           { label: '실 ROAS', val: realRoas > 0 ? `${Math.round(realRoas)}%` : '-', sub: '스스 매출 기준', highlight: realRoas > 0 ? (realRoas >= 300 ? 'green' : realRoas >= 150 ? 'yellow' : 'red') : '' },
           { label: '총 결과 (클릭)', val: totalClicks > 0 ? totalClicks.toLocaleString() : '-', sub: '전체 캠페인' },
@@ -124,8 +138,9 @@ export default function MetaDashboardPage() {
         ))}
       </div>
 
+      {/* 캠페인 테이블 */}
       <div className="mt-5">
-        <CampaignTable campInsights={[]} storeData={storeData} ntRows={ntRows} metaAdRows={metaAdRows} />
+        <CampaignTable campInsights={[]} storeData={storeData} ntRows={ntRows} metaAdRows={metaAdRows} usdToKrw={usdToKrw} />
       </div>
 
       {showNt && <NtGenerator onClose={() => setShowNt(false)} />}

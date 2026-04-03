@@ -8,6 +8,7 @@ interface Props {
   storeData: StoreData;
   ntRows?: NtRow[];
   metaAdRows?: any[];
+  usdToKrw?: number;
 }
 
 function buildTree(metaAdRows: any[], storeData: StoreData): CampaignNode[] {
@@ -67,19 +68,18 @@ function buildTree(metaAdRows: any[], storeData: StoreData): CampaignNode[] {
   return Array.from(campMap.values()).sort((a, b) => b.spend - a.spend);
 }
 
-function RoasCell({ spend, revenue }: { spend: number; revenue: number }) {
+function RoasCell({ spend, revenue, rate }: { spend: number; revenue: number; rate: number }) {
   if (!revenue) return <span className="text-gray-300 text-xs">NT 없음</span>;
-  const usdToKrw = 1380;
-  const spendKrw = spend * usdToKrw;
+  const spendKrw = spend * rate;
   const roas = spendKrw > 0 ? (revenue / spendKrw * 100) : 0;
   const color = roas >= 300 ? 'text-emerald-600' : roas >= 150 ? 'text-amber-500' : 'text-red-500';
   return <span className={`font-bold text-sm font-mono ${color}`}>{roas.toFixed(0)}%</span>;
 }
 
-export default function CampaignTable({ campInsights, storeData, ntRows, metaAdRows }: Props) {
+export default function CampaignTable({ campInsights, storeData, ntRows, metaAdRows, usdToKrw }: Props) {
   const [openCamps, setOpenCamps]   = useState<Set<string>>(new Set());
   const [openAdsets, setOpenAdsets] = useState<Set<string>>(new Set());
-  const usdToKrw = 1380;
+  const rate = usdToKrw ?? 1380;
 
   const tree = metaAdRows && metaAdRows.length > 0
     ? buildTree(metaAdRows, storeData)
@@ -124,7 +124,7 @@ export default function CampaignTable({ campInsights, storeData, ntRows, metaAdR
         </h2>
         {totalRevenue > 0 && (
           <div className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full font-medium">
-            전체 실 ROAS: {(totalRevenue / (totalSpend * usdToKrw) * 100).toFixed(0)}%
+            전체 실 ROAS: {(totalRevenue / (totalSpend * rate) * 100).toFixed(0)}%
           </div>
         )}
       </div>
@@ -153,11 +153,11 @@ export default function CampaignTable({ campInsights, storeData, ntRows, metaAdR
                       {camp.campaignName}
                     </td>
                     <td className="py-3 px-3"></td>
-                    <td className="py-3 px-3 font-mono text-xs text-gray-700">₩{fN(camp.spend * usdToKrw)}</td>
+                    <td className="py-3 px-3 font-mono text-xs text-gray-700">₩{fN(camp.spend * rate)}</td>
                     <td className="py-3 px-3 font-mono text-xs text-gray-600">{fN(camp.impressions)}</td>
                     <td className="py-3 px-3 font-mono text-xs text-gray-600">{fN(camp.clicks)}</td>
                     <td className="py-3 px-3 font-mono text-xs text-gray-700">{camp.revenue > 0 ? `₩${fN(camp.revenue)}` : '-'}</td>
-                    <td className="py-3 px-3"><RoasCell spend={camp.spend} revenue={camp.revenue} /></td>
+                    <td className="py-3 px-3"><RoasCell spend={camp.spend} revenue={camp.revenue} rate={rate} /></td>
                   </tr>
 
                   {campOpen && camp.adsets.map((adset) => {
@@ -175,11 +175,11 @@ export default function CampaignTable({ campInsights, storeData, ntRows, metaAdR
                             {adset.adsetName}
                           </td>
                           <td className="py-2.5 px-3"></td>
-                          <td className="py-2.5 px-3 font-mono text-xs text-gray-600">₩{fN(adset.spend * usdToKrw)}</td>
+                          <td className="py-2.5 px-3 font-mono text-xs text-gray-600">₩{fN(adset.spend * rate)}</td>
                           <td className="py-2.5 px-3 font-mono text-xs text-gray-500">{fN(adset.impressions)}</td>
                           <td className="py-2.5 px-3 font-mono text-xs text-gray-500">{fN(adset.clicks)}</td>
                           <td className="py-2.5 px-3 font-mono text-xs text-gray-600">{adset.revenue > 0 ? `₩${fN(adset.revenue)}` : '-'}</td>
-                          <td className="py-2.5 px-3"><RoasCell spend={adset.spend} revenue={adset.revenue} /></td>
+                          <td className="py-2.5 px-3"><RoasCell spend={adset.spend} revenue={adset.revenue} rate={rate} /></td>
                         </tr>
 
                         {adsetOpen && adset.ads.map((ad) => (
@@ -191,11 +191,11 @@ export default function CampaignTable({ campInsights, storeData, ntRows, metaAdR
                                 : <span className="text-xs text-gray-300">-</span>
                               }
                             </td>
-                            <td className="py-2 px-3 font-mono text-xs text-gray-500">₩{fN(ad.spend * usdToKrw)}</td>
+                            <td className="py-2 px-3 font-mono text-xs text-gray-500">₩{fN(ad.spend * rate)}</td>
                             <td className="py-2 px-3 font-mono text-xs text-gray-400">{fN(ad.impressions)}</td>
                             <td className="py-2 px-3 font-mono text-xs text-gray-400">{fN(ad.clicks)}</td>
                             <td className="py-2 px-3 font-mono text-xs text-gray-500">{ad.revenue > 0 ? `₩${fN(ad.revenue)}` : '-'}</td>
-                            <td className="py-2 px-3"><RoasCell spend={ad.spend} revenue={ad.revenue} /></td>
+                            <td className="py-2 px-3"><RoasCell spend={ad.spend} revenue={ad.revenue} rate={rate} /></td>
                           </tr>
                         ))}
                       </>
