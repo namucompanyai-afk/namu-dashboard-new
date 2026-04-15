@@ -23,10 +23,10 @@ interface InfluencerStat extends Influencer {
 }
 
 const GRADE_MAP = {
-  nano:  { label: '나노',  cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  nano:  { label: '나노',   cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
   micro: { label: '마이크로', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
   macro: { label: '매크로', cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
-  mega:  { label: '메가',  cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
+  mega:  { label: '메가',   cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
 };
 
 function gradeFromFollowers(n: number): Influencer['grade'] {
@@ -54,14 +54,17 @@ export default function InfluencerPage() {
   const [influencers, setInfluencers] = useState<Influencer[]>([]);
   const [ntData, setNtData] = useState<Record<string, { visits: number; orders: number; revenue: number }>>({});
   const [showAdd, setShowAdd] = useState(false);
+  const [showNt, setShowNt] = useState(false);
   const [ssFileName, setSsFileName] = useState('');
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [ntUrl, setNtUrl] = useState('');
+  const [ntId, setNtId] = useState('');
+  const [ntCopied, setNtCopied] = useState(false);
 
   const [form, setForm] = useState({
     name: '', handle: '', followers: '', adCost: '', ntKeyword: '', email: '', grade: 'micro' as Influencer['grade'],
   });
 
-  // 저장된 데이터 불러오기
   useEffect(() => {
     fetch('/api/influencer').then(r => r.json()).then(data => {
       if (data.influencers?.length) setInfluencers(data.influencers);
@@ -70,7 +73,6 @@ export default function InfluencerPage() {
     }).catch(() => {});
   }, []);
 
-  // 스스 엑셀 업로드
   const handleSsExcel = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -81,22 +83,17 @@ export default function InfluencerPage() {
       const wb = XLSX.read(data, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: '' });
-
       const parsed: Record<string, { visits: number; orders: number; revenue: number }> = {};
       for (const row of rows) {
         const medium  = String(row['nt_medium']  || '').trim();
         const keyword = String(row['nt_keyword'] || '').trim();
         if (medium !== 'influencer' || !keyword) continue;
-        const visits  = Number(row['유입수']   || 0);
-        const orders  = Number(row['결제수']   || 0);
-        const revenue = Number(row['결제금액'] || 0);
         if (!parsed[keyword]) parsed[keyword] = { visits: 0, orders: 0, revenue: 0 };
-        parsed[keyword].visits  += visits;
-        parsed[keyword].orders  += orders;
-        parsed[keyword].revenue += revenue;
+        parsed[keyword].visits  += Number(row['유입수']   || 0);
+        parsed[keyword].orders  += Number(row['결제수']   || 0);
+        parsed[keyword].revenue += Number(row['결제금액'] || 0);
       }
       setNtData(parsed);
-
       try {
         const existing = await fetch('/api/influencer').then(r => r.json());
         await fetch('/api/influencer', {
@@ -110,7 +107,6 @@ export default function InfluencerPage() {
     reader.readAsArrayBuffer(file);
   }, []);
 
-  // 인플루언서 추가
   async function addInfluencer() {
     if (!form.name || !form.ntKeyword) { alert('이름과 NT 파라미터 ID는 필수예요.'); return; }
     const newInf: Influencer = {
@@ -137,7 +133,20 @@ export default function InfluencerPage() {
     setForm({ name: '', handle: '', followers: '', adCost: '', ntKeyword: '', email: '', grade: 'micro' });
   }
 
-  // 통계 계산
+  // NT URL 생성
+  const ntGenUrl = (() => {
+    if (!ntUrl || !ntId) return '';
+    const sep = ntUrl.includes('?') ? '&' : '?';
+    return `${ntUrl}${sep}nt_source=instagram&nt_medium=influencer&nt_keyword=inf_${ntId}`;
+  })();
+
+  function copyNt() {
+    if (!ntGenUrl) return;
+    navigator.clipboard.writeText(ntGenUrl);
+    setNtCopied(true);
+    setTimeout(() => setNtCopied(false), 2000);
+  }
+
   const stats: InfluencerStat[] = influencers.map(inf => {
     const d = ntData[inf.ntKeyword] || { visits: 0, orders: 0, revenue: 0 };
     const cvr  = d.visits > 0 ? (d.orders / d.visits * 100) : 0;
@@ -147,7 +156,6 @@ export default function InfluencerPage() {
 
   const totalAdCost  = influencers.reduce((s, i) => s + i.adCost, 0);
   const totalRevenue = stats.reduce((s, i) => s + i.revenue, 0);
-  const totalVisits  = stats.reduce((s, i) => s + i.visits, 0);
   const totalRoas    = totalAdCost > 0 && totalRevenue > 0 ? Math.round(totalRevenue / totalAdCost * 100) : 0;
 
   return (
@@ -162,6 +170,12 @@ export default function InfluencerPage() {
           <input type="file" accept=".xlsx" className="hidden" onChange={handleSsExcel} />
         </label>
         <button
+          onClick={() => setShowNt(true)}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors text-sm font-medium"
+        >
+          🔗 NT 링크 생성기
+        </button>
+        <button
           onClick={() => setShowAdd(true)}
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors text-sm font-medium"
         >
@@ -173,9 +187,9 @@ export default function InfluencerPage() {
       {/* 요약 카드 */}
       <div className="mt-5 grid grid-cols-4 gap-3">
         {[
-          { label: '총 인플루언서', val: `${influencers.length}명`, sub: '등록된 인플루언서' },
-          { label: '총 광고비', val: totalAdCost > 0 ? `₩${totalAdCost.toLocaleString()}` : '-', sub: '전체 합산' },
-          { label: '총 매출 (스스)', val: totalRevenue > 0 ? `₩${totalRevenue.toLocaleString()}` : '-', sub: 'NT 파라미터 기준' },
+          { label: '총 인플루언서', val: `${influencers.length}명`, sub: '등록된 인플루언서', green: false },
+          { label: '총 광고비', val: totalAdCost > 0 ? `₩${totalAdCost.toLocaleString()}` : '-', sub: '전체 합산', green: false },
+          { label: '총 매출 (스스)', val: totalRevenue > 0 ? `₩${totalRevenue.toLocaleString()}` : '-', sub: 'NT 파라미터 기준', green: false },
           { label: '전체 ROAS', val: totalRoas > 0 ? `${totalRoas}%` : '-', sub: '매출 ÷ 광고비', green: totalRoas > 0 },
         ].map(c => (
           <div key={c.label} className="bg-white rounded-2xl border border-gray-200 p-4">
@@ -247,6 +261,60 @@ export default function InfluencerPage() {
         </div>
       </div>
 
+      {/* NT 링크 생성기 모달 */}
+      {showNt && (
+        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="bg-gradient-to-r from-purple-50 to-indigo-50 px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="font-semibold text-gray-900">🔗 NT 링크 생성기</h2>
+                <p className="text-xs text-gray-500 mt-0.5">인플루언서 전용 스마트스토어 파라미터</p>
+              </div>
+              <button onClick={() => setShowNt(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-gray-500 block mb-2">상품 URL</label>
+                <input
+                  type="text"
+                  value={ntUrl}
+                  onChange={e => setNtUrl(e.target.value)}
+                  placeholder="https://smartstore.naver.com/나무/products/..."
+                  className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 block mb-2">인플루언서 ID (영문, 예: soyeon)</label>
+                <input
+                  type="text"
+                  value={ntId}
+                  onChange={e => setNtId(e.target.value)}
+                  placeholder="soyeon"
+                  className="w-full px-4 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+                <p className="text-xs text-gray-400 mt-1">NT 파라미터: inf_{ntId || 'ID'}</p>
+              </div>
+              <div className="bg-gray-50 rounded-xl p-4">
+                <div className="text-xs font-semibold text-gray-400 mb-2">생성된 URL</div>
+                <div className="text-xs font-mono text-gray-700 break-all">
+                  {ntGenUrl || 'URL과 인플루언서 ID를 입력하면 여기에 생성됩니다'}
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={copyNt}
+                  disabled={!ntGenUrl}
+                  className={`flex-1 py-3 rounded-xl font-semibold text-sm transition-colors ${ntGenUrl ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+                >
+                  {ntCopied ? '✅ 복사됨!' : '📋 URL 복사'}
+                </button>
+                <button onClick={() => setShowNt(false)} className="px-5 py-3 border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 transition-colors text-sm">닫기</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 인플루언서 추가 모달 */}
       {showAdd && (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
@@ -258,12 +326,12 @@ export default function InfluencerPage() {
             <div className="p-6">
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: '이름', key: 'name', ph: '박소연', tip: '' },
-                  { label: '인스타 계정', key: 'handle', ph: '@soyeon_cook', tip: '' },
-                  { label: '팔로워 수', key: 'followers', ph: '42000', tip: '' },
-                  { label: '광고비 (원)', key: 'adCost', ph: '200000', tip: '' },
-                  { label: 'NT 파라미터 ID', key: 'ntKeyword', ph: 'inf_soyeon', tip: '' },
-                  { label: '이메일 (선택)', key: 'email', ph: 'hello@email.com', tip: '' },
+                  { label: '이름', key: 'name', ph: '박소연' },
+                  { label: '인스타 계정', key: 'handle', ph: '@soyeon_cook' },
+                  { label: '팔로워 수', key: 'followers', ph: '42000' },
+                  { label: '광고비 (원)', key: 'adCost', ph: '200000' },
+                  { label: 'NT 파라미터 ID', key: 'ntKeyword', ph: 'inf_soyeon' },
+                  { label: '이메일 (선택)', key: 'email', ph: 'hello@email.com' },
                 ].map(f => (
                   <div key={f.key}>
                     <label className="text-xs text-gray-500 block mb-1">{f.label}</label>
