@@ -43,6 +43,12 @@ function makeNtLink(productUrl: string, ntKeyword: string): string {
   return `${productUrl}${sep}nt_source=instagram&nt_medium=influencer&nt_keyword=${ntKeyword}`;
 }
 
+// handle에서 NT 키워드 자동 생성 (@ 제거)
+function handleToNt(handle: string): string {
+  const clean = handle.replace('@', '').trim().toLowerCase();
+  return clean ? `inf_${clean}` : '';
+}
+
 function Avatar({ name, grade }: { name: string; grade: Influencer['grade'] }) {
   const colors = {
     nano:  'bg-amber-100 text-amber-800',
@@ -96,10 +102,9 @@ export default function InfluencerPage() {
     }).catch(() => {});
   }, []);
 
-  // 이름 입력 시 NT 키워드 자동 생성
-  function handleNameChange(val: string) {
-    const auto = val ? `inf_${val.replace(/\s+/g, '_').toLowerCase()}` : '';
-    setForm(p => ({ ...p, name: val, ntKeyword: auto }));
+  // 인스타 계정 입력 시 NT 키워드 자동 생성
+  function handleHandleChange(val: string) {
+    setForm(p => ({ ...p, handle: val, ntKeyword: handleToNt(val) }));
   }
 
   const parseSsExcel = useCallback((file: File) => {
@@ -182,6 +187,21 @@ export default function InfluencerPage() {
     setForm({ name: '', handle: '', followers: '', adCost: '', ntKeyword: '', productUrl: '', email: '' });
   }
 
+  // 인플루언서 삭제
+  async function deleteInfluencer(id: string) {
+    if (!confirm('삭제하시겠습니까?')) return;
+    const updated = influencers.filter(i => i.id !== id);
+    setInfluencers(updated);
+    try {
+      const existing = await fetch('/api/influencer').then(r => r.json());
+      await fetch('/api/influencer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ influencers: updated, ntData: existing.ntData || {} }),
+      });
+    } catch {}
+  }
+
   const stats: InfluencerStat[] = influencers.map(inf => {
     const d = ntData[inf.ntKeyword] || { visits: 0, orders: 0, revenue: 0 };
     const roas = inf.adCost > 0 && d.revenue > 0 ? (d.revenue / inf.adCost * 100) : 0;
@@ -198,7 +218,7 @@ export default function InfluencerPage() {
         ssParsed.reduce((acc: any, r: any) => {
           const kw = String(r['nt_keyword'] || '').trim();
           if (!kw) return acc;
-          if (!acc[kw]) acc[kw] = { visits: 0, orders: 0, revenue: 0 };
+          if (!acc[kw]) acc[kw] = { visits: 0, revenue: 0 };
           acc[kw].visits  += Number(r['유입수']   || 0);
           acc[kw].revenue += Number(r['결제금액'] || 0);
           return acc;
@@ -250,7 +270,7 @@ export default function InfluencerPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="bg-gray-50">
-                {['순위', '인플루언서', '구분', '팔로워', 'NT 링크', '유입수', '광고비', '매출', 'ROAS'].map(h => (
+                {['순위', '인플루언서', '구분', '팔로워', 'NT 링크', '유입수', '광고비', '매출', 'ROAS', ''].map(h => (
                   <th key={h} className="text-left py-2.5 px-4 text-xs font-semibold text-gray-400 whitespace-nowrap border-b border-gray-100">{h}</th>
                 ))}
               </tr>
@@ -258,7 +278,7 @@ export default function InfluencerPage() {
             <tbody>
               {stats.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="text-center py-12 text-gray-400 text-sm">
+                  <td colSpan={10} className="text-center py-12 text-gray-400 text-sm">
                     <div className="text-2xl mb-2">👤</div>
                     인플루언서를 추가하면 성과가 표시됩니다
                   </td>
@@ -292,6 +312,12 @@ export default function InfluencerPage() {
                       : <span className="text-xs text-gray-300">NT 없음</span>
                     }
                   </td>
+                  <td className="py-3 px-4">
+                    <button onClick={() => deleteInfluencer(inf.id)}
+                      className="text-xs px-2.5 py-1 rounded-lg border border-red-100 text-red-400 hover:bg-red-50 hover:border-red-200 transition-colors">
+                      삭제
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -320,7 +346,6 @@ export default function InfluencerPage() {
                   </div>
                 ))}
               </div>
-
               {!ssParsed ? (
                 <div
                   className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors mb-4 ${isDragging ? 'border-emerald-400 bg-emerald-50' : 'border-gray-200 hover:border-emerald-300'}`}
@@ -393,41 +418,44 @@ export default function InfluencerPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">이름</label>
-                  <input type="text" placeholder="박소연" value={form.name} onChange={e => handleNameChange(e.target.value)}
+                  <input type="text" placeholder="박소연" value={form.name}
+                    onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 block mb-1">인스타 계정</label>
-                  <input type="text" placeholder="@soyeon_cook" value={form.handle} onChange={e => setForm(p => ({ ...p, handle: e.target.value }))}
+                  <label className="text-xs text-gray-500 block mb-1">인스타 계정 <span className="text-gray-400">(NT ID 자동 생성)</span></label>
+                  <input type="text" placeholder="@soyeon_cook" value={form.handle}
+                    onChange={e => handleHandleChange(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">팔로워 수</label>
                   <input type="text" placeholder="42000" value={form.followers}
-                    onChange={e => { const v = e.target.value; setForm(p => ({ ...p, followers: v, grade: gradeFromFollowers(parseInt(v) || 0) })); }}
+                    onChange={e => { const v = e.target.value; setForm(p => ({ ...p, followers: v })); }}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">광고비 (원)</label>
-                  <input type="text" placeholder="200000" value={form.adCost} onChange={e => setForm(p => ({ ...p, adCost: e.target.value }))}
+                  <input type="text" placeholder="200000" value={form.adCost}
+                    onChange={e => setForm(p => ({ ...p, adCost: e.target.value }))}
                     className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-gray-500 block mb-1">상품 URL <span className="text-gray-400">(NT 링크 자동 생성에 사용)</span></label>
+                <label className="text-xs text-gray-500 block mb-1">상품 URL <span className="text-gray-400">(NT 링크 자동 생성)</span></label>
                 <input type="text" placeholder="https://smartstore.naver.com/나무/products/..." value={form.productUrl}
                   onChange={e => setForm(p => ({ ...p, productUrl: e.target.value }))}
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
 
               <div>
-                <label className="text-xs text-gray-500 block mb-1">NT 파라미터 ID <span className="text-gray-400">(이름 입력 시 자동 생성)</span></label>
-                <input type="text" placeholder="inf_soyeon" value={form.ntKeyword} onChange={e => setForm(p => ({ ...p, ntKeyword: e.target.value }))}
+                <label className="text-xs text-gray-500 block mb-1">NT 파라미터 ID <span className="text-gray-400">(인스타 계정 입력 시 자동 생성)</span></label>
+                <input type="text" placeholder="inf_soyeon_cook" value={form.ntKeyword}
+                  onChange={e => setForm(p => ({ ...p, ntKeyword: e.target.value }))}
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
 
-              {/* NT 링크 미리보기 */}
               {form.productUrl && form.ntKeyword && (
                 <div className="bg-purple-50 border border-purple-200 rounded-xl p-3">
                   <div className="text-xs font-semibold text-purple-700 mb-1">생성될 NT 링크 미리보기</div>
@@ -437,7 +465,8 @@ export default function InfluencerPage() {
 
               <div>
                 <label className="text-xs text-gray-500 block mb-1">이메일 (선택)</label>
-                <input type="text" placeholder="hello@email.com" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
+                <input type="text" placeholder="hello@email.com" value={form.email}
+                  onChange={e => setForm(p => ({ ...p, email: e.target.value }))}
                   className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
               </div>
 
