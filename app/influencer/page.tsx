@@ -1,0 +1,310 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import * as XLSX from 'xlsx';
+
+interface Influencer {
+  id: string;
+  name: string;
+  handle: string;
+  followers: number;
+  grade: 'nano' | 'micro' | 'macro' | 'mega';
+  adCost: number;
+  ntKeyword: string;
+  email?: string;
+}
+
+interface InfluencerStat extends Influencer {
+  visits: number;
+  orders: number;
+  revenue: number;
+  cvr: number;
+  roas: number;
+}
+
+const GRADE_MAP = {
+  nano:  { label: '나노',  cls: 'bg-amber-50 text-amber-700 border border-amber-200' },
+  micro: { label: '마이크로', cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200' },
+  macro: { label: '매크로', cls: 'bg-purple-50 text-purple-700 border border-purple-200' },
+  mega:  { label: '메가',  cls: 'bg-blue-50 text-blue-700 border border-blue-200' },
+};
+
+function gradeFromFollowers(n: number): Influencer['grade'] {
+  if (n >= 1000000) return 'mega';
+  if (n >= 100000)  return 'macro';
+  if (n >= 10000)   return 'micro';
+  return 'nano';
+}
+
+function Avatar({ name, grade }: { name: string; grade: Influencer['grade'] }) {
+  const colors = {
+    nano:  'bg-amber-100 text-amber-800',
+    micro: 'bg-emerald-100 text-emerald-800',
+    macro: 'bg-purple-100 text-purple-800',
+    mega:  'bg-blue-100 text-blue-800',
+  };
+  return (
+    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${colors[grade]}`}>
+      {name[0]}
+    </div>
+  );
+}
+
+export default function InfluencerPage() {
+  const [influencers, setInfluencers] = useState<Influencer[]>([]);
+  const [ntData, setNtData] = useState<Record<string, { visits: number; orders: number; revenue: number }>>({});
+  const [showAdd, setShowAdd] = useState(false);
+  const [ssFileName, setSsFileName] = useState('');
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+
+  const [form, setForm] = useState({
+    name: '', handle: '', followers: '', adCost: '', ntKeyword: '', email: '', grade: 'micro' as Influencer['grade'],
+  });
+
+  // 저장된 데이터 불러오기
+  useEffect(() => {
+    fetch('/api/influencer').then(r => r.json()).then(data => {
+      if (data.influencers?.length) setInfluencers(data.influencers);
+      if (data.ntData) setNtData(data.ntData);
+      if (data.savedAt) setSavedAt(new Date(data.savedAt).toLocaleDateString('ko-KR'));
+    }).catch(() => {});
+  }, []);
+
+  // 스스 엑셀 업로드
+  const handleSsExcel = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSsFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<any>(ws, { defval: '' });
+
+      const parsed: Record<string, { visits: number; orders: number; revenue: number }> = {};
+      for (const row of rows) {
+        const medium  = String(row['nt_medium']  || '').trim();
+        const keyword = String(row['nt_keyword'] || '').trim();
+        if (medium !== 'influencer' || !keyword) continue;
+        const visits  = Number(row['유입수']   || 0);
+        const orders  = Number(row['결제수']   || 0);
+        const revenue = Number(row['결제금액'] || 0);
+        if (!parsed[keyword]) parsed[keyword] = { visits: 0, orders: 0, revenue: 0 };
+        parsed[keyword].visits  += visits;
+        parsed[keyword].orders  += orders;
+        parsed[keyword].revenue += revenue;
+      }
+      setNtData(parsed);
+
+      try {
+        const existing = await fetch('/api/influencer').then(r => r.json());
+        await fetch('/api/influencer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ influencers: existing.influencers || [], ntData: parsed }),
+        });
+        setSavedAt(new Date().toLocaleDateString('ko-KR'));
+      } catch {}
+    };
+    reader.readAsArrayBuffer(file);
+  }, []);
+
+  // 인플루언서 추가
+  async function addInfluencer() {
+    if (!form.name || !form.ntKeyword) { alert('이름과 NT 파라미터 ID는 필수예요.'); return; }
+    const newInf: Influencer = {
+      id: Date.now().toString(),
+      name: form.name,
+      handle: form.handle,
+      followers: parseInt(form.followers) || 0,
+      grade: gradeFromFollowers(parseInt(form.followers) || 0),
+      adCost: parseInt(form.adCost) || 0,
+      ntKeyword: form.ntKeyword,
+      email: form.email,
+    };
+    const updated = [...influencers, newInf];
+    setInfluencers(updated);
+    try {
+      const existing = await fetch('/api/influencer').then(r => r.json());
+      await fetch('/api/influencer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ influencers: updated, ntData: existing.ntData || {} }),
+      });
+    } catch {}
+    setShowAdd(false);
+    setForm({ name: '', handle: '', followers: '', adCost: '', ntKeyword: '', email: '', grade: 'micro' });
+  }
+
+  // 통계 계산
+  const stats: InfluencerStat[] = influencers.map(inf => {
+    const d = ntData[inf.ntKeyword] || { visits: 0, orders: 0, revenue: 0 };
+    const cvr  = d.visits > 0 ? (d.orders / d.visits * 100) : 0;
+    const roas = inf.adCost > 0 && d.revenue > 0 ? (d.revenue / inf.adCost * 100) : 0;
+    return { ...inf, ...d, cvr, roas };
+  }).sort((a, b) => b.roas - a.roas);
+
+  const totalAdCost  = influencers.reduce((s, i) => s + i.adCost, 0);
+  const totalRevenue = stats.reduce((s, i) => s + i.revenue, 0);
+  const totalVisits  = stats.reduce((s, i) => s + i.visits, 0);
+  const totalRoas    = totalAdCost > 0 && totalRevenue > 0 ? Math.round(totalRevenue / totalAdCost * 100) : 0;
+
+  return (
+    <div>
+      <div className="text-xs font-medium text-gray-500">인플루언서</div>
+      <h1 className="mt-1 text-2xl font-semibold tracking-tight">인플루언서 성과</h1>
+
+      {/* 상단 버튼 */}
+      <div className="mt-5 flex flex-wrap gap-3 items-center">
+        <label className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border cursor-pointer transition-colors text-sm font-medium ${ssFileName ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
+          🛒 {ssFileName || '스마트스토어 엑셀 업로드'}
+          <input type="file" accept=".xlsx" className="hidden" onChange={handleSsExcel} />
+        </label>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors text-sm font-medium"
+        >
+          + 인플루언서 추가
+        </button>
+        {savedAt && <span className="text-xs text-gray-400 ml-auto">마지막 저장: {savedAt}</span>}
+      </div>
+
+      {/* 요약 카드 */}
+      <div className="mt-5 grid grid-cols-4 gap-3">
+        {[
+          { label: '총 인플루언서', val: `${influencers.length}명`, sub: '등록된 인플루언서' },
+          { label: '총 광고비', val: totalAdCost > 0 ? `₩${totalAdCost.toLocaleString()}` : '-', sub: '전체 합산' },
+          { label: '총 매출 (스스)', val: totalRevenue > 0 ? `₩${totalRevenue.toLocaleString()}` : '-', sub: 'NT 파라미터 기준' },
+          { label: '전체 ROAS', val: totalRoas > 0 ? `${totalRoas}%` : '-', sub: '매출 ÷ 광고비', green: totalRoas > 0 },
+        ].map(c => (
+          <div key={c.label} className="bg-white rounded-2xl border border-gray-200 p-4">
+            <div className="text-xs text-gray-400 mb-1">{c.label}</div>
+            <div className={`text-2xl font-semibold ${c.green ? 'text-emerald-600' : 'text-gray-900'}`}>{c.val}</div>
+            <div className="text-xs text-gray-400 mt-1">{c.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 테이블 */}
+      <div className="mt-5 bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="text-sm font-semibold text-gray-900">
+            인플루언서별 성과
+            <span className="text-xs text-gray-400 font-normal ml-2">ROAS 높은 순</span>
+          </div>
+          <div className="text-xs text-gray-400">ROAS = 매출 ÷ 광고비 × 100</div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-gray-50">
+                {['순위', '인플루언서', '구분', '팔로워', '유입수', '광고비', '매출', 'ROAS'].map(h => (
+                  <th key={h} className="text-left py-2.5 px-4 text-xs font-semibold text-gray-400 whitespace-nowrap border-b border-gray-100">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {stats.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="text-center py-12 text-gray-400 text-sm">
+                    <div className="text-2xl mb-2">👤</div>
+                    인플루언서를 추가하면 성과가 표시됩니다
+                  </td>
+                </tr>
+              )}
+              {stats.map((inf, i) => (
+                <tr key={inf.id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                  <td className="py-3 px-4 text-xs text-gray-400 font-medium">{i + 1}위</td>
+                  <td className="py-3 px-4">
+                    <div className="flex items-center gap-2">
+                      <Avatar name={inf.name} grade={inf.grade} />
+                      <div>
+                        <div className="font-medium text-gray-900 text-sm">{inf.name}</div>
+                        <div className="text-xs text-gray-400">{inf.handle}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-3 px-4">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${GRADE_MAP[inf.grade].cls}`}>
+                      {GRADE_MAP[inf.grade].label}
+                    </span>
+                  </td>
+                  <td className="py-3 px-4 text-xs text-gray-600">{inf.followers.toLocaleString()}</td>
+                  <td className="py-3 px-4 text-xs font-mono text-gray-700">{inf.visits > 0 ? inf.visits.toLocaleString() : '-'}</td>
+                  <td className="py-3 px-4 text-xs font-mono text-gray-700">{inf.adCost > 0 ? `₩${inf.adCost.toLocaleString()}` : '-'}</td>
+                  <td className="py-3 px-4 text-xs font-mono text-gray-700">{inf.revenue > 0 ? `₩${inf.revenue.toLocaleString()}` : '-'}</td>
+                  <td className="py-3 px-4">
+                    {inf.roas > 0
+                      ? <span className={`font-bold text-sm font-mono ${inf.roas >= 300 ? 'text-emerald-600' : inf.roas >= 100 ? 'text-amber-500' : 'text-red-500'}`}>{Math.round(inf.roas)}%</span>
+                      : <span className="text-xs text-gray-300">NT 없음</span>
+                    }
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 인플루언서 추가 모달 */}
+      {showAdd && (
+        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h2 className="font-semibold text-gray-900">인플루언서 추가</h2>
+              <button onClick={() => setShowAdd(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <div className="p-6">
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: '이름', key: 'name', ph: '박소연', tip: '' },
+                  { label: '인스타 계정', key: 'handle', ph: '@soyeon_cook', tip: '' },
+                  { label: '팔로워 수', key: 'followers', ph: '42000', tip: '' },
+                  { label: '광고비 (원)', key: 'adCost', ph: '200000', tip: '' },
+                  { label: 'NT 파라미터 ID', key: 'ntKeyword', ph: 'inf_soyeon', tip: '' },
+                  { label: '이메일 (선택)', key: 'email', ph: 'hello@email.com', tip: '' },
+                ].map(f => (
+                  <div key={f.key}>
+                    <label className="text-xs text-gray-500 block mb-1">{f.label}</label>
+                    <input
+                      type="text"
+                      placeholder={f.ph}
+                      value={(form as any)[f.key]}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setForm(p => ({
+                          ...p,
+                          [f.key]: val,
+                          ...(f.key === 'followers' ? { grade: gradeFromFollowers(parseInt(val) || 0) } : {}),
+                        }));
+                      }}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3">
+                <label className="text-xs text-gray-500 block mb-1">구분 (팔로워 입력 시 자동 설정)</label>
+                <select
+                  value={form.grade}
+                  onChange={e => setForm(p => ({ ...p, grade: e.target.value as Influencer['grade'] }))}
+                  className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="nano">나노 (1천~1만)</option>
+                  <option value="micro">마이크로 (1만~10만)</option>
+                  <option value="macro">매크로 (10만~100만)</option>
+                  <option value="mega">메가 (100만 이상)</option>
+                </select>
+              </div>
+              <div className="flex gap-3 mt-5">
+                <button onClick={addInfluencer} className="flex-1 py-3 bg-emerald-600 text-white rounded-xl font-semibold hover:bg-emerald-700 transition-colors text-sm">✅ 추가</button>
+                <button onClick={() => setShowAdd(false)} className="px-5 py-3 border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 transition-colors text-sm">취소</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

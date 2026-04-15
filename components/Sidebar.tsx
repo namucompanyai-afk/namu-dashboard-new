@@ -63,7 +63,6 @@ export default function Sidebar() {
 
             {isSalesOpen && (
               <div className="ml-4 mt-1 space-y-1">
-                {/* 매출현황 - 개발중 */}
                 <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 cursor-not-allowed">
                   <span>📈</span>
                   <span>매출 현황</span>
@@ -78,6 +77,11 @@ export default function Sidebar() {
                 <Link href="/meta" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/meta') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>📣</span>
                   <span>Meta 광고</span>
+                </Link>
+
+                <Link href="/influencer" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/influencer') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🌟</span>
+                  <span>인플루언서</span>
                 </Link>
               </div>
             )}
@@ -105,7 +109,6 @@ export default function Sidebar() {
             )}
           </div>
 
-          {/* 관리 메뉴 - 관리자만, 항상 표시 */}
           {userRole === '관리자' && (
             <>
               <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider mt-4">관리</div>
