@@ -180,6 +180,8 @@ export default function DiagnosisPage() {
     const totalNetProfit = totalMargin - totalAdCost
     const marginRate = totalRevenue > 0 ? totalMargin / totalRevenue : 0
     const adRoasAttr = totalAdCost > 0 ? (totalAdRevenue / totalAdCost) * 100 : null
+    const totalCampaignRevenue = filtered.reduce((s, p: any) => s + (p.campaignRevenue || 0), 0)
+    const adRoasCamp = totalAdCost > 0 ? (totalCampaignRevenue / totalAdCost) * 100 : null
     const adDependency = totalRevenue > 0 ? totalAdRevenue / totalRevenue : 0
 
     const counts = { profitable: 0, trap: 0, structural_loss: 0, no_sales: 0 }
@@ -193,11 +195,13 @@ export default function DiagnosisPage() {
         totalRevenue,
         totalAdRevenue,
         totalOrganicRevenue,
+        totalCampaignRevenue,
         totalAdCost,
         totalMargin,
         totalNetProfit,
         marginRate,
         adRoasAttr,
+        adRoasCamp,
         adDependency,
         productCount: filtered.length,
         counts,
@@ -292,8 +296,10 @@ export default function DiagnosisPage() {
           alias: p.alias, revenue: p.revenue, sold: p.sold,
           adRevenue: p.adRevenue, adSold: p.adSold,
           organicRevenue: p.organicRevenue, adCost: p.adCost,
+          campaignRevenue: p.campaignRevenue,
           totalMargin: p.totalMargin, totalNetProfit: p.totalNetProfit,
-          adRoasAttr: p.adRoasAttr, adDependency: p.adDependency,
+          adRoasAttr: p.adRoasAttr, adRoasCamp: p.adRoasCamp,
+          adDependency: p.adDependency,
         }))
         const updated = { ...item, products, summary: result.summary }
         await fetch('/api/coupang-diagnoses', {
@@ -523,9 +529,11 @@ export default function DiagnosisPage() {
           adSold: p.adSold,
           organicRevenue: p.organicRevenue,
           adCost: p.adCost,
+          campaignRevenue: p.campaignRevenue,
           totalMargin: p.totalMargin,
           totalNetProfit: p.totalNetProfit,
           adRoasAttr: p.adRoasAttr,
+          adRoasCamp: p.adRoasCamp,
           adDependency: p.adDependency,
         })),
       }
@@ -1125,7 +1133,7 @@ function SummarySection({ result, viewMode, prevSummary }: {
   const cmpRevenue = showCompare ? compare(adj(s.totalRevenue), adj(prevSummary.totalRevenue)) : null
   const cmpAdRev = showCompare ? compare(adj(s.totalAdRevenue), adj(prevSummary.totalAdRevenue)) : null
   const cmpOrgRev = showCompare ? compare(adj(s.totalOrganicRevenue), adj(prevSummary.totalOrganicRevenue)) : null
-  const cmpRoas = showCompare ? compare(s.adRoasAttr ?? 0, prevSummary.adRoasAttr ?? 0) : null
+  const cmpRoas = showCompare ? compare(s.adRoasCamp ?? 0, prevSummary.adRoasCamp ?? 0) : null
   const cmpAdCost = showCompare ? compare(adj(s.totalAdCost), adj(prevSummary.totalAdCost)) : null
   const cmpMargin = showCompare ? compare(adj(s.totalMargin), adj(prevSummary.totalMargin)) : null
   const cmpProfit = showCompare ? compare(adj(s.totalNetProfit), adj(prevSummary.totalNetProfit)) : null
@@ -1157,9 +1165,9 @@ function SummarySection({ result, viewMode, prevSummary }: {
           compareGood="up"
         />
         <KpiCard
-          label="ROAS (귀속)"
-          value={formatPct(s.adRoasAttr)}
-          sub="실판매가 기준"
+          label="ROAS (집행)"
+          value={formatPct(s.adRoasCamp)}
+          sub="내 광고가 직접 만든 매출 ÷ 내 광고비"
           compare={cmpRoas}
           compareGood="up"
         />
@@ -1222,9 +1230,11 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
     return {
       totalRevenue: found.revenue || 0,
       totalAdRevenue: found.adRevenue || 0,
+      totalCampaignRevenue: found.campaignRevenue || 0,
       totalAdCost: found.adCost || 0,
       totalNetProfit: found.totalNetProfit || 0,
       adRoasAttr: found.adRoasAttr || 0,
+      adRoasCamp: found.adRoasCamp || 0,
       adDependency: found.adDependency || 0,
     }
   }
@@ -1245,7 +1255,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
           매출: Math.round(((s.totalRevenue || 0) * scale) / 10000),
           광고비: Math.round(((s.totalAdCost || 0) * scale) / 10000),
           순이익: Math.round(((s.totalNetProfit || 0) * scale) / 10000),
-          ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
+          ROAS: s.adRoasCamp ? Math.round(s.adRoasCamp) : 0,
           광고의존도: Math.round((s.adDependency || 0) * 100),
           _analysis: a,  // 클릭 시 사용
         }
@@ -1269,7 +1279,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
           매출: Math.round(((s.totalRevenue || 0) * scale) / 10000),
           광고비: Math.round(((s.totalAdCost || 0) * scale) / 10000),
           순이익: Math.round(((s.totalNetProfit || 0) * scale) / 10000),
-          ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
+          ROAS: s.adRoasCamp ? Math.round(s.adRoasCamp) : 0,
           광고의존도: Math.round((s.adDependency || 0) * 100),
           _analysis: a,
         }
@@ -1401,7 +1411,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
 
       <div className="grid grid-cols-2 gap-4">
         <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <h3 className="text-sm font-semibold mb-3">📊 ROAS 추이</h3>
+          <h3 className="text-sm font-semibold mb-3">📊 ROAS (집행) 추이</h3>
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={trendData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -1448,7 +1458,7 @@ function formatMonthLabel(monthKey: string): string {
 // 함정 스캐너 테이블
 // ─────────────────────────────────────────────────────────────
 
-type SortKey = 'alias' | 'revenue' | 'adCost' | 'adRevenue' | 'organicRevenue' | 'adNetProfit' | 'totalNetProfit' | 'marginRate' | 'adRoasAttr' | 'verdict'
+type SortKey = 'alias' | 'revenue' | 'adCost' | 'adRevenue' | 'organicRevenue' | 'adNetProfit' | 'totalNetProfit' | 'marginRate' | 'adRoasCamp' | 'verdict'
 type SortDir = 'asc' | 'desc'
 
 function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
@@ -1541,7 +1551,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
               <SortHeader k="adNetProfit" label="광고손익" />
               <SortHeader k="totalNetProfit" label="순이익" />
               <SortHeader k="marginRate" label="마진율" />
-              <SortHeader k="adRoasAttr" label="ROAS" />
+              <SortHeader k="adRoasCamp" label="ROAS" />
               <SortHeader k="verdict" label="판정" align="left" />
             </tr>
           </thead>
@@ -1586,7 +1596,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                       {(p.marginRate * 100).toFixed(1)}%
                     </td>
                     <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap min-w-[60px]">
-                      {p.adRoasAttr ? `${p.adRoasAttr.toFixed(0)}%` : '–'}
+                      {p.adRoasCamp ? `${p.adRoasCamp.toFixed(0)}%` : '–'}
                     </td>
                     <td className={`px-3 py-3 ${style.text} text-xs font-medium whitespace-nowrap`}>
                       {style.dot} {style.label}
@@ -1623,7 +1633,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                           {(opt.marginRate * 100).toFixed(1)}%
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap min-w-[60px]">
-                          {opt.adRoasAttr ? `${opt.adRoasAttr.toFixed(0)}%` : '–'}
+                          {opt.adRoasCamp ? `${opt.adRoasCamp.toFixed(0)}%` : '–'}
                         </td>
                         <td className={`px-3 py-2 ${optStyle.text} text-[11px] whitespace-nowrap`}>
                           {optStyle.dot} {optStyle.label}

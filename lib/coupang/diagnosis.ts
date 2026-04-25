@@ -152,12 +152,14 @@ export interface OptionDiagnosis {
   organicSold: number
   adCost: number
 
+  campaignRevenue: number
   totalMargin: number
   adMargin: number
   adNetProfit: number
   totalNetProfit: number
   marginRate: number
   adRoasAttr: number | null
+  adRoasCamp: number | null
   adDependency: number
 
   verdict: VerdictCode
@@ -171,11 +173,13 @@ export interface DiagnosisResult {
     totalRevenue: number
     totalAdRevenue: number
     totalOrganicRevenue: number
+    totalCampaignRevenue: number
     totalAdCost: number
     totalMargin: number
     totalNetProfit: number
     marginRate: number
     adRoasAttr: number | null
+    adRoasCamp: number | null
     adDependency: number
     counts: Record<VerdictCode, number>
   }
@@ -259,6 +263,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
     adRevenue: number
     adSold: number
     adCost: number
+    campaignRevenue: number
     totalMargin: number
   }
   type GroupAccum = {
@@ -340,6 +345,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
         adRevenue: 0,
         adSold: 0,
         adCost: 0,
+        campaignRevenue: 0,
         totalMargin: 0,
       })
     }
@@ -363,6 +369,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       g.adCost += adExec.cost
       g.campaignRevenue += adExec.campRevenue
       optAcc.adCost += adExec.cost
+      optAcc.campaignRevenue += adExec.campRevenue
     }
 
     const adConv = adConvByOpt.get(optId)
@@ -420,6 +427,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       const optTotalNetProfit = o.totalMargin - o.adCost
       const optMarginRate = o.revenue > 0 ? o.totalMargin / o.revenue : 0
       const optAdRoasAttr = o.adCost > 0 ? (o.adRevenue / o.adCost) * 100 : null
+      const optAdRoasCamp = o.adCost > 0 ? (o.campaignRevenue / o.adCost) * 100 : null
       const optAdDependency = o.revenue > 0 ? o.adRevenue / o.revenue : 0
       // 봉투 개수 파싱: "X개" 또는 끝의 숫자
       const bagMatch = (o.optionName || '').match(/(\d+)\s*개/)
@@ -452,12 +460,14 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
         organicRevenue: optOrgRevenue,
         organicSold: optOrgSold,
         adCost: o.adCost,
+        campaignRevenue: o.campaignRevenue,
         totalMargin: o.totalMargin,
         adMargin: optAdMargin,
         adNetProfit: optAdNetProfit,
         totalNetProfit: optTotalNetProfit,
         marginRate: optMarginRate,
         adRoasAttr: optAdRoasAttr,
+        adRoasCamp: optAdRoasCamp,
         adDependency: optAdDependency,
         verdict: optVerdict,
         verdictLabel: optVerdictLabel,
@@ -503,11 +513,13 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   const totalRevenue = sum(products, 'revenue')
   const totalAdRevenue = sum(products, 'adRevenue')
   const totalOrganicRevenue = totalRevenue - totalAdRevenue
+  const totalCampaignRevenue = sum(products, 'campaignRevenue')
   const totalAdCost = sum(products, 'adCost')
   const totalMargin = sum(products, 'totalMargin')
   const totalNetProfit = totalMargin - totalAdCost
   const marginRateOverall = totalRevenue > 0 ? totalMargin / totalRevenue : 0
   const adRoasAttrOverall = totalAdCost > 0 ? (totalAdRevenue / totalAdCost) * 100 : null
+  const adRoasCampOverall = totalAdCost > 0 ? (totalCampaignRevenue / totalAdCost) * 100 : null
   const adDependencyOverall = totalRevenue > 0 ? totalAdRevenue / totalRevenue : 0
 
   const counts: Record<VerdictCode, number> = {
@@ -522,11 +534,13 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       totalRevenue,
       totalAdRevenue,
       totalOrganicRevenue,
+      totalCampaignRevenue,
       totalAdCost,
       totalMargin,
       totalNetProfit,
       marginRate: marginRateOverall,
       adRoasAttr: adRoasAttrOverall,
+      adRoasCamp: adRoasCampOverall,
       adDependency: adDependencyOverall,
       counts,
     },
