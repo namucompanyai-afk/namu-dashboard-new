@@ -37,7 +37,7 @@
  *   현재는 둘 다 30일이라 scale = 1
  */
 
-import { getCostBook, getActualPrice, getMarginRow } from './costBook'
+import { getCostBook, getActualPrice, getMarginRow, getOptionChannel } from './costBook'
 import type { AdCampaignRow } from './parsers/adCampaign'
 import type { MarginCalcRow } from './parsers/marginMaster'
 
@@ -143,6 +143,8 @@ export interface OptionDiagnosis {
   optionName: string
   /** 옵션명에서 파싱한 봉투 개수 (정렬용) */
   bagCount: number
+  /** 채널 — marginMaster 의 최종채널 ('growth'|'wing'|기타). 빈 문자열이면 미상. */
+  channel: string
 
   revenue: number
   sold: number
@@ -257,6 +259,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   type GroupOptionAccum = {
     optionId: string
     optionName: string
+    channel: string
     netProfitPerUnit: number
     revenue: number
     sold: number
@@ -339,6 +342,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       g.optionMap.set(optId, {
         optionId: optId,
         optionName: marginRow.optionName || optId,
+        channel: getOptionChannel(optId) || marginRow.channel || '',
         netProfitPerUnit: marginRow.netProfit ?? 0,
         revenue: 0,
         sold: 0,
@@ -453,6 +457,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
         optionId: o.optionId,
         optionName: o.optionName,
         bagCount,
+        channel: o.channel || '',
         revenue: o.revenue,
         sold: o.sold,
         adRevenue: o.adRevenue,
