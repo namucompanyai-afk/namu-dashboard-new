@@ -250,6 +250,17 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
 
   // 3) 마진 마스터에서 모든 옵션 가져와서 별칭별로 그룹화
   //    (정확히는 노출ID → 별칭으로 맵핑)
+  type GroupOptionAccum = {
+    optionId: string
+    optionName: string
+    netProfitPerUnit: number
+    revenue: number
+    sold: number
+    adRevenue: number
+    adSold: number
+    adCost: number
+    totalMargin: number
+  }
   type GroupAccum = {
     alias: string
     exposureIds: Set<string>
@@ -261,6 +272,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
     campaignRevenue: number
     adCost: number
     totalMargin: number
+    optionMap: Map<string, GroupOptionAccum>
   }
   const groups = new Map<string, GroupAccum>()
 

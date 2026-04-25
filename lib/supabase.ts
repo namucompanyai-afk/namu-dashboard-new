@@ -1,13 +1,23 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseKey);
+// Lazy 초기화 — 모듈 import 시점에 즉시 createClient를 호출하면
+// 빌드의 page-data-collection 단계에서 환경변수 부재 시 throw 됨.
+// 함수 호출 시에만 클라이언트를 만들어 빌드 단계와 런타임을 분리.
+let _client: SupabaseClient | null = null;
+function getClient(): SupabaseClient {
+  if (_client) return _client;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) {
+    throw new Error('Supabase 환경변수 누락: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+  }
+  _client = createClient(url, key);
+  return _client;
+}
 
 // 데이터 불러오기
 export async function getData(id: string) {
-  const { data, error } = await supabase
+  const { data, error } = await getClient()
     .from('dashboard_data')
     .select('data')
     .eq('id', id)
@@ -18,7 +28,7 @@ export async function getData(id: string) {
 
 // 데이터 저장하기
 export async function saveData(id: string, payload: any) {
-  const { error } = await supabase
+  const { error } = await getClient()
     .from('dashboard_data')
     .upsert({ id, data: payload, updated_at: new Date().toISOString() });
   if (error) throw error;
@@ -27,7 +37,7 @@ export async function saveData(id: string, payload: any) {
 
 // 데이터 삭제
 export async function deleteData(id: string) {
-  const { error } = await supabase
+  const { error } = await getClient()
     .from('dashboard_data')
     .delete()
     .eq('id', id);
@@ -37,7 +47,8 @@ export async function deleteData(id: string) {
 
 // prefix로 시작하는 모든 키 조회 (id, data 함께)
 export async function listByPrefix(prefix: string) {
-  const { data: idRows, error: idErr } = await supabase
+  const client = getClient();
+  const { data: idRows, error: idErr } = await client
     .from('dashboard_data')
     .select('id, updated_at')
     .like('id', `${prefix}%`)
@@ -52,7 +63,7 @@ export async function listByPrefix(prefix: string) {
   for (let i = 0; i < idRows.length; i += BATCH_SIZE) {
     const batch = idRows.slice(i, i + BATCH_SIZE);
     const ids = batch.map((r: any) => r.id);
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('dashboard_data')
       .select('id, data, updated_at')
       .in('id', ids);
