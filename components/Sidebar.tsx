@@ -9,6 +9,8 @@ export default function Sidebar() {
   const router = useRouter();
   const [isSalesOpen, setIsSalesOpen] = useState(true);
   const [isHROpen, setIsHROpen] = useState(true);
+  const [isPnlOpen, setIsPnlOpen] = useState(true);          // 손익 관리자 (최상위)
+  const [isCoupangOpen, setIsCoupangOpen] = useState(true);  // 쿠팡 서브
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -108,6 +110,57 @@ export default function Sidebar() {
               </div>
             )}
           </div>
+
+          {/* 손익 관리자 - 관리자만 */}
+          {userRole === '관리자' && (
+            <div>
+              <button onClick={() => setIsPnlOpen(!isPnlOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/coupang-tools') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                <span>💰</span>
+                <span className="flex-1 text-left">손익 관리자</span>
+                <span className="text-xs">{isPnlOpen ? '▼' : '▶'}</span>
+              </button>
+
+              {isPnlOpen && (
+                <div className="ml-4 mt-1 space-y-1">
+                  {/* 쿠팡 */}
+                  <div>
+                    <button onClick={() => setIsCoupangOpen(!isCoupangOpen)} className={'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (pathname.startsWith('/coupang-tools') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                      <span>🟠</span>
+                      <span className="flex-1 text-left">쿠팡</span>
+                      <span className="text-xs">{isCoupangOpen ? '▼' : '▶'}</span>
+                    </button>
+
+                    {isCoupangOpen && (
+                      <div className="ml-4 mt-1 space-y-1">
+                        <Link href="/coupang-tools/diagnosis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/diagnosis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                          <span>🎯</span>
+                          <span>수익 진단</span>
+                        </Link>
+                        <Link href="/coupang-tools/data-management" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/data-management') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                          <span>💾</span>
+                          <span>데이터 관리</span>
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 스마트스토어 (개발중) */}
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 cursor-not-allowed">
+                    <span>🟢</span>
+                    <span>스마트스토어</span>
+                    <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                  </div>
+
+                  {/* 지마켓 (개발중) */}
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 cursor-not-allowed">
+                    <span>🟡</span>
+                    <span>지마켓</span>
+                    <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {userRole === '관리자' && (
             <>
