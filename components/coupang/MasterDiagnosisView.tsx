@@ -9,7 +9,7 @@
 
 import { useState, useMemo } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
-import { buildMasterView, type MasterOptionView } from '@/lib/coupang/marginView'
+import { buildMasterView, masterOptionKey, type MasterOptionView } from '@/lib/coupang/marginView'
 
 const fmt = (n: number | null | undefined): string =>
   (n === null || n === undefined || !Number.isFinite(n)) ? '-' : Math.round(n).toLocaleString('ko-KR')
@@ -28,7 +28,7 @@ export default function MasterDiagnosisView() {
 
   const [open, setOpen] = useState<boolean>(false)
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>('all')
-  const [expandedOptionId, setExpandedOptionId] = useState<string | null>(null)
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
   const [searchAlias, setSearchAlias] = useState<string>('')
 
   if (!view.loaded) {
@@ -122,13 +122,14 @@ export default function MasterDiagnosisView() {
                   </thead>
                   <tbody>
                     {g.options.map((o) => {
-                      const isOpen = expandedOptionId === o.optionId
+                      const k = masterOptionKey(o)
+                      const isOpen = expandedKey === k
                       return (
                         <FragmentRow
-                          key={o.optionId}
+                          key={k}
                           o={o}
                           isOpen={isOpen}
-                          onToggle={() => setExpandedOptionId(isOpen ? null : o.optionId)}
+                          onToggle={() => setExpandedKey(isOpen ? null : k)}
                         />
                       )
                     })}
