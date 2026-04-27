@@ -136,6 +136,10 @@ export default function Sidebar() {
                           <span>🎯</span>
                           <span>수익 진단</span>
                         </Link>
+                        <Link href="/coupang-tools/ad-analysis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/ad-analysis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                          <span>📈</span>
+                          <span>광고 분석</span>
+                        </Link>
                         <Link href="/coupang-tools/data-management" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/data-management') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                           <span>💾</span>
                           <span>데이터 관리</span>
