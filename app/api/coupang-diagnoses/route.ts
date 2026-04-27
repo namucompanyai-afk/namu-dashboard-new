@@ -157,23 +157,26 @@ export async function DELETE(request: Request) {
     }
 
     // 1) 새 방식: 개별 키 삭제 시도
+    let deletedCount = 0;
     try {
-      await deleteData(`${KEY_ITEM_PREFIX}${id}`);
+      deletedCount = await deleteData(`${KEY_ITEM_PREFIX}${id}`);
     } catch (e) {
-      // 무시 (옛날 데이터일 수 있음)
+      console.error('[diagnoses DELETE] 개별 키 삭제 실패:', id, e);
     }
 
     // 2) 옛날 묶음 키에서도 삭제 (마이그레이션 안 된 거)
+    let oldRemoved = false;
     const existing = await getData(KEY_LIST_OLD);
     if (existing?.diagnoses) {
       const list: DiagnosisSnapshot[] = existing.diagnoses;
-      const updated = list.filter(d => d.id !== id);
+      const updated = list.filter(d => String(d.id) !== String(id));
       if (updated.length !== list.length) {
         await saveData(KEY_LIST_OLD, { diagnoses: updated });
+        oldRemoved = true;
       }
     }
 
-    return NextResponse.json({ ok: true, deleted: id });
+    return NextResponse.json({ ok: true, deleted: id, deletedCount, oldRemoved });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

@@ -35,14 +35,14 @@ export async function saveData(id: string, payload: any) {
   return true;
 }
 
-// 데이터 삭제
-export async function deleteData(id: string) {
-  const { error } = await getClient()
+// 데이터 삭제 (실제로 지워진 row 수 반환)
+export async function deleteData(id: string): Promise<number> {
+  const { error, count } = await getClient()
     .from('dashboard_data')
-    .delete()
+    .delete({ count: 'exact' })
     .eq('id', id);
   if (error) throw error;
-  return true;
+  return count ?? 0;
 }
 
 // prefix로 시작하는 모든 키 조회 (id, data 함께)

@@ -449,8 +449,13 @@ export default function DiagnosisPage() {
   const handleDeleteAnalysis = async (id: string) => {
     if (!confirm('이 분석을 삭제하시겠습니까?')) return
     try {
-      const res = await fetch(`/api/coupang-diagnoses?id=${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/coupang-diagnoses?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      if ((json?.deletedCount ?? 0) === 0 && !json?.oldRemoved) {
+        alert('삭제 실패: 매칭되는 항목을 찾지 못했습니다 (id=' + id + ')')
+        return
+      }
       const listRes = await fetch('/api/coupang-diagnoses?type=list')
       const listJson = await listRes.json()
       if (listJson?.diagnoses) setSavedAnalyses(listJson.diagnoses)
