@@ -392,19 +392,31 @@ export default function DiagnosisPage() {
   // 보기 모드: 실제 기간 / 월 환산
   const [viewMode, setViewMode] = useState<'actual' | 'monthly'>('actual')
 
-  // 전월 요약 (있으면 KPI에 화살표 표시)
+  // 직전 동일 기간 요약 (있으면 KPI에 화살표 표시)
+  // 규칙:
+  //   - 현재 분석 periodDays = N → 같은 N(±1일) 길이의 저장된 분석 중
+  //     periodEndDate 가 현재 periodStartDate 직전(0~2일 전)인 가장 최근 1개를 찾음
+  //   - 7일 → 직전 7일, 30일 → 직전 30일 비교가 자동으로 매칭됨
   const prevSummary = useMemo(() => {
-    if (!adPeriod || !adPeriod.endDate) return undefined
-    const endDate = new Date(adPeriod.endDate)
-    const curMonthKey = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}`
+    if (!adPeriod || !adPeriod.startDate || !adPeriod.days) return undefined
+    const days = adPeriod.days
+    const curStartMs = new Date(adPeriod.startDate).getTime()
+    if (!Number.isFinite(curStartMs)) return undefined
 
-    // 전월 키 계산
-    const prevDate = new Date(endDate)
-    prevDate.setMonth(prevDate.getMonth() - 1)
-    const prevMonthKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`
-
-    const prev = savedAnalyses.find(a => a.includeInTrend && a.monthKey === prevMonthKey)
-    return prev?.summary
+    type Cand = { summary: any; endMs: number }
+    const candidates: Cand[] = []
+    for (const a of savedAnalyses) {
+      if (!a?.periodEndDate || !a?.periodDays) continue
+      if (Math.abs((a.periodDays || 0) - days) > 1) continue
+      const endMs = new Date(a.periodEndDate).getTime()
+      if (!Number.isFinite(endMs)) continue
+      const gapDays = (curStartMs - endMs) / (1000 * 60 * 60 * 24)
+      // 현재 시작일 직전 0~2일 사이에 끝난 분석
+      if (gapDays < 0 || gapDays > 2) continue
+      if (a.summary) candidates.push({ summary: a.summary, endMs })
+    }
+    candidates.sort((x, y) => y.endMs - x.endMs)
+    return candidates[0]?.summary
   }, [adPeriod, savedAnalyses])
 
   // 저장된 분석 클릭 → 그 분석으로 로드
@@ -1133,7 +1145,7 @@ type ViewMode = 'actual' | 'monthly'
 function SummarySection({ result, viewMode, prevSummary }: {
   result: DiagnosisResult
   viewMode: ViewMode
-  prevSummary?: any  // 전월 요약 (있으면 화살표 표시)
+  prevSummary?: any  // 직전 동일 기간 요약 (있으면 화살표 표시)
 }) {
   const s = result.summary
   const days = result.period.days
@@ -1142,13 +1154,16 @@ function SummarySection({ result, viewMode, prevSummary }: {
   const scale = viewMode === 'monthly' && days > 0 ? 30 / days : 1
   const adj = (n: number) => n * scale
 
-  // 전월 대비 계산
+  // 직전 동일 기간 라벨 ("vs 직전 7일" / "vs 직전 30일" 등)
+  const compareLabel = days > 0 ? `vs 직전 ${days}일` : 'vs 직전 기간'
+
+  // 직전 동일 기간 대비 계산
   const compare = (cur: number, prev: number | undefined): { text: string; up: boolean } | null => {
     if (prev === undefined || prev === null || !isFinite(prev) || prev === 0) return null
     const diff = ((cur - prev) / Math.abs(prev)) * 100
     if (Math.abs(diff) < 0.5) return null
     return {
-      text: `${diff > 0 ? '▲' : '▼'} ${diff > 0 ? '+' : ''}${diff.toFixed(0)}% vs 전월`,
+      text: `${diff > 0 ? '▲' : '▼'} ${diff > 0 ? '+' : ''}${diff.toFixed(0)}% ${compareLabel}`,
       up: diff > 0,
     }
   }
