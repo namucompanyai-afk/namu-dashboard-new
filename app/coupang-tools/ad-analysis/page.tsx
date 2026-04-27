@@ -88,7 +88,7 @@ export default function AdAnalysisPage() {
           background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8,
           padding: 24, fontSize: 14, color: '#92400E', textAlign: 'center',
         }}>
-          광고 캠페인 엑셀이 로드되지 않았습니다. 「데이터 관리」 페이지에서 광고 엑셀을 업로드해주세요.
+          광고 캠페인 엑셀이 로드되지 않았습니다. 「수익 진단」 페이지에서 광고 엑셀을 업로드해주세요.
         </div>
       </div>
     )
