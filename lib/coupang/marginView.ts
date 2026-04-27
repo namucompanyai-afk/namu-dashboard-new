@@ -186,27 +186,6 @@ export function buildMasterView(master: CostMaster | null): MasterView {
   // 별칭 그룹은 평균 마진율 내림차순으로
   groups.sort((a, b) => b.avgMarginRate - a.avgMarginRate)
 
-  // 진단 로그 (검증 후 제거 예정) — 보배/저속노화/율무 그룹의 exposureIds 와 옵션 매핑 확인
-  if (typeof window !== 'undefined') {
-    for (const g of groups) {
-      if (/(보배|저속노화|율무)/.test(g.alias)) {
-        // eslint-disable-next-line no-console
-        console.log(
-          `[marginView] alias="${g.alias}" exposureIds=${JSON.stringify(g.exposureIds)} options=${g.options.length}`,
-          g.options.map((o) => ({
-            exp: o.exposureId,
-            optId: o.optionId,
-            ch: o.channel,
-            kg: o.kgPerBag,
-            bag: o.bagCount,
-            price: o.actualPrice,
-            name: o.optionName,
-          })),
-        )
-      }
-    }
-  }
-
   const totalOptions = groups.reduce((s, g) => s + g.optionCount, 0)
 
   return {
