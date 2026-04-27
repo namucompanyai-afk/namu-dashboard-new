@@ -48,14 +48,15 @@ function useSort<T extends Record<string, any>>(rows: T[], defaultKey: keyof T, 
     arr.sort((a, b) => {
       const av = a[key]
       const bv = b[key]
-      const an = typeof av === 'number' ? av : (av == null ? -Infinity : NaN)
-      const bn = typeof bv === 'number' ? bv : (bv == null ? -Infinity : NaN)
-      let cmp: number
-      if (Number.isFinite(an) && Number.isFinite(bn)) {
-        cmp = an - bn
-      } else {
-        cmp = String(av ?? '').localeCompare(String(bv ?? ''))
-      }
+      const isNumA = typeof av === 'number' && Number.isFinite(av)
+      const isNumB = typeof bv === 'number' && Number.isFinite(bv)
+      // null/undefined/NaN 은 정렬 방향과 무관하게 항상 맨 뒤
+      if (!isNumA && !isNumB && av == null && bv == null) return 0
+      if (isNumA && !isNumB) return -1
+      if (!isNumA && isNumB) return 1
+      let cmp = 0
+      if (isNumA && isNumB) cmp = (av as number) - (bv as number)
+      else cmp = String(av ?? '').localeCompare(String(bv ?? ''))
       return dir === 'asc' ? cmp : -cmp
     })
     return arr
