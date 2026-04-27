@@ -73,6 +73,7 @@ export default function AdAnalysisPage() {
   const rawAdCampaign = useMarginStore((s) => s.rawAdCampaign)
   const adPeriod = useMarginStore((s) => s.adPeriod)
   const [period, setPeriod] = useState<Period>(30)
+  const [openCampId, setOpenCampId] = useState<string | null>(null)
 
   const view = useMemo(
     () => buildAdAnalysisView(rawAdCampaign, marginMaster as any),
@@ -93,6 +94,8 @@ export default function AdAnalysisPage() {
     )
   }
 
+  const openCampaign = openCampId ? view.campaigns.find((c) => c.campaignId === openCampId) || null : null
+
   return (
     <div style={{
       fontFamily: 'Pretendard, -apple-system, sans-serif',
@@ -102,7 +105,17 @@ export default function AdAnalysisPage() {
       <Header period={period} onPeriod={setPeriod} adPeriodLabel={adPeriod ? `${adPeriod.startDate} ~ ${adPeriod.endDate} (${adPeriod.days}일)` : undefined} />
       <KpiSection view={view} />
       <HintBanner />
-      <CampaignSection view={view} master={marginMaster as any} />
+      <CampaignSection
+        view={view}
+        master={marginMaster as any}
+        openCampId={openCampId}
+        onOpen={(id) => setOpenCampId(id === openCampId ? null : id)}
+      />
+      {openCampaign && (
+        openCampaign.type === 'manual'
+          ? <ManualSection campaign={openCampaign} master={marginMaster as any} onClose={() => setOpenCampId(null)} />
+          : <AiSection campaign={openCampaign} master={marginMaster as any} onClose={() => setOpenCampId(null)} />
+      )}
     </div>
   )
 }
@@ -177,9 +190,13 @@ function HintBanner() {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
+function CampaignSection({ view, master, openCampId, onOpen }: {
+  view: ReturnType<typeof buildAdAnalysisView>
+  master: any
+  openCampId: string | null
+  onOpen: (id: string) => void
+}) {
   const { sorted, key, dir, toggle } = useSort(view.campaigns, 'adCostVat' as keyof CampaignDiag, 'desc')
-  const [openCampId, setOpenCampId] = useState<string | null>(null)
 
   const TH = ({ label, k, num, minWidth, sticky }: { label: React.ReactNode; k: keyof CampaignDiag; num?: boolean; minWidth?: number; sticky?: boolean }) => (
     <th
@@ -195,8 +212,6 @@ function CampaignSection({ view, master }: { view: ReturnType<typeof buildAdAnal
       {label}
     </th>
   )
-
-  const openCampaign = sorted.find((c) => c.campaignId === openCampId) || null
 
   return (
     <div className="aa-section">
@@ -229,7 +244,7 @@ function CampaignSection({ view, master }: { view: ReturnType<typeof buildAdAnal
                   key={c.campaignId}
                   c={c}
                   isOpen={isOpen}
-                  onToggle={() => setOpenCampId(isOpen ? null : c.campaignId)}
+                  onToggle={() => onOpen(c.campaignId)}
                   master={master}
                 />
               )
@@ -237,11 +252,6 @@ function CampaignSection({ view, master }: { view: ReturnType<typeof buildAdAnal
           </tbody>
         </table>
       </div>
-      {openCampaign && (
-        openCampaign.type === 'manual'
-          ? <ManualSection campaign={openCampaign} master={master} onClose={() => setOpenCampId(null)} />
-          : <AiSection campaign={openCampaign} master={master} onClose={() => setOpenCampId(null)} />
-      )}
     </div>
   )
 }
@@ -312,7 +322,7 @@ function AiSection({ campaign, master, onClose }: { campaign: CampaignDiag; mast
     : '—'
 
   return (
-    <div className="aa-expand" style={{ borderColor: '#FF6B35' }}>
+    <div className="aa-section" style={{ border: '2px solid #FF6B35' }}>
       <div className="aa-section-header" style={{ background: '#FFF7ED' }}>
         <div>
           <div className="aa-section-title">▼ {campaign.campaignName} · 키워드 분석</div>
@@ -394,25 +404,23 @@ function KeywordTable({ rows, campaignBep, checked, onToggle, nonSearchCount: _n
   const belowBepCount = sorted.filter((r) => campaignBep != null && r.roasPct != null && r.roasPct < campaignBep).length
   const totalCost = sorted.reduce((s, r) => s + r.adCostVat, 0)
 
-  // 선택된 키워드 분류 후 클립보드 복사
-  function copyByAction(action: 'exclude' | 'move') {
-    const list = sorted.filter((r) => checked.has(r.keyword) && r.action === action).map((r) => r.keyword)
+  // 체크된 모든 키워드를 선택한 카테고리(제외/수동 이동) 텍스트로 복사 — 추천 액션 무관, 사용자 의사 우선
+  function copyChecked(target: 'exclude' | 'move') {
+    const list = sorted.filter((r) => checked.has(r.keyword)).map((r) => r.keyword)
     if (list.length === 0) {
-      alert(`${action === 'exclude' ? '제외' : '수동 이동'} 후보로 선택된 키워드가 없습니다.`)
+      alert('선택된 키워드가 없습니다.')
       return
     }
     const text = list.join('\n')
+    const label = target === 'exclude' ? '제외' : '수동 이동'
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => alert(`✓ ${list.length}개 키워드 복사 완료`)).catch(() => {
+      navigator.clipboard.writeText(text).then(() => alert(`✓ ${list.length}개 키워드 복사 완료 (${label})`)).catch(() => {
         prompt('복사 실패 — 직접 복사해주세요:', text)
       })
     } else {
-      prompt('복사:', text)
+      prompt(`${label} 키워드 복사:`, text)
     }
   }
-
-  const excludeCheckedCount = sorted.filter((r) => checked.has(r.keyword) && r.action === 'exclude').length
-  const moveCheckedCount = sorted.filter((r) => checked.has(r.keyword) && r.action === 'move').length
 
   return (
     <div className="aa-sub-section">
@@ -450,10 +458,10 @@ function KeywordTable({ rows, campaignBep, checked, onToggle, nonSearchCount: _n
         </table>
       </div>
       <div className="aa-bulk-action">
-        <div><strong>{checked.size}개</strong> 선택 (제외 {excludeCheckedCount} · 수동 이동 {moveCheckedCount})</div>
+        <div><strong>{checked.size}개</strong> 선택됨 — 어느 카테고리로 복사할지 선택하세요 (추천 액션은 가이드일 뿐)</div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="aa-btn btn-sm btn-bad" onClick={() => copyByAction('exclude')}>🚫 제외 키워드 복사 ({excludeCheckedCount})</button>
-          <button className="aa-btn btn-sm btn-info" onClick={() => copyByAction('move')}>➡️ 수동 이동 키워드 복사 ({moveCheckedCount})</button>
+          <button className="aa-btn btn-sm btn-bad" onClick={() => copyChecked('exclude')}>🚫 제외 키워드 복사 ({checked.size})</button>
+          <button className="aa-btn btn-sm btn-info" onClick={() => copyChecked('move')}>➡️ 수동 이동 키워드 복사 ({checked.size})</button>
         </div>
       </div>
       <ActionLegend />
@@ -546,7 +554,7 @@ function ManualSection({ campaign, master, onClose }: { campaign: CampaignDiag; 
   }
 
   return (
-    <div className="aa-expand" style={{ borderColor: '#A855F7', opacity: 0.97 }}>
+    <div className="aa-section" style={{ border: '2px solid #A855F7' }}>
       <div className="aa-section-header" style={{ background: '#FAF5FF' }}>
         <div>
           <div className="aa-section-title">▼ {campaign.campaignName} · 입찰가 점검</div>
@@ -721,7 +729,6 @@ function Style() {
       .aa-stars.high { color: #F59E0B; }
       .aa-stars.mid { color: #FCD34D; }
       .aa-stars.low { color: #94A3B8; }
-      .aa-expand { border: 2px solid; border-radius: 8px; margin: -20px 0 20px 0; background: #FFFFFF; }
       .aa-kpi-value.text-bad { color: #EF4444; }
     `}</style>
   )
