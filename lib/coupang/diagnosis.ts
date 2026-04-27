@@ -559,11 +559,18 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   products.sort((a, b) => b.totalNetProfit - a.totalNetProfit)
 
   // 6) summary
+  // ── KPI 광고비/광고매출/캠페인매출은 "쿠팡 청구 기준" raw 합산으로 정의 (광고 분석 페이지와 동일).
+  //    옵션 매칭 안 된 row 도 포함해야 실제 청구액과 일치 → 순이익이 실제보다 부풀려지는 문제 해소.
+  //    옵션별/별칭별 g.adCost 등은 매칭 필수 그대로 유지하므로 옵션 카드 광고비는 변경 없음.
   const totalRevenue = sum(products, 'revenue')
-  const totalAdRevenue = sum(products, 'adRevenue')
+  const totalAdCost = adRows.reduce((s, r) => s + (r.adCost || 0), 0) * AD_VAT_MULTIPLIER
+  const totalAdRevenue = adRows.reduce((s, r) => s + (r.revenue14d || 0), 0)
+  // 광고 분석 페이지와 동일하게 totalCampaignRevenue 도 raw 합산 (= 광고 row 의 14일 전환매출 합).
+  // 진단 옵션별 g.campaignRevenue 와 같은 정의이지만, 마진 매칭 필터 거치지 않은 raw 합산이라
+  // 둘이 정확히 일치 (현재 진단 옵션별은 if(adOptionId) 가드 통과한 row 만 포함하므로
+  // adOptionId 빈 row 광고비를 가진 분량 만큼 살짝 적게 잡힘. 새 정의는 그것까지 포함).
+  const totalCampaignRevenue = totalAdRevenue
   const totalOrganicRevenue = totalRevenue - totalAdRevenue
-  const totalCampaignRevenue = sum(products, 'campaignRevenue')
-  const totalAdCost = sum(products, 'adCost')
   const totalMargin = sum(products, 'totalMargin')
   const totalNetProfit = totalMargin - totalAdCost
   const marginRateOverall = totalRevenue > 0 ? totalMargin / totalRevenue : 0

@@ -1220,6 +1220,13 @@ function SummarySection({ result, viewMode, prevSummary }: {
         <KpiCard
           label="광고비 (VAT)"
           value={formatMan(adj(s.totalAdCost))}
+          sub={(() => {
+            const u = (result as any).unmatched?.adCost
+            if (u && Number.isFinite(u) && u > 0) {
+              return `쿠팡 청구 기준 · 매칭 누락 ${formatMan(adj(u))} 포함`
+            }
+            return '쿠팡 청구 기준'
+          })()}
           accent="orange"
           compare={cmpAdCost}
           // 광고비 ↓ 좋음
