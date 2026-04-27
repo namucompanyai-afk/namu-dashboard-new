@@ -161,14 +161,16 @@ export interface AdAnalysisView {
 }
 
 /** 마진 마스터 marginRows → optionId 별 BEP(%) 맵.
- * bepRoas 단위는 % (433 같은 수치). null 이거나 <= 0 이면 제외. */
+ * 마진 마스터 bepRoas 는 배율 (예: 3.06). 페이지 전반에서 ROAS(%) 와 같은 단위로 다루기 위해
+ * 여기서 ×100 해서 % 단위 (예: 306) 로 저장. 후속 함수 (weightedBep / recommendedBid /
+ * classifyKeywordAction / buildBepCpcForCampaign) 는 모두 % 단위 가정. */
 export function buildBepMap(master: CostMaster | null): Map<string, number> {
   const m = new Map<string, number>()
   if (!master) return m
   for (const r of master.marginRows) {
     if (!r.optionId) continue
     if (r.bepRoas == null || !Number.isFinite(r.bepRoas) || r.bepRoas <= 0) continue
-    m.set(String(r.optionId).trim(), r.bepRoas)
+    m.set(String(r.optionId).trim(), r.bepRoas * 100)
   }
   return m
 }
