@@ -143,8 +143,33 @@ export interface OptionDiagnosis {
   optionName: string
   /** 옵션명에서 파싱한 봉투 개수 (정렬용) */
   bagCount: number
-  /** 채널 — marginMaster 의 최종채널 ('growth'|'wing'|기타). 빈 문자열이면 미상. */
+  /** 채널 — marginMaster 의 최종채널 ('윙'/'그로스'). 빈 문자열이면 미상. */
   channel: string
+
+  // ── 마진 마스터 v2 직접 노출 ──
+  /** 가격대 라벨 ("9,900" 등) — 마진계산 K열 */
+  priceBand?: string
+  /** 규격 ("극소"/"소"/"중"/"대형1"/"") — 마진계산 O열 */
+  size?: string
+  /** 1봉당 kg — 마진계산 G열 */
+  kgPerBag?: number
+  /** 실판매가 — 마진계산 I열 */
+  actualPrice?: number
+  /** 옵션별 비용 분해 (마진계산 P~X 자동 수식 cached) */
+  costBreakdown?: {
+    costPrice: number
+    bagFee: number
+    boxFee: number
+    shipFee: number
+    warehouseFee: number
+    grossShipFee: number
+    inoutFee: number
+    coupangFee: number
+    feeRate: number
+    totalCost: number
+  }
+  /** 옵션별 BEP ROAS (마진계산 AB열) */
+  bepRoas?: number | null
 
   revenue: number
   sold: number
@@ -423,6 +448,8 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
 
     // 옵션별 진단 변환 (드릴다운용)
     const optionDetails: OptionDiagnosis[] = Array.from(g.optionMap.values()).map((o: any) => {
+      // 마진 마스터 v2 — 옵션별 비용 분해
+      const mr = getMarginRow(o.optionId)
       const optOrgRevenue = o.revenue - o.adRevenue
       const optOrgSold = o.sold - o.adSold
       const optAvgMargin = o.sold > 0 ? o.totalMargin / o.sold : 0
@@ -458,6 +485,23 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
         optionName: o.optionName,
         bagCount,
         channel: o.channel || '',
+        priceBand: mr?.priceBand,
+        size: mr?.size,
+        kgPerBag: mr?.kgPerBag,
+        actualPrice: mr?.actualPrice,
+        bepRoas: mr?.bepRoas ?? null,
+        costBreakdown: mr ? {
+          costPrice: mr.costPrice,
+          bagFee: mr.bagFee,
+          boxFee: mr.boxFee,
+          shipFee: mr.shipFee,
+          warehouseFee: mr.warehouseFee,
+          grossShipFee: mr.grossShipFee,
+          inoutFee: mr.inoutFee,
+          coupangFee: mr.coupangFee,
+          feeRate: mr.feeRate,
+          totalCost: mr.totalCost,
+        } : undefined,
         revenue: o.revenue,
         sold: o.sold,
         adRevenue: o.adRevenue,

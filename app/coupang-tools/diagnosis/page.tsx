@@ -21,6 +21,7 @@ import { diagnose } from '@/lib/coupang/diagnosis'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
+import MasterDiagnosisView from '@/components/coupang/MasterDiagnosisView'
 
 // ─────────────────────────────────────────────────────────────
 // 색상/스타일
@@ -719,6 +720,9 @@ export default function DiagnosisPage() {
             </a>
           </div>
         )}
+
+        {/* 마진 마스터 단독 view (광고/SELLER 없이 옵션별 마진 분석) */}
+        {marginMaster && <MasterDiagnosisView />}
 
         {/* 업로드 영역 */}
         <UploadSection
