@@ -112,10 +112,12 @@ export function WarningBanner() {
       text: `정산 엑셀에만 있는 옵션 ${warnings.settlementOrphans.length}개. 현재 상품 엑셀에 없음.`,
     })
   }
-  if (warnings.costUnmatched.length > 0) {
+  // costUnmatched warning 은 store 에서 더 이상 추적하지 않음 (de6c95d 에서 슬롯 제거).
+  // 여기 다시 살리려면 store warnings 와 recomputeOptions 까지 함께 손봐야 하므로 표시 생략.
+  if ((warnings as any).costUnmatched?.length > 0) {
     items.push({
       kind: 'warn',
-      text: `원가 엑셀에 있는 옵션 ${warnings.costUnmatched.length}개가 현재 쿠팡 옵션 목록에 없습니다. 옵션ID 오타 또는 단종 품목일 수 있습니다.`,
+      text: `원가 엑셀에 있는 옵션 ${(warnings as any).costUnmatched.length}개가 현재 쿠팡 옵션 목록에 없습니다.`,
     })
   }
 
