@@ -81,7 +81,9 @@ export function buildMasterView(master: CostMaster | null): MasterView {
 
   for (const row of master.marginRows) {
     const alias = aliasFromMarginRow(row, costBookByExp)
-    const key = masterOptionKey(row)
+    const exposureId = String(row.exposureId || '').trim()
+    const optionId = String(row.optionId || '').trim()
+    const key = `${exposureId || '_'}|${optionId}`
     if (seenKeys.has(key)) continue
     seenKeys.add(key)
 
@@ -100,8 +102,8 @@ export function buildMasterView(master: CostMaster | null): MasterView {
     }
     const g = byAlias.get(alias)!
 
-    if (row.exposureId && !g.exposureIds.includes(row.exposureId)) {
-      g.exposureIds.push(row.exposureId)
+    if (exposureId && !g.exposureIds.includes(exposureId)) {
+      g.exposureIds.push(exposureId)
     }
     if (row.channel && !g.channels.includes(row.channel)) {
       g.channels.push(row.channel)
@@ -112,9 +114,9 @@ export function buildMasterView(master: CostMaster | null): MasterView {
     else cntOther++
 
     const opt: MasterOptionView = {
-      optionId: row.optionId,
+      optionId,
       optionName: row.optionName || `${row.kgPerBag}kg ${row.bagCount}개`,
-      exposureId: row.exposureId,
+      exposureId,
       alias,
       channel: row.channel || '',
       size: row.size || '',
@@ -149,7 +151,12 @@ export function buildMasterView(master: CostMaster | null): MasterView {
   const groups: MasterAliasGroup[] = []
   for (const g of byAlias.values()) {
     // 다중 노출ID 그룹은 옵션명 끝에 [노출ID 끝4자리] 추가해 시각적으로 구분
-    if (g.exposureIds.length > 1) {
+    // (그룹 exposureIds 가 어떻게 채워지든 안전하게 — 옵션 자체에 exposureId 가 있으면 멀티 여부 재계산)
+    const distinctExpInGroup = new Set<string>()
+    for (const opt of g.options) {
+      if (opt.exposureId) distinctExpInGroup.add(opt.exposureId)
+    }
+    if (distinctExpInGroup.size > 1) {
       for (const opt of g.options) {
         if (opt.exposureId) {
           const suffix = opt.exposureId.slice(-4)
@@ -178,6 +185,27 @@ export function buildMasterView(master: CostMaster | null): MasterView {
 
   // 별칭 그룹은 평균 마진율 내림차순으로
   groups.sort((a, b) => b.avgMarginRate - a.avgMarginRate)
+
+  // 진단 로그 (검증 후 제거 예정) — 보배/저속노화/율무 그룹의 exposureIds 와 옵션 매핑 확인
+  if (typeof window !== 'undefined') {
+    for (const g of groups) {
+      if (/(보배|저속노화|율무)/.test(g.alias)) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[marginView] alias="${g.alias}" exposureIds=${JSON.stringify(g.exposureIds)} options=${g.options.length}`,
+          g.options.map((o) => ({
+            exp: o.exposureId,
+            optId: o.optionId,
+            ch: o.channel,
+            kg: o.kgPerBag,
+            bag: o.bagCount,
+            price: o.actualPrice,
+            name: o.optionName,
+          })),
+        )
+      }
+    }
+  }
 
   const totalOptions = groups.reduce((s, g) => s + g.optionCount, 0)
 
