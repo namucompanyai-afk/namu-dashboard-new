@@ -889,6 +889,8 @@ export default function DiagnosisPage() {
               analyses={savedAnalyses}
               onPointClick={handleLoadAnalysis}
               selectedAlias={selectedAlias}
+              liveResult={displayResult || diagnosisResult}
+              liveAdPeriod={adPeriod}
             />
 
             {/* 기간 검증 배너 */}
@@ -1251,13 +1253,44 @@ function SummarySection({ result, viewMode, prevSummary }: {
 // 월별 추이 그래프
 // ─────────────────────────────────────────────────────────────
 
-function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
+function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, liveAdPeriod }: {
   analyses: any[]
   onPointClick?: (a: any) => void
   selectedAlias?: string
+  /** 현재 진단 결과 — 그래프 마지막 점이 같은 기간이면 frozen 대신 이걸로 사용 */
+  liveResult?: any
+  /** 현재 분석 기간 — 매칭 키 (weekKey/monthKey) 산출용 */
+  liveAdPeriod?: { startDate: string; endDate: string; days: number } | null
 }) {
   const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly')
   const isFiltered = selectedAlias && selectedAlias !== '__ALL__'
+
+  // 현재 진단 기간의 weekKey / monthKey 계산 (saved analysis 와 같은 규칙)
+  const liveWeekKey = liveAdPeriod?.startDate || null
+  const liveMonthKey = (() => {
+    if (!liveAdPeriod?.endDate) return null
+    const d = new Date(liveAdPeriod.endDate)
+    if (!Number.isFinite(d.getTime())) return null
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  })()
+
+  // 현재 진단 결과를 saved-analysis 와 같은 형태의 summary 로 변환
+  const liveSummary = (() => {
+    if (!liveResult?.summary) return null
+    if (!isFiltered) return liveResult.summary
+    const found = (liveResult.products || []).find((p: any) => p.alias === selectedAlias)
+    if (!found) return null
+    return {
+      totalRevenue: found.revenue || 0,
+      totalAdRevenue: found.adRevenue || 0,
+      totalCampaignRevenue: found.campaignRevenue || 0,
+      totalAdCost: found.adCost || 0,
+      totalNetProfit: found.totalNetProfit || 0,
+      adRoasAttr: found.adRoasAttr || 0,
+      adRoasCamp: found.adRoasCamp || 0,
+      adDependency: found.adDependency || 0,
+    }
+  })()
 
   // 분석 1개에서 선택된 상품 데이터만 추출하여 summary 생성
   const extractSummary = (a: any) => {
@@ -1286,7 +1319,9 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
       .filter(a => a.includeInTrend && a.trendType === 'weekly' && a.weekKey)
       .sort((a, b) => (a.weekKey || '').localeCompare(b.weekKey || ''))
       .map(a => {
-        const s = extractSummary(a)
+        // 현재 분석 기간과 같은 weekKey 면 LIVE summary 로 swap (KPI 와 일치 보장)
+        const isLive = !!liveSummary && liveWeekKey != null && a.weekKey === liveWeekKey
+        const s = isLive ? liveSummary : extractSummary(a)
         if (!s) return null
         const days = a.periodDays || 7
         const scale = 7 / Math.max(days, 1)  // 주 단위로 정규화
@@ -1299,10 +1334,11 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
           ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
           광고의존도: Math.round((s.adDependency || 0) * 100),
           _analysis: a,  // 클릭 시 사용
+          _isLive: isLive,
         }
       })
       .filter(Boolean) as any[]
-  }, [analyses, selectedAlias])
+  }, [analyses, selectedAlias, liveSummary, liveWeekKey])
 
   // 월별 데이터
   const monthlyData = useMemo(() => {
@@ -1310,7 +1346,8 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
       .filter(a => a.includeInTrend && (a.trendType === 'monthly' || (!a.trendType && a.monthKey)) && a.monthKey)
       .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
       .map(a => {
-        const s = extractSummary(a)
+        const isLive = !!liveSummary && liveMonthKey != null && a.monthKey === liveMonthKey
+        const s = isLive ? liveSummary : extractSummary(a)
         if (!s) return null
         const days = a.periodDays || 30
         const scale = 30 / Math.max(days, 1)
@@ -1323,13 +1360,17 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
           ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
           광고의존도: Math.round((s.adDependency || 0) * 100),
           _analysis: a,
+          _isLive: isLive,
         }
       })
       .filter(Boolean) as any[]
-  }, [analyses, selectedAlias])
+  }, [analyses, selectedAlias, liveSummary, liveMonthKey])
 
   const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
   const periodLabel = chartMode === 'weekly' ? '주' : '월'
+  // frozen(LIVE 가 아닌) 점이 하나라도 있으면 사용자에게 재계산 안내
+  const frozenCount = trendData.filter((d: any) => !d._isLive).length
+  const hasLivePoint = trendData.some((d: any) => d._isLive)
 
   // 토글 (UI는 항상 보임)
   const ToggleHeader = () => (
@@ -1379,7 +1420,17 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias }: {
         <div className="text-xs text-gray-500 mb-2">
           매출 / 광고비 / 순이익 ({chartMode === 'weekly' ? '주' : '월'} 환산)
           {onPointClick && <span className="ml-2 text-orange-600">· 점 클릭 시 해당 시점 데이터로 진단</span>}
+          {hasLivePoint && (
+            <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 border border-emerald-200">
+              ● LIVE 마지막 점은 현재 진단과 동일
+            </span>
+          )}
         </div>
+        {frozenCount > 0 && (
+          <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+            ⚠ 마지막 점 외 {frozenCount}개 {periodLabel}차 데이터는 저장 시점 마진 마스터로 계산된 값입니다. 현재 마스터와 다를 수 있어요 — "전체 재계산" 버튼을 누르면 현재 기준으로 동기화됩니다.
+          </div>
+        )}
         <ResponsiveContainer width="100%" height={250}>
           <LineChart
             data={trendData}
