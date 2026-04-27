@@ -1,24 +1,36 @@
 import * as XLSX from 'xlsx'
 
 /**
- * 마진분석.xlsx 마스터 파서
+ * 마진마스터.xlsx 파서 (v2 — 2026-04 신규 구조)
  *
- * 엑셀 구조 (3시트):
- *   1) 원가표: 노출ID별 원가 구성요소 (원곡가 · 작업비 · 혼합비 · 제조사 · 과세 · 봉투비여부)
- *   2) 비용테이블: 공통 상수 (봉투비·수수료율) + 그로스 1kg/2kg 배송비 테이블 + 윙 박스·택배 + 창고입고비
- *   3) 마진계산: 옵션 레벨 데이터 (옵션ID · 실판매가 · 최종 순이익 계산 결과)
+ * 새 엑셀 구조 (4시트, "비용테이블_옛"은 무시):
+ *   1) 원가표 (헤더 R3, 데이터 R4~)
+ *      A 노출ID  B 쿠팡원본명  C 별칭  D 채널  E 옵션수  F 옵션샘플
+ *      G 기준용량(텍스트)  H 원곡가  I 윙작업비  J 그로스작업비  K 혼합비
+ *      L 제조사  M 과세구분  N 봉투비여부  O 메모
+ *      P 윙원가(자동)  Q 그로스원가(자동)  R 수수료율  S 기준kg(자동)
  *
- * 이 파서는 3시트 모두 읽어서 `CostMaster` 하나의 객체로 리턴.
- * 시스템은 이 객체만 있으면 마진·진단 계산 가능 (하드코딩 불필요).
+ *   2) 비용테이블
+ *      B2 = 봉투비 150
+ *      A8:D14 = 가격대 × (0.8kg/1kg/2kg) 봉당 입출고비
+ *      A23:E30 = 가격대 × (극소/소/중/대형1) 그로스 배송비
+ *      A35:E37 = 윙 박스/택배 (소/중/대 → minKg/maxKg/박스/택배)
+ *      A41:E44 = 창고 입고비 (제조사|단위 → 봉당 합계)
  *
- * ──────────────────────────────────────────────────────────────
- * 중요: 실판매가 우선순위
- *   마진계산 시트의 I열(실판매가)가 이 시스템의 "정식 판매가".
- *   price_inventory의 판매가격은 참고용 (fallback용).
+ *   3) 마진계산 (헤더 R4, 데이터 R5~)
+ *      A 노출ID  B 옵션ID  C 별칭  D 옵션명  E 총kg
+ *      F 봉투수  G 1봉kg  H 정가(VAT)  I 실판매가  J 개당가(VAT)
+ *      K 가격대(텍스트, "9,900" 등)  L 자동채널  M 수동지정  N 최종채널
+ *      O 규격  P 원가  Q 봉투  R 박스  S 택배  T 창고입고비
+ *      U 그로스배송  V 입출고  W 수수료율  X 수수료
+ *      Y 총비용  Z 순이익  AA 마진율  AB BEP ROAS
+ *
+ * 자동 수식 셀(P~AB): SheetJS 캐시값(.v) 우선, 비어있으면 NaN/null.
+ * 가격대 라벨(K)은 "9,900"/"10,900"/.../"19,900" 텍스트 그대로 사용.
+ * 노출ID/옵션ID 모두 string 으로 통일.
  */
 
 function normHeader(s: string): string {
-  // 공백·괄호·슬래시·특수문자 제거, 소문자화
   return s.replace(/[\s()\[\]/·\n\t]+/g, '').toLowerCase()
 }
 
@@ -35,158 +47,122 @@ function toNum(v: unknown): number {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 원가표 시트 타입
+// 타입
 // ─────────────────────────────────────────────────────────────
 
 export interface CostBookRow {
-  /** 노출상품ID */
   exposureId: string
-  /** 쿠팡 원본 상품명 */
   productName: string
-  /** 내 별칭 (대시보드 표시용) */
   alias: string
-  /** 채널 ("단일"/"그로스"/"윙"/"둘다"/"혼합") */
-  channel: string
-  /** 옵션수 (참고용) */
+  channel: string  // "단일"/"둘다"/"그로스"/"윙"
   optionCount: number
-  /** 옵션 샘플 (참고용) */
   optionSample: string
-  /** 기준 용량 ("1kg", "500g", "100g" 등) */
-  baseVolume: string
-  /** 원곡가 (기준용량 1봉당, VAT 포함) */
+  baseVolume: string  // "1kg"/"800g"/"100g"/"300ml" 등
+  /** 원곡가 (1봉당, VAT 포함) */
   rawCost: number
-  /** 윙 작업비 (1봉당) */
+  /** 윙 작업비 */
   wingWorkFee: number
-  /** 그로스 작업비 (1봉당) */
+  /** 그로스 작업비 */
   growthWorkFee: number
-  /** 혼합비 (1봉당) */
+  /** 혼합비 */
   mixFee: number
-  /** 제조사 ("곰표"/"진도팜"/"녹색원"/"시목원" 등) */
   manufacturer: string
-  /** 과세구분 ("과세"/"면세") */
   taxType: '과세' | '면세'
-  /** 봉투비 여부 ("Y"/"N") */
   needsBag: 'Y' | 'N'
   memo?: string
+  /** 자동: 윙 원가 = H+I+K */
+  wingCost: number
+  /** 자동: 그로스 원가 = H+J+K */
+  growthCost: number
+  /** 옵션별 수수료율 (수기, 0.0638 등) */
+  feeRate: number
+  /** 자동: 기준 kg 숫자 */
+  baseKg: number
 }
-
-const COST_BOOK_ALIASES = {
-  exposureId:     ['노출id', '노출상품id'],
-  productName:    ['쿠팡원본상품명', '상품명'],
-  alias:          ['내별칭', '별칭'],
-  channel:        ['채널'],
-  optionCount:    ['옵션수'],
-  optionSample:   ['옵션샘플'],
-  baseVolume:     ['기준용량'],
-  rawCost:        ['원곡가', '원재료가'],
-  wingWorkFee:    ['윙작업비'],
-  growthWorkFee:  ['그로스작업비'],
-  mixFee:         ['혼합비'],
-  manufacturer:   ['제조사'],
-  taxType:        ['과세구분'],
-  needsBag:       ['봉투비여부'],
-  memo:           ['메모'],
-} as const
-
-type CostBookKey = keyof typeof COST_BOOK_ALIASES
-
-// ─────────────────────────────────────────────────────────────
-// 마진계산 시트 타입
-// ─────────────────────────────────────────────────────────────
 
 export interface MarginCalcRow {
-  /** 노출상품ID */
   exposureId: string
-  /** 옵션ID */
   optionId: string
-  /** 별칭 (VLOOKUP 결과) */
   alias: string
-  /** 옵션명 (예: "1개 1kg") */
   optionName: string
-  /** 총 kg */
   totalKg: number
-  /** 봉투수 */
-  bagCount: number
-  /** 1봉당 kg */
-  kgPerBag: number
-  /** 정가 (VAT) — 기억용, 계산에 미사용 */
-  listPrice: number
-  /** 실판매가 — 시스템의 공식 판매가 */
-  actualPrice: number
-  /** 엑셀에서 계산된 순이익 (검증용) */
-  netProfit: number | null
-  /** 엑셀에서 계산된 마진율 (검증용) */
-  marginRate: number | null
-  /** 엑셀에서 계산된 BEP ROAS (검증용) */
-  bepRoas: number | null
-  /** 최종 채널 */
+  bagCount: number   // F 봉수
+  kgPerBag: number   // G 1봉kg
+  listPrice: number  // H 정가(VAT)
+  actualPrice: number  // I 실판매가
+  perUnitPrice: number  // J 개당가
+  /** K 가격대 라벨 ("9,900" 등) */
+  priceBand: string
+  /** L 자동채널 */
+  autoChannel: string
+  /** M 수동지정 */
+  manualChannel: string
+  /** N 최종채널 ("윙"/"그로스") */
   channel: string
+  /** O 규격 ("극소"/"소"/"중"/"대형1"/"") */
+  size: string
+  // 비용 분해 (P~X) — 모두 자동 수식 결과
+  costPrice: number       // P 원가
+  bagFee: number          // Q 봉투
+  boxFee: number          // R 박스
+  shipFee: number         // S 택배
+  warehouseFee: number    // T 창고입고비
+  grossShipFee: number    // U 그로스배송
+  inoutFee: number        // V 입출고
+  feeRate: number         // W 수수료율
+  coupangFee: number      // X 수수료
+  // 결과 (Y~AB)
+  totalCost: number       // Y 총비용
+  netProfit: number | null  // Z 순이익
+  marginRate: number | null  // AA 마진율
+  bepRoas: number | null     // AB BEP ROAS
 }
 
-const MARGIN_ROW_ALIASES = {
-  exposureId: ['노출id'],
-  optionId: ['옵션id'],
-  alias: ['별칭'],
-  optionName: ['옵션명'],
-  totalKg: ['총kg'],
-  bagCount: ['봉투수'],
-  kgPerBag: ['1봉kg'],
-  listPrice: ['정가vat', '정가', '판매가vat', '판매가'],
-  actualPrice: ['실판매가'],
-  channel: ['최종채널'],
-  netProfit: ['순이익vat', '순이익'],
-  marginRate: ['마진율'],
-  bepRoas: ['beproas'],
-} as const
-
-type MarginRowKey = keyof typeof MARGIN_ROW_ALIASES
-
-// ─────────────────────────────────────────────────────────────
-// 비용테이블 시트 타입
-// ─────────────────────────────────────────────────────────────
+/** 윙 박스/택배 분류 */
+export interface WingBracket {
+  minKg: number
+  maxKg: number
+  box: number
+  ship: number
+}
 
 export interface CostTableConstants {
   /** 봉투비 (봉당) */
   bagFee: number
-  /** 기본 수수료율 (0~1) */
+  /** 옵션별 수수료율 없을 때 fallback */
   defaultFeeRate: number
-  /**
-   * 그로스 1kg 입고 기준 가격대별 (배송비, 입출고비)
-   * key: 가격대 ("9900", "10900", ...)
-   */
-  gross1kgTable: Record<string, { ship: number; inout: number }>
-  /** 그로스 2kg 입고 기준 가격대별 (배송비 2kg 단가) */
-  gross2kgShipTable: Record<string, number>
-  /** 윙 박스·택배 (소/중/대) */
+
+  // ── 신규 매트릭스 ──
+  /** 입출고비: priceBandLabel("9,900") → { "0.8": n, "1": n, "2": n } */
+  inoutTable: Record<string, Record<'0.8' | '1' | '2', number>>
+  /** 그로스 배송비: priceBandLabel → { 극소, 소, 중, 대형1 } */
+  grossShipTable: Record<string, Record<'극소' | '소' | '중' | '대형1', number>>
+  /** 윙 박스/택배 분류 */
   wingBoxShipTable: {
-    small: { minKg: number; maxKg: number; box: number; ship: number }
-    mid:   { minKg: number; maxKg: number; box: number; ship: number }
-    large: { minKg: number; maxKg: number; box: number; ship: number }
+    small: WingBracket
+    mid: WingBracket
+    large: WingBracket
   }
-  /** 그로스 창고 입고비 (봉당) — key = "제조사|기준용량" */
+  /** 창고 입고비: '제조사|단위' → 봉당 합계 */
   warehouseFee: Record<string, number>
+
+  // ── 옛 코드(margin.ts) 호환용 derived 필드 ──
+  /** @deprecated 신규 코드는 inoutTable + grossShipTable 사용 */
+  gross1kgTable: Record<string, { ship: number; inout: number }>
+  /** @deprecated */
+  gross2kgShipTable: Record<string, number>
 }
 
-// ─────────────────────────────────────────────────────────────
-// 최종 결과
-// ─────────────────────────────────────────────────────────────
-
 export interface CostMaster {
-  /** 원가표 상품 리스트 */
   costBook: CostBookRow[]
-  /** 옵션 레벨 계산 행 */
   marginRows: MarginCalcRow[]
-  /** 공통 상수 + 비용 테이블 */
   constants: CostTableConstants
 }
 
 export interface MarginMasterParseResult {
   master: CostMaster | null
-  /** 에러 (파싱 실패 시) */
   error?: string
-  /** 경고 (일부 시트 못 읽음) */
   warnings: string[]
-  /** 통계 */
   stats: {
     costBookRows: number
     marginRows: number
@@ -195,16 +171,16 @@ export interface MarginMasterParseResult {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 원가표 시트 파서
+// 헬퍼
 // ─────────────────────────────────────────────────────────────
 
-function findHeaderRow(aoa: unknown[][], requiredKeys: string[]): number {
+function findHeaderRow(aoa: unknown[][], requiredKeys: string[], minHits = 2): number {
   for (let i = 0; i < Math.min(15, aoa.length); i++) {
     const row = aoa[i]
     if (!Array.isArray(row)) continue
     const normed = row.map((c) => normHeader(toStr(c)))
     const hitCount = requiredKeys.filter((k) => normed.includes(k)).length
-    if (hitCount >= 2) return i
+    if (hitCount >= minHits) return i
   }
   return -1
 }
@@ -217,7 +193,6 @@ function resolveColumns<T extends string>(
   const normed = headers.map((h) => normHeader(toStr(h)))
   const cols = {} as Record<T, number>
   const missing: string[] = []
-
   for (const key of Object.keys(aliases) as T[]) {
     const aliasList = aliases[key] as readonly string[]
     const idx = normed.findIndex((h) => aliasList.includes(h))
@@ -227,14 +202,53 @@ function resolveColumns<T extends string>(
   return { cols, missing }
 }
 
+function parseBaseKg(v: string): number {
+  const s = String(v).trim().toLowerCase()
+  // "2kg" → 2, "800g" → 0.8, "300ml" → 0.3
+  const kgMatch = s.match(/^([\d.]+)\s*kg$/)
+  if (kgMatch) return Number(kgMatch[1])
+  const gMatch = s.match(/^([\d.]+)\s*g$/)
+  if (gMatch) return Number(gMatch[1]) / 1000
+  const mlMatch = s.match(/^([\d.]+)\s*ml$/)
+  if (mlMatch) return Number(mlMatch[1]) / 1000
+  return 1  // fallback
+}
+
+// ─────────────────────────────────────────────────────────────
+// 원가표 파서
+// ─────────────────────────────────────────────────────────────
+
+const COST_BOOK_ALIASES = {
+  exposureId:    ['노출id', '노출상품id'],
+  productName:   ['쿠팡원본상품명', '상품명'],
+  alias:         ['내별칭', '별칭'],
+  channel:       ['채널'],
+  optionCount:   ['옵션수'],
+  optionSample:  ['옵션샘플'],
+  baseVolume:    ['기준용량'],
+  rawCost:       ['원곡가', '원재료가'],
+  wingWorkFee:   ['윙작업비'],
+  growthWorkFee: ['그로스작업비'],
+  mixFee:        ['혼합비'],
+  manufacturer:  ['제조사'],
+  taxType:       ['과세구분'],
+  needsBag:      ['봉투비여부'],
+  memo:          ['메모'],
+  wingCost:      ['윙원가자동', '윙원가'],
+  growthCost:    ['그로스원가자동', '그로스원가'],
+  feeRate:       ['수수료율수기', '수수료율'],
+  baseKg:        ['기준kg자동', '기준kg'],
+} as const
+type CostBookKey = keyof typeof COST_BOOK_ALIASES
+
 function parseCostBook(aoa: unknown[][]): { rows: CostBookRow[]; error?: string } {
   const headerIdx = findHeaderRow(aoa, ['노출id', '내별칭', '원곡가'])
   if (headerIdx === -1) {
-    return { rows: [], error: '원가표 헤더 행을 찾지 못했습니다' }
+    return { rows: [], error: '원가표 헤더 행을 찾지 못했습니다 (노출ID + 내별칭 + 원곡가 필요)' }
   }
   const headers = (aoa[headerIdx] as unknown[]).map(toStr)
   const { cols, missing } = resolveColumns<CostBookKey>(headers, COST_BOOK_ALIASES, [
-    'exposureId', 'alias', 'baseVolume', 'rawCost', 'manufacturer', 'taxType', 'needsBag',
+    'exposureId', 'alias', 'baseVolume', 'rawCost', 'manufacturer',
   ])
   if (missing.length > 0) {
     return { rows: [], error: `원가표 필수 컬럼 누락: ${missing.join(', ')}` }
@@ -245,16 +259,32 @@ function parseCostBook(aoa: unknown[][]): { rows: CostBookRow[]; error?: string 
     const r = aoa[i]
     if (!Array.isArray(r)) continue
     const exp = toStr(r[cols.exposureId])
-    if (!exp || !/^\d+$/.test(exp)) continue  // 숫자 노출ID만 (메모 행 필터)
-
+    if (!exp || !/^\d+$/.test(exp)) continue
     const alias = toStr(r[cols.alias])
     if (!alias) continue
-
     const rawCost = toNum(r[cols.rawCost])
     const manufacturer = toStr(r[cols.manufacturer])
+    if (!Number.isFinite(rawCost) || !manufacturer) continue
+
+    const baseVolume = toStr(r[cols.baseVolume]) || '1kg'
     const taxTypeStr = toStr(r[cols.taxType])
     const needsBagStr = toStr(r[cols.needsBag])
-    if (!Number.isFinite(rawCost) || !manufacturer) continue
+    const wingFee = toNum(r[cols.wingWorkFee]) || 0
+    const growthFee = toNum(r[cols.growthWorkFee]) || 0
+    const mixFee = toNum(r[cols.mixFee]) || 0
+
+    // 자동 P/Q 가 비어있으면 H+I+K / H+J+K 로 계산
+    const wingCostCached = cols.wingCost !== -1 ? toNum(r[cols.wingCost]) : NaN
+    const growthCostCached = cols.growthCost !== -1 ? toNum(r[cols.growthCost]) : NaN
+    const wingCost = Number.isFinite(wingCostCached) ? wingCostCached : rawCost + wingFee + mixFee
+    const growthCost = Number.isFinite(growthCostCached) ? growthCostCached : rawCost + growthFee + mixFee
+
+    // S 기준kg 자동 — 비어있으면 baseVolume 파싱
+    const baseKgCached = cols.baseKg !== -1 ? toNum(r[cols.baseKg]) : NaN
+    const baseKg = Number.isFinite(baseKgCached) ? baseKgCached : parseBaseKg(baseVolume)
+
+    const feeRateCached = cols.feeRate !== -1 ? toNum(r[cols.feeRate]) : NaN
+    const feeRate = Number.isFinite(feeRateCached) && feeRateCached > 0 ? feeRateCached : 0.0638
 
     rows.push({
       exposureId: exp,
@@ -263,32 +293,68 @@ function parseCostBook(aoa: unknown[][]): { rows: CostBookRow[]; error?: string 
       channel: toStr(r[cols.channel]) || '단일',
       optionCount: toNum(r[cols.optionCount]) || 0,
       optionSample: toStr(r[cols.optionSample]),
-      baseVolume: toStr(r[cols.baseVolume]) || '1kg',
+      baseVolume,
       rawCost,
-      wingWorkFee: toNum(r[cols.wingWorkFee]) || 0,
-      growthWorkFee: toNum(r[cols.growthWorkFee]) || 0,
-      mixFee: toNum(r[cols.mixFee]) || 0,
+      wingWorkFee: wingFee,
+      growthWorkFee: growthFee,
+      mixFee,
       manufacturer,
       taxType: (taxTypeStr === '과세' ? '과세' : '면세') as '과세' | '면세',
       needsBag: (needsBagStr === 'N' ? 'N' : 'Y') as 'Y' | 'N',
       memo: cols.memo !== -1 ? toStr(r[cols.memo]) || undefined : undefined,
+      wingCost,
+      growthCost,
+      feeRate,
+      baseKg,
     })
   }
   return { rows }
 }
 
 // ─────────────────────────────────────────────────────────────
-// 마진계산 시트 파서
+// 마진계산 파서
 // ─────────────────────────────────────────────────────────────
 
+const MARGIN_ROW_ALIASES = {
+  exposureId:    ['노출id'],
+  optionId:      ['옵션id'],
+  alias:         ['별칭'],
+  optionName:    ['옵션명'],
+  totalKg:       ['총kg'],
+  bagCount:      ['봉투수'],
+  kgPerBag:      ['1봉kg'],
+  listPrice:     ['정가vat', '정가'],
+  actualPrice:   ['실판매가'],
+  perUnitPrice:  ['개당가vat', '개당가'],
+  priceBand:     ['가격대'],
+  autoChannel:   ['자동채널'],
+  manualChannel: ['수동지정'],
+  channel:       ['최종채널'],
+  size:          ['규격수기', '규격'],
+  costPrice:     ['원가vat', '원가'],
+  bagFeeCol:     ['봉투vat', '봉투'],
+  boxFee:        ['박스vat', '박스'],
+  shipFee:       ['택배vat', '택배'],
+  warehouseFee:  ['창고입고비vat', '창고입고비'],
+  grossShipFee:  ['그로스배송vat', '그로스배송'],
+  inoutFee:      ['입출고vat', '입출고'],
+  feeRate:       ['수수료율'],
+  coupangFee:    ['수수료vat', '수수료'],
+  totalCost:     ['총비용vat', '총비용'],
+  netProfit:     ['순이익vat', '순이익'],
+  marginRate:    ['마진율'],
+  bepRoas:       ['beproas'],
+} as const
+type MarginRowKey = keyof typeof MARGIN_ROW_ALIASES
+
 function parseMarginRows(aoa: unknown[][]): { rows: MarginCalcRow[]; error?: string } {
-  const headerIdx = findHeaderRow(aoa, ['옵션id', '실판매가'])
+  const headerIdx = findHeaderRow(aoa, ['옵션id', '실판매가', '최종채널'])
   if (headerIdx === -1) {
-    return { rows: [], error: '마진계산 시트 헤더를 찾지 못했습니다 (옵션ID + 실판매가 필요)' }
+    return { rows: [], error: '마진계산 헤더 행을 찾지 못했습니다' }
   }
   const headers = (aoa[headerIdx] as unknown[]).map(toStr)
   const { cols, missing } = resolveColumns<MarginRowKey>(headers, MARGIN_ROW_ALIASES, [
-    'exposureId', 'optionId', 'optionName', 'actualPrice',
+    'exposureId', 'optionId', 'actualPrice',
   ])
   if (missing.length > 0) {
     return { rows: [], error: `마진계산 필수 컬럼 누락: ${missing.join(', ')}` }
@@ -300,63 +366,72 @@ function parseMarginRows(aoa: unknown[][]): { rows: MarginCalcRow[]; error?: str
     if (!Array.isArray(r)) continue
     const optId = toStr(r[cols.optionId])
     if (!optId || !/^\d+$/.test(optId)) continue
-
     const actualPrice = toNum(r[cols.actualPrice])
     if (!Number.isFinite(actualPrice) || actualPrice <= 0) continue
 
-    const listPrice = toNum(r[cols.listPrice])
-    const netProfit = toNum(r[cols.netProfit])
-    const marginRate = toNum(r[cols.marginRate])
-    const bepRoas = toNum(r[cols.bepRoas])
+    const num = (key: MarginRowKey) => cols[key] !== -1 ? toNum(r[cols[key]]) : NaN
+    const str = (key: MarginRowKey) => cols[key] !== -1 ? toStr(r[cols[key]]) : ''
+
+    const netProfit = num('netProfit')
+    const marginRate = num('marginRate')
+    const bepRoas = num('bepRoas')
 
     rows.push({
       exposureId: toStr(r[cols.exposureId]),
       optionId: optId,
-      alias: toStr(r[cols.alias]),
-      optionName: toStr(r[cols.optionName]),
-      totalKg: toNum(r[cols.totalKg]) || 0,
-      bagCount: toNum(r[cols.bagCount]) || 1,
-      kgPerBag: toNum(r[cols.kgPerBag]) || 1,
-      listPrice: Number.isFinite(listPrice) ? listPrice : actualPrice,
+      alias: str('alias'),
+      optionName: str('optionName'),
+      totalKg: num('totalKg') || 0,
+      bagCount: num('bagCount') || 1,
+      kgPerBag: num('kgPerBag') || 1,
+      listPrice: num('listPrice') || actualPrice,
       actualPrice,
+      perUnitPrice: num('perUnitPrice') || actualPrice,
+      priceBand: str('priceBand'),  // 텍스트 그대로
+      autoChannel: str('autoChannel'),
+      manualChannel: str('manualChannel'),
+      channel: str('channel'),
+      size: str('size'),
+      costPrice: num('costPrice') || 0,
+      bagFee: num('bagFeeCol') || 0,
+      boxFee: num('boxFee') || 0,
+      shipFee: num('shipFee') || 0,
+      warehouseFee: num('warehouseFee') || 0,
+      grossShipFee: num('grossShipFee') || 0,
+      inoutFee: num('inoutFee') || 0,
+      feeRate: num('feeRate') || 0,
+      coupangFee: num('coupangFee') || 0,
+      totalCost: num('totalCost') || 0,
       netProfit: Number.isFinite(netProfit) ? netProfit : null,
       marginRate: Number.isFinite(marginRate) ? marginRate : null,
       bepRoas: Number.isFinite(bepRoas) ? bepRoas : null,
-      channel: toStr(r[cols.channel]) || '',
     })
   }
   return { rows }
 }
 
 // ─────────────────────────────────────────────────────────────
-// 비용테이블 시트 파서
+// 비용테이블 파서 (신규 구조)
 // ─────────────────────────────────────────────────────────────
 
 function parseCostTable(aoa: unknown[][]): CostTableConstants {
-  // 이 시트는 섹션이 여러 개라 전체 훑어서 패턴 매칭:
-  //   - "봉투비" 라벨 다음 셀 = bagFee
-  //   - "수수료율" 라벨 다음 셀 = defaultFeeRate
-  //   - "그로스 1kg" 섹션 헤더 다음에 [가격대, 배송비, 입출고비] 테이블
-  //   - "그로스 2kg" 섹션 헤더 다음에 [가격대, 2kg단가, 입출고비] 테이블
-  //   - "윙 박스·택배" 섹션 헤더 다음에 [분류, 최소kg, 최대kg, 박스, 택배] 테이블
-  //   - "그로스 창고 입고비" 섹션에 [제조사, 단위, ..., 봉당합계] 테이블
-  //
-  // 결과 없으면 기본값 fallback.
-
   const result: CostTableConstants = {
     bagFee: 150,
-    defaultFeeRate: 0.07,
-    gross1kgTable: {},
-    gross2kgShipTable: {},
+    defaultFeeRate: 0.0638,
+    inoutTable: {},
+    grossShipTable: {},
     wingBoxShipTable: {
       small: { minKg: 1, maxKg: 3, box: 371, ship: 2100 },
       mid:   { minKg: 4, maxKg: 10, box: 1123, ship: 2800 },
-      large: { minKg: 11, maxKg: 20, box: 1300, ship: 4000 },
+      large: { minKg: 11, maxKg: 20, box: 1300, ship: 4400 },
     },
     warehouseFee: {},
+    gross1kgTable: {},
+    gross2kgShipTable: {},
   }
 
-  let section: '' | 'gross1kg' | 'gross2kg' | 'wing' | 'warehouse' = ''
+  // 섹션 추적: 헤더 행 패턴으로 판별 (이모지 의존 X — 컬럼 헤더 자체로 검출)
+  let section: '' | 'inout' | 'gross-ship' | 'wing' | 'warehouse' = ''
 
   for (let i = 0; i < aoa.length; i++) {
     const row = aoa[i]
@@ -364,66 +439,101 @@ function parseCostTable(aoa: unknown[][]): CostTableConstants {
     const a = toStr(row[0])
     const b = row[1]
 
-    // 공통 상수
+    // 봉투비
     if (a.includes('봉투비') && typeof b === 'number') {
       result.bagFee = b
       continue
     }
-    if (a.includes('수수료율') && typeof b === 'number') {
-      result.defaultFeeRate = b
+
+    // 헤더 행 패턴으로 섹션 결정
+    const c = toStr(row[2])
+    const d = toStr(row[3])
+    const e = toStr(row[4])
+
+    // 입출고 헤더: A=가격대 + B=0.8kg 봉당~ + C=1kg 봉당~ + D=2kg 봉당~
+    if (a === '가격대' && b && String(b).includes('0.8kg') && c.includes('1kg') && d.includes('2kg')) {
+      section = 'inout'
+      continue
+    }
+    // 그로스 배송 헤더: A=가격대 + B=극소 + C=소 + D=중 + E=대형1
+    if (a === '가격대' && b === '극소' && c === '소' && d === '중' && e.startsWith('대형')) {
+      section = 'gross-ship'
+      continue
+    }
+    // 윙 헤더: A=분류 + B=최소kg + C=최대kg + D=박스 + E=택배
+    if (a === '분류' && b === '최소kg' && c === '최대kg') {
+      section = 'wing'
+      continue
+    }
+    // 창고 헤더: A=제조사 + B=단위 + ... + E=봉당 합계
+    if (a === '제조사' && b === '단위' && e.includes('합계')) {
+      section = 'warehouse'
       continue
     }
 
-    // 섹션 전환 — 섹션 헤더는 보통 이모지(📦🚚🏭)로 시작
-    // 메모성 행("💡 ... 윙 박스·택배 참조 ...")이 다시 wing으로 빠지지 않도록 정확한 패턴 매칭
-    if (/^📦.*그로스.*1kg/.test(a)) { section = 'gross1kg'; continue }
-    if (/^📦.*그로스.*2kg/.test(a)) { section = 'gross2kg'; continue }
-    if (/^🚚.*윙.*박스/.test(a)) { section = 'wing'; continue }
-    if (/^🏭.*창고.*입고/.test(a)) { section = 'warehouse'; continue }
-
-    // 테이블 행 파싱
-    if (section === 'gross1kg') {
-      const priceBand = toStr(row[0])
-      const ship = toNum(row[1])
-      const inout = toNum(row[2])
-      if (/^\d+$/.test(priceBand) && Number.isFinite(ship) && Number.isFinite(inout)) {
-        result.gross1kgTable[priceBand] = { ship, inout }
+    // 데이터 행 파싱
+    if (section === 'inout') {
+      // A=가격대 라벨("9,900" 등 텍스트), B/C/D=0.8/1/2kg 입출고비
+      const band = a
+      if (!band || !/^[\d,]+(\~[\d,]+)?$/.test(band)) {
+        // 가격대 라벨 아님 → 섹션 종료
+        if (band) section = ''
+        continue
       }
-    } else if (section === 'gross2kg') {
-      const priceBand = toStr(row[0])
-      const ship2kg = toNum(row[1])
-      // 입출고비는 gross1kgTable과 공유되므로 여기선 배송만 저장
-      if (/^\d+$/.test(priceBand) && Number.isFinite(ship2kg)) {
-        result.gross2kgShipTable[priceBand] = ship2kg
+      const v08 = toNum(row[1])
+      const v1 = toNum(row[2])
+      const v2 = toNum(row[3])
+      if (Number.isFinite(v08) && Number.isFinite(v1) && Number.isFinite(v2)) {
+        result.inoutTable[band] = { '0.8': v08, '1': v1, '2': v2 }
+        // 옛 호환: gross1kgTable 의 inout, gross2kgShipTable
+        result.gross1kgTable[band] = { ship: 0, inout: v1 }
+      }
+    } else if (section === 'gross-ship') {
+      const band = a
+      if (!band || !/^[\d,]+(\~[\d,]+)?$/.test(band)) {
+        if (band) section = ''
+        continue
+      }
+      const sX = toNum(row[1])  // 극소
+      const sS = toNum(row[2])  // 소
+      const sM = toNum(row[3])  // 중
+      const sL = toNum(row[4])  // 대형1
+      if ([sX, sS, sM, sL].every(Number.isFinite)) {
+        result.grossShipTable[band] = { '극소': sX, '소': sS, '중': sM, '대형1': sL }
+        // 옛 호환: gross1kgTable 의 ship 은 "소" 로 설정 (1kg 기본 가정)
+        if (result.gross1kgTable[band]) {
+          result.gross1kgTable[band].ship = sS
+        } else {
+          result.gross1kgTable[band] = { ship: sS, inout: 0 }
+        }
+        result.gross2kgShipTable[band] = sS
       }
     } else if (section === 'wing') {
+      // 분류: 소/중/대
       const cat = a
       const minKg = toNum(row[1])
       const maxKg = toNum(row[2])
       const box = toNum(row[3])
       const ship = toNum(row[4])
-      if (Number.isFinite(minKg) && Number.isFinite(maxKg) && Number.isFinite(box) && Number.isFinite(ship)) {
-        const bracket = { minKg, maxKg, box, ship }
+      if ([minKg, maxKg, box, ship].every(Number.isFinite)) {
+        const bracket: WingBracket = { minKg, maxKg, box, ship }
         if (cat === '소') result.wingBoxShipTable.small = bracket
         else if (cat === '중') result.wingBoxShipTable.mid = bracket
         else if (cat === '대') result.wingBoxShipTable.large = bracket
+        else section = ''  // 분류 외 = 섹션 종료
       }
     } else if (section === 'warehouse') {
-      // 헤더: 제조사 · 단위 · 1파렛봉수 · 운송비(봉당) · 박스비(봉당·수식) · 봉당합계
-      // 이 섹션에는 "곰표 1파렛 박스비" 같은 메타 행도 섞여 있음 → 엄격히 6컬럼 모두 있는 행만 처리
+      // 제조사 / 단위 / 봉당 운송비 / 봉당 박스비 / 봉당 합계
       const maker = a
       const unit = toStr(row[1])
-      const total = toNum(row[5])
-      // 유효 데이터 조건: 제조사(a) · 단위(kg/g/ml 포함) · 봉당합계(숫자) 모두 있어야 함
-      // 또한 첫 글자가 제조사 이름 (곰표/진도팜/녹색원 등) — 빈칸/이모지/공백 시작 제외
-      const isValidMaker = maker.length > 0 && !maker.startsWith(' ')
-        && !maker.includes('파렛') && !maker.includes('박스수')
-        && !maker.includes('대박스') && !maker.includes('중박스')
-        && maker !== '제조사'
-      const isValidUnit = /^\d+(\.\d+)?\s*(kg|g|ml)$/i.test(unit)
-      if (isValidMaker && isValidUnit && Number.isFinite(total)) {
-        result.warehouseFee[`${maker}|${unit}`] = total
+      const total = toNum(row[4])  // E = 봉당 합계
+      if (!maker || !unit || !Number.isFinite(total)) continue
+      // 단위는 "1kg"/"2kg" 같은 형태
+      if (!/^[\d.]+\s*(kg|g|ml)$/i.test(unit)) {
+        if (maker) section = ''  // 헤더 외 row → 섹션 종료
+        continue
       }
+      result.warehouseFee[`${maker}|${unit}`] = total
     }
   }
 
@@ -450,7 +560,15 @@ export function parseMarginMaster(buffer: ArrayBuffer): MarginMasterParseResult 
 
   const findSheet = (keywords: string[]): unknown[][] | null => {
     for (const name of wb.SheetNames) {
-      if (keywords.some((k) => name.includes(k))) {
+      // 정확 매칭 우선 (예: '비용테이블' 이 '비용테이블_옛' 매칭 안 되도록)
+      if (keywords.includes(name)) {
+        return XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], {
+          header: 1, blankrows: false,
+        })
+      }
+    }
+    for (const name of wb.SheetNames) {
+      if (keywords.some((k) => name === k || (name.includes(k) && !name.includes('_옛')))) {
         return XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], {
           header: 1, blankrows: false,
         })
@@ -459,54 +577,43 @@ export function parseMarginMaster(buffer: ArrayBuffer): MarginMasterParseResult 
     return null
   }
 
-  // 1) 원가표
   const costSheet = findSheet(['원가표'])
   if (!costSheet) {
     return {
-      master: null,
-      error: '원가표 시트를 찾지 못했습니다',
-      warnings,
-      stats: { costBookRows: 0, marginRows: 0, hasConstants: false },
+      master: null, error: '원가표 시트를 찾지 못했습니다',
+      warnings, stats: { costBookRows: 0, marginRows: 0, hasConstants: false },
     }
   }
   const costBookResult = parseCostBook(costSheet)
   if (costBookResult.error) {
     return {
-      master: null,
-      error: costBookResult.error,
-      warnings,
-      stats: { costBookRows: 0, marginRows: 0, hasConstants: false },
+      master: null, error: costBookResult.error,
+      warnings, stats: { costBookRows: 0, marginRows: 0, hasConstants: false },
     }
   }
 
-  // 2) 마진계산
   const marginSheet = findSheet(['마진계산', '마진 계산'])
   if (!marginSheet) {
     return {
-      master: null,
-      error: '마진계산 시트를 찾지 못했습니다',
-      warnings,
-      stats: { costBookRows: costBookResult.rows.length, marginRows: 0, hasConstants: false },
+      master: null, error: '마진계산 시트를 찾지 못했습니다',
+      warnings, stats: { costBookRows: costBookResult.rows.length, marginRows: 0, hasConstants: false },
     }
   }
   const marginResult = parseMarginRows(marginSheet)
   if (marginResult.error) {
     return {
-      master: null,
-      error: marginResult.error,
-      warnings,
-      stats: { costBookRows: costBookResult.rows.length, marginRows: 0, hasConstants: false },
+      master: null, error: marginResult.error,
+      warnings, stats: { costBookRows: costBookResult.rows.length, marginRows: 0, hasConstants: false },
     }
   }
 
-  // 3) 비용테이블 (없으면 기본값 사용)
   const costTableSheet = findSheet(['비용테이블', '비용 테이블'])
   let constants: CostTableConstants
   if (costTableSheet) {
     constants = parseCostTable(costTableSheet)
   } else {
     warnings.push('비용테이블 시트를 찾지 못해 기본값을 사용합니다')
-    constants = parseCostTable([]) // 빈 배열 → 기본값만
+    constants = parseCostTable([])
   }
 
   return {
@@ -525,7 +632,7 @@ export function parseMarginMaster(buffer: ArrayBuffer): MarginMasterParseResult 
 }
 
 // ─────────────────────────────────────────────────────────────
-// 편의 헬퍼: 옵션ID → 실판매가 Map
+// 편의 helpers
 // ─────────────────────────────────────────────────────────────
 
 export function buildActualPriceMap(master: CostMaster): Map<string, number> {
@@ -536,20 +643,14 @@ export function buildActualPriceMap(master: CostMaster): Map<string, number> {
   return map
 }
 
-/** 옵션ID → 검증용 순이익/마진율/BEP 저장. UI에서 엑셀 계산값과 일치 확인용 */
 export function buildMarginLookupMap(master: CostMaster): Map<string, MarginCalcRow> {
   const map = new Map<string, MarginCalcRow>()
-  for (const r of master.marginRows) {
-    map.set(r.optionId, r)
-  }
+  for (const r of master.marginRows) map.set(r.optionId, r)
   return map
 }
 
-/** 노출ID → 원가표 상품 */
 export function buildCostBookMap(master: CostMaster): Map<string, CostBookRow> {
   const map = new Map<string, CostBookRow>()
-  for (const r of master.costBook) {
-    map.set(r.exposureId, r)
-  }
+  for (const r of master.costBook) map.set(r.exposureId, r)
   return map
 }

@@ -1,22 +1,13 @@
 /**
- * costBook — 원가표 + 비용 상수 in-memory 저장소
+ * costBook — 마진 마스터 in-memory 저장소 + 비용 lookup 헬퍼
  *
- * ⚠️ 중요: 더 이상 하드코딩된 데이터 없음.
- *   대표님이 마진분석.xlsx를 업로드하면 → marginMaster 파서가 파싱 →
- *   setCostMaster()로 이 모듈에 주입 → 시스템 전체에서 이 모듈을 통해 조회.
+ * v2 (2026-04): 새 비용테이블 구조 반영
+ *  - 입출고비: 가격대 × (0.8/1/2)kg 매트릭스
+ *  - 그로스 배송비: 가격대 × (극소/소/중/대형1) 매트릭스
+ *  - 윙 박스/택배: 분류(소/중/대) 그대로
+ *  - 창고 입고비: 제조사|단위 매트릭스
  *
- * 흐름:
- *   1) UploadZone (page.tsx) → 마진분석.xlsx 업로드
- *   2) parseMarginMaster() → CostMaster 객체 반환
- *   3) setCostMaster(master) → 이 모듈에 저장
- *   4) margin.ts / diagnosis.ts → getCostBook(exposureId), getCostConstants() 등으로 조회
- *
- * 엑셀 안 올라간 상태에서 조회하면:
- *   - getCostBook() → undefined
- *   - getCostConstants() → 기본값 (안전장치)
- *   - hasCostMaster() → false
- *
- * UI는 hasCostMaster()로 체크해서 "마진 마스터 엑셀을 업로드해주세요" 안내해야 함.
+ * 가격대 라벨은 "9,900"/"10,900"/.../"19,900" 텍스트 그대로 키로 사용.
  */
 
 import type {
@@ -35,144 +26,184 @@ let _costBookByExposureId: Map<string, CostBookRow> = new Map()
 let _marginRowByOptionId: Map<string, MarginCalcRow> = new Map()
 let _actualPriceByOptionId: Map<string, number> = new Map()
 
-/**
- * 마진 마스터를 시스템에 주입.
- * 호출 시 내부 인덱스 맵들을 재구축.
- */
 export function setCostMaster(master: CostMaster | null): void {
   _master = master
   _costBookByExposureId = new Map()
   _marginRowByOptionId = new Map()
   _actualPriceByOptionId = new Map()
-
   if (!master) return
-
   for (const row of master.costBook) {
     _costBookByExposureId.set(row.exposureId, row)
   }
   for (const row of master.marginRows) {
     _marginRowByOptionId.set(row.optionId, row)
-    if (row.actualPrice > 0) {
-      _actualPriceByOptionId.set(row.optionId, row.actualPrice)
-    }
+    if (row.actualPrice > 0) _actualPriceByOptionId.set(row.optionId, row.actualPrice)
   }
 }
 
-/** 마진 마스터가 로드되어 있는지 */
-export function hasCostMaster(): boolean {
-  return _master !== null
-}
+export function hasCostMaster(): boolean { return _master !== null }
+export function getCostMaster(): CostMaster | null { return _master }
 
-/** 현재 로드된 마스터 객체 (있으면) */
-export function getCostMaster(): CostMaster | null {
-  return _master
-}
-
-// ─────────────────────────────────────────────────────────────
-// 조회 API
-// ─────────────────────────────────────────────────────────────
-
-/** 노출ID로 원가표 행 조회 (없으면 undefined) */
 export function getCostBook(exposureId: string): CostBookRow | undefined {
   return _costBookByExposureId.get(exposureId)
 }
 
-/** 옵션ID로 마진계산 행 조회 (실판매가/순이익/마진율 등 포함) */
 export function getMarginRow(optionId: string): MarginCalcRow | undefined {
   return _marginRowByOptionId.get(optionId)
 }
 
-/**
- * 옵션ID로 실판매가 조회 (없으면 undefined)
- * 진단·광고매출 계산에서 핵심.
- * fallback이 필요하면 호출 측에서 price_inventory 판매가로 처리.
- */
 export function getActualPrice(optionId: string): number | undefined {
   return _actualPriceByOptionId.get(optionId)
 }
 
-/** 옵션ID로 마진계산 시트의 채널 (그로스/윙) */
 export function getOptionChannel(optionId: string): string | undefined {
   return _marginRowByOptionId.get(optionId)?.channel
 }
 
-/**
- * 옵션ID로 엑셀에서 계산된 옵션 순이익(원) 직접 조회.
- * - margin.ts의 동적 계산 대신 이 값을 신뢰하면 엑셀과 100% 일치.
- * - 단, 엑셀 수식이 한 번이라도 계산된 적 있어야 함 (LibreOffice/Excel로 열어서 저장).
- */
 export function getNetProfit(optionId: string): number | null {
   return _marginRowByOptionId.get(optionId)?.netProfit ?? null
 }
 
 // ─────────────────────────────────────────────────────────────
-// 비용 상수 (마스터 우선, 기본값 fallback)
+// DEFAULT_CONSTANTS — 마스터 안 올라간 상태에서 안전 fallback
 // ─────────────────────────────────────────────────────────────
 
 const DEFAULT_CONSTANTS: CostTableConstants = {
   bagFee: 150,
-  defaultFeeRate: 0.07,
-  gross1kgTable: {
-    '9900':  { ship: 1282, inout: 1034 },
-    '10900': { ship: 1447, inout: 1089 },
-    '11900': { ship: 1656, inout: 1100 },
-    '12900': { ship: 1865, inout: 1111 },
-    '13900': { ship: 2074, inout: 1122 },
-    '14900': { ship: 2281, inout: 1128 },
+  defaultFeeRate: 0.0638,
+  inoutTable: {
+    '9,900':  { '0.8': 1089, '1': 1034, '2': 1155 },
+    '10,900': { '0.8': 1089, '1': 1089, '2': 1232 },
+    '11,900': { '0.8': 1100, '1': 1100, '2': 1309 },
+    '12,900': { '0.8': 1111, '1': 1111, '2': 1386 },
+    '13,900': { '0.8': 1122, '1': 1122, '2': 1463 },
+    '14,900': { '0.8': 1128, '1': 1128, '2': 1540 },
+    '19,900': { '0.8': 1128, '1': 1128, '2': 1540 },
   },
-  gross2kgShipTable: {
-    '9900':  1155,
-    '10900': 1232,
-    '11900': 1309,
-    '12900': 1386,
-    '13900': 1463,
-    '14900': 1540,
+  grossShipTable: {
+    '9,900':  { '극소': 1282, '소': 1375, '중': 1650, '대형1': 1870 },
+    '10,900': { '극소': 1447, '소': 1617, '중': 1931, '대형1': 2261 },
+    '11,900': { '극소': 1656, '소': 1859, '중': 2211, '대형1': 2651 },
+    '12,900': { '극소': 1865, '소': 2101, '중': 2492, '대형1': 3042 },
+    '13,900': { '극소': 2074, '소': 2343, '중': 2772, '대형1': 3432 },
+    '14,900': { '극소': 2281, '소': 2585, '중': 3053, '대형1': 3823 },
+    '19,900': { '극소': 2310, '소': 2640, '중': 3053, '대형1': 3823 },
   },
   wingBoxShipTable: {
     small: { minKg: 1,  maxKg: 3,  box: 371,  ship: 2100 },
     mid:   { minKg: 4,  maxKg: 10, box: 1123, ship: 2800 },
-    large: { minKg: 11, maxKg: 20, box: 1300, ship: 4000 },
+    large: { minKg: 11, maxKg: 20, box: 1300, ship: 4400 },
   },
   warehouseFee: {
     '곰표|2kg':   190,
-    '진도팜|1kg': 247.50694444444446,
-    '진도팜|2kg': 491.97241379310344,
-    '진도팜|3kg': 792.6222222222223,
+    '진도팜|1kg': 260,
+    '진도팜|2kg': 516,
+  },
+  // 옛 코드 호환
+  gross1kgTable: {
+    '9,900':  { ship: 1375, inout: 1034 },
+    '10,900': { ship: 1617, inout: 1089 },
+    '11,900': { ship: 1859, inout: 1100 },
+    '12,900': { ship: 2101, inout: 1111 },
+    '13,900': { ship: 2343, inout: 1122 },
+    '14,900': { ship: 2585, inout: 1128 },
+    '19,900': { ship: 2640, inout: 1128 },
+  },
+  gross2kgShipTable: {
+    '9,900':  1375,
+    '10,900': 1617,
+    '11,900': 1859,
+    '12,900': 2101,
+    '13,900': 2343,
+    '14,900': 2585,
+    '19,900': 2640,
   },
 }
 
-/**
- * 비용 상수 (마스터 우선).
- * 마스터 안 올라가도 안전한 기본값 반환.
- */
 export function getCostConstants(): CostTableConstants {
   return _master?.constants ?? DEFAULT_CONSTANTS
 }
 
 // ─────────────────────────────────────────────────────────────
-// 헬퍼 (기존 유지)
+// 신규 lookup helpers (v2)
 // ─────────────────────────────────────────────────────────────
 
+const PRICE_BAND_LABELS = ['9,900', '10,900', '11,900', '12,900', '13,900', '14,900', '19,900'] as const
+type PriceBandLabel = typeof PRICE_BAND_LABELS[number]
+
+const BAND_BOUNDARIES: { max: number; label: PriceBandLabel }[] = [
+  { max: 9900,  label: '9,900' },
+  { max: 10900, label: '10,900' },
+  { max: 11900, label: '11,900' },
+  { max: 12900, label: '12,900' },
+  { max: 13900, label: '13,900' },
+  { max: 14900, label: '14,900' },
+  { max: Infinity, label: '19,900' },
+]
+
+/** 1봉당 가격(개당가) → 가격대 라벨 (예: 10800 → "10,900") */
+export function getPriceBandLabel(perUnitPrice: number): string {
+  for (const b of BAND_BOUNDARIES) {
+    if (perUnitPrice <= b.max) return b.label
+  }
+  return '19,900'
+}
+
 /**
- * 기준용량 문자열 → kg 숫자 변환
- * 마진분석 엑셀의 VLOOKUP과 동일하게 50g/300ml 등 미등록은 1로 fallback.
+ * 그로스 + 봉용량 + 봉수 → 규격 라벨.
+ * - G=0.8 또는 G=1: F=1 → 극소, F<=4 → 소, else 중
+ * - G=2: F<=2 → 소, F<=4 → 중, else 대형1
+ * - 그 외 → ""
  */
+export function getOptionSizeLabel(channel: string, kgPerBag: number, bagCount: number): string {
+  if (channel !== '그로스') return ''
+  if (kgPerBag === 0.8 || kgPerBag === 1) {
+    if (bagCount === 1) return '극소'
+    if (bagCount <= 4) return '소'
+    return '중'
+  }
+  if (kgPerBag === 2) {
+    if (bagCount <= 2) return '소'
+    if (bagCount <= 4) return '중'
+    return '대형1'
+  }
+  return ''
+}
+
+/** 입출고비 lookup (가격대 라벨 + 1봉kg). 못 찾으면 0 */
+export function getInoutFee(priceBandLabel: string, kgPerBag: number): number {
+  if (kgPerBag !== 0.8 && kgPerBag !== 1 && kgPerBag !== 2) return 0
+  const key = String(kgPerBag) as '0.8' | '1' | '2'
+  return getCostConstants().inoutTable[priceBandLabel]?.[key] ?? 0
+}
+
+/** 그로스 배송비 lookup (가격대 라벨 + 규격 라벨). 못 찾으면 0 */
+export function getGrossShipFee(priceBandLabel: string, sizeLabel: string): number {
+  const tbl = getCostConstants().grossShipTable[priceBandLabel]
+  if (!tbl) return 0
+  if (sizeLabel === '극소' || sizeLabel === '소' || sizeLabel === '중' || sizeLabel === '대형1') {
+    return tbl[sizeLabel] ?? 0
+  }
+  return 0
+}
+
+// ─────────────────────────────────────────────────────────────
+// 옛 helpers (margin.ts 호환 유지)
+// ─────────────────────────────────────────────────────────────
+
+/** 기준용량 문자열 → kg 숫자 — 옛 매핑 + fallback 파싱 */
 export const VOLUME_TO_KG: Record<string, number> = {
   '1kg': 1, '2kg': 2, '3kg': 3, '6kg': 6, '10kg': 10,
   '500g': 0.5, '100g': 0.1, '300ml': 0.3, '800g': 0.8, '350g': 0.35,
 }
 
-/** 개당 판매가 → 가격대 산출 (비용테이블 조회용 키) */
+/** @deprecated — 신규 코드는 getPriceBandLabel() 사용 */
 export function getPriceBand(perUnitPrice: number): number {
   if (perUnitPrice <= 9900) return 9900
   if (perUnitPrice >= 14900) return 14900
   return Math.ceil(perUnitPrice / 1000) * 1000 - 100
 }
 
-/**
- * 윙 총kg → 박스/택배 구간 (소/중/대)
- * 1~3kg=소, 4~10kg=중, 11~20kg=대 (20kg 초과는 대로 처리)
- */
 export function getWingBracket(totalKg: number): { box: number; ship: number } {
   const tbl = getCostConstants().wingBoxShipTable
   if (totalKg <= tbl.small.maxKg) return { box: tbl.small.box, ship: tbl.small.ship }
@@ -180,17 +211,15 @@ export function getWingBracket(totalKg: number): { box: number; ship: number } {
   return { box: tbl.large.box, ship: tbl.large.ship }
 }
 
-/** 창고 입고비 조회 (없으면 0) */
 export function getWarehouseFee(manufacturer: string, baseVolume: string): number {
   const key = `${manufacturer}|${baseVolume}`
   return getCostConstants().warehouseFee[key] ?? 0
 }
 
 // ─────────────────────────────────────────────────────────────
-// 진단/리포트용 통계
+// 통계
 // ─────────────────────────────────────────────────────────────
 
-/** 마스터 적재 통계 (UI에서 보여줄 때 사용) */
 export function getCostMasterStats(): {
   loaded: boolean
   costBookRows: number
