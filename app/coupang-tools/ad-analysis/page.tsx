@@ -8,7 +8,7 @@
  * 자동 입찰 적용은 영구 안 함 — 사용자가 키워드 복사해서 쿠팡 광고센터에 직접 입력.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
 import {
   buildAdAnalysisView,
@@ -73,13 +73,102 @@ export default function AdAnalysisPage() {
   const marginMaster = useMarginStore((s) => s.marginMaster)
   const rawAdCampaign = useMarginStore((s) => s.rawAdCampaign)
   const adPeriod = useMarginStore((s) => s.adPeriod)
+  const setMarginMaster = useMarginStore((s) => s.setMarginMaster)
+  const setAdCampaign = useMarginStore((s) => s.setAdCampaign)
+  const setSalesInsight = useMarginStore((s) => s.setSalesInsight)
   const [period, setPeriod] = useState<Period>(30)
   const [openCampId, setOpenCampId] = useState<string | null>(null)
+  const [autoLoading, setAutoLoading] = useState(true)
+
+  // 마운트 시점 자동 로드 — 수익 진단 페이지를 거치지 않고 직접 진입해도 동작.
+  // 진단 페이지의 자동 로드 로직 중 광고 분석에 필요한 것만 발췌:
+  //  1) marginMaster (BEP/단가 lookup)
+  //  2) 가장 최근 주차 광고 분석 → setAdCampaign + setSalesInsight (주차 기간 + 광고 raw row)
+  // settle/price/savedAnalyses 등 광고 분석에서 안 쓰는 것은 생략.
+  // 이미 store 에 데이터가 있으면 fetch 안 함 (다른 페이지에서 먼저 로드된 경우).
+  useEffect(() => {
+    let cancelled = false
+    const needMaster = !marginMaster
+    const needAd = !rawAdCampaign || rawAdCampaign.length === 0 || !adPeriod
+
+    if (!needMaster && !needAd) {
+      setAutoLoading(false)
+      return
+    }
+
+    ;(async () => {
+      try {
+        if (needMaster) {
+          const masterRes = await fetch('/api/coupang-master?type=margin_master')
+          const masterJson = await masterRes.json()
+          if (!cancelled && masterJson?.data) {
+            setMarginMaster(masterJson.data, {
+              fileName: masterJson.fileName || '저장된 데이터',
+              uploadedAt: masterJson.savedAt || new Date().toISOString(),
+              rowCount: masterJson.data?.marginRows?.length || 0,
+            })
+          }
+        }
+
+        if (needAd) {
+          const listRes = await fetch('/api/coupang-diagnoses?type=list')
+          const listJson = await listRes.json()
+          const all = listJson?.diagnoses || []
+          const weeklies = all
+            .filter((a: any) => a.weekKey && a._hasRaw)
+            .sort((a: any, b: any) => (b.weekKey || '').localeCompare(a.weekKey || ''))
+          const meta = weeklies[0]
+          if (meta?.id) {
+            const itemRes = await fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`)
+            const target = await itemRes.json()
+            if (!cancelled && target?.adRows) {
+              setAdCampaign(target.adRows, {
+                fileName: target.adFileName || '저장된 분석',
+                uploadedAt: target.createdAt || new Date().toISOString(),
+                rowCount: target.adRows.length,
+              }, target.periodStartDate && target.periodEndDate ? {
+                startDate: target.periodStartDate,
+                endDate: target.periodEndDate,
+                days: target.periodDays || 30,
+              } : null)
+              if (target.sellerStats) {
+                setSalesInsight(target.sellerStats, {
+                  fileName: target.sellerFileName || '저장된 분석',
+                  uploadedAt: target.createdAt || new Date().toISOString(),
+                  rowCount: target.sellerStats.length,
+                })
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.error('[ad-analysis] 자동 로드 실패:', err)
+      } finally {
+        if (!cancelled) setAutoLoading(false)
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const view = useMemo(
     () => buildAdAnalysisView(rawAdCampaign, marginMaster as any),
     [rawAdCampaign, marginMaster],
   )
+
+  if (autoLoading && !view.loaded) {
+    return (
+      <div style={{ maxWidth: 1500, margin: '0 auto', padding: '32px 40px', fontFamily: 'Pretendard, sans-serif' }}>
+        <Header period={period} onPeriod={setPeriod} />
+        <div style={{
+          background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8,
+          padding: 24, fontSize: 14, color: '#64748B', textAlign: 'center',
+        }}>
+          저장된 광고 데이터를 불러오는 중…
+        </div>
+      </div>
+    )
+  }
 
   if (!view.loaded) {
     return (
