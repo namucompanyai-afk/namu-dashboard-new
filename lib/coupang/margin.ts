@@ -9,7 +9,7 @@ import {
   getNetProfit,
   getMarginRow,
   getCostConstants,
-  getPriceBand,
+  getPriceBandLabel,
   getWingBracket,
   getWarehouseFee,
   VOLUME_TO_KG,
@@ -240,7 +240,7 @@ export function calcMarginFromBook(input: CostBookCalcInput): CostBookCalcResult
   let growthInOutFee = 0
   if (channel === 'growth') {
     const perUnit = effectivePrice / bagCount
-    const band = String(getPriceBand(perUnit))
+    const band = getPriceBandLabel(perUnit)
     if (item.baseVolume === '2kg') {
       growthShipFee = (constants.gross2kgShipTable[band] ?? 0) * bagCount
     } else {

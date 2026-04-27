@@ -114,7 +114,7 @@ function ResultView({ result }: { result: MarginMasterParseResult }) {
           <tbody>
             {Object.entries(m.constants.gross1kgTable).map(([band, v]) => (
               <tr key={band}>
-                <td style={td}>{Number(band).toLocaleString()}</td>
+                <td style={td}>{band}</td>
                 <td style={td}>{v.ship.toLocaleString()}</td>
                 <td style={td}>{v.inout.toLocaleString()}</td>
               </tr>
@@ -132,7 +132,7 @@ function ResultView({ result }: { result: MarginMasterParseResult }) {
           <tbody>
             {Object.entries(m.constants.gross2kgShipTable).map(([band, ship]) => (
               <tr key={band}>
-                <td style={td}>{Number(band).toLocaleString()}</td>
+                <td style={td}>{band}</td>
                 <td style={td}>{ship.toLocaleString()}</td>
               </tr>
             ))}
