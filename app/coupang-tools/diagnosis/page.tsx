@@ -971,6 +971,9 @@ export default function DiagnosisPage() {
 
             {/* 함정 스캐너 테이블 */}
             <ProductScannerTable products={filteredProducts} />
+
+            {/* 마진 마스터 미매칭 옵션 (광고비 누수) */}
+            <UnmatchedAdOptionsSection result={diagnosisResult} />
           </>
         )}
       </div>
@@ -1963,5 +1966,90 @@ function FilterChip(props: { active: boolean; onClick: () => void; label: string
     >
       {props.label}
     </button>
+  )
+}
+
+// 마진 마스터 미매칭 옵션 — 광고비가 발생 중인데 마스터에 없는 옵션 추적
+function UnmatchedAdOptionsSection({ result }: { result: any }) {
+  const list: any[] = result?.unmatched?.adOptions || []
+  const totalAdCost = result?.unmatched?.adCost || 0
+  const [showAll, setShowAll] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+
+  if (list.length === 0) return null
+
+  const TOP_N = 10
+  const display = showAll ? list : list.slice(0, TOP_N)
+
+  function copyOptionId(id: string) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(id).then(() => {
+        setCopied(id)
+        setTimeout(() => setCopied(null), 1200)
+      }).catch(() => {})
+    }
+  }
+
+  return (
+    <div className="mt-6 rounded-lg border border-amber-200 bg-amber-50/40">
+      <div className="px-4 py-3 border-b border-amber-200 flex items-center justify-between">
+        <div>
+          <div className="text-sm font-semibold text-amber-900">🔍 마진 마스터 미매칭 옵션 (광고비 누수)</div>
+          <div className="text-xs text-amber-800 mt-0.5">
+            마진 마스터에 등록 안 된 옵션에 광고비가 발생 중. 단종이면 쿠팡 광고센터에서 광고 끄거나, 신규/변경 옵션이면 마진 마스터에 추가하세요.
+          </div>
+        </div>
+        <div className="text-xs text-amber-900 text-right whitespace-nowrap">
+          <div>옵션 <strong>{list.length}</strong>개</div>
+          <div>광고비 <strong>{Math.round(totalAdCost / 10000).toLocaleString('ko-KR')}만</strong></div>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-amber-100/60">
+            <tr>
+              <th className="px-3 py-2 text-left text-amber-900">옵션ID</th>
+              <th className="px-3 py-2 text-left text-amber-900">대표 캠페인</th>
+              <th className="px-3 py-2 text-right text-amber-900">광고비 (VAT)</th>
+              <th className="px-3 py-2 text-right text-amber-900">광고매출</th>
+              <th className="px-3 py-2 text-right text-amber-900">ROAS</th>
+              <th className="px-3 py-2 text-center text-amber-900">복사</th>
+            </tr>
+          </thead>
+          <tbody>
+            {display.map((o: any, i: number) => {
+              const roas = o.adCost > 0 ? (o.adRevenue / o.adCost) * 100 : null
+              return (
+                <tr key={o.optionId} className={`border-t border-amber-100 ${i % 2 ? 'bg-amber-50/30' : ''}`}>
+                  <td className="px-3 py-1.5 font-mono text-gray-800">{o.optionId}</td>
+                  <td className="px-3 py-1.5 text-gray-700">{(o.campaigns || []).join(' / ') || '—'}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-gray-900">{Math.round(o.adCost).toLocaleString('ko-KR')}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-gray-700">{Math.round(o.adRevenue).toLocaleString('ko-KR')}</td>
+                  <td className="px-3 py-1.5 text-right font-mono text-gray-700">{roas != null ? `${Math.round(roas)}%` : '—'}</td>
+                  <td className="px-3 py-1.5 text-center">
+                    <button
+                      onClick={() => copyOptionId(o.optionId)}
+                      className="text-[11px] px-1.5 py-0.5 rounded border border-amber-300 bg-white text-amber-800 hover:bg-amber-100"
+                    >
+                      {copied === o.optionId ? '✓ 복사됨' : '📋 ID 복사'}
+                    </button>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      {list.length > TOP_N && (
+        <div className="px-4 py-2 border-t border-amber-200 text-center">
+          <button
+            onClick={() => setShowAll((v) => !v)}
+            className="text-xs text-amber-800 hover:underline"
+          >
+            {showAll ? `상위 ${TOP_N}개만 보기` : `전체 ${list.length}개 보기 (현재 ${TOP_N}개 표시)`}
+          </button>
+        </div>
+      )}
+    </div>
   )
 }

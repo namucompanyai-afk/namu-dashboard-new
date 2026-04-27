@@ -193,6 +193,17 @@ export interface OptionDiagnosis {
   verdictLabel: string
 }
 
+/** 마진 마스터에 등록 안 된 옵션이지만 광고비가 발생 중 — 광고센터에서 광고 끄거나 마스터에 추가 필요 */
+export interface UnmatchedAdOption {
+  optionId: string
+  /** 광고비 합 (VAT 포함) */
+  adCost: number
+  /** 광고전환매출 합 (raw revenue14d) */
+  adRevenue: number
+  /** 등장한 캠페인명 — 최대 5개 */
+  campaigns: string[]
+}
+
 export interface DiagnosisResult {
   products: ProductDiagnosis[]
   summary: {
@@ -218,10 +229,12 @@ export interface DiagnosisResult {
   unmatched: {
     /** SELLER에 있지만 마진계산 시트에 없는 옵션의 매출 합 */
     sellerRevenue: number
-    /** 같은 광고비 합 */
+    /** 같은 광고비 합 (VAT 포함) */
     adCost: number
     /** 옵션 수 */
     optionCount: number
+    /** 광고비가 발생한 미매칭 옵션의 옵션ID 별 breakdown — 광고비 큰 순 */
+    adOptions: UnmatchedAdOption[]
   }
   /** 광고/판매분석 기간 검증 (정상 비율: 광고매출/SELLER매출 = 40~90%) */
   periodValidation: {
@@ -608,6 +621,26 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       sellerRevenue: unmatchedSellerRev,
       adCost: unmatchedAdCost,
       optionCount: unmatchedOpts.size,
+      adOptions: (() => {
+        const out: UnmatchedAdOption[] = []
+        // 광고비 발생한 미매칭 옵션만 추출 (SELLER만 누락은 별도 의미라 제외)
+        for (const optId of unmatchedOpts) {
+          const adExec = adExecByOpt.get(optId)
+          if (!adExec || adExec.cost <= 0) continue
+          const campaigns = new Set<string>()
+          for (const r of adRows) {
+            if (r.adOptionId === optId && r.campaignName) campaigns.add(r.campaignName)
+          }
+          out.push({
+            optionId: optId,
+            adCost: adExec.cost,
+            adRevenue: adExec.campRevenue,
+            campaigns: Array.from(campaigns).slice(0, 5),
+          })
+        }
+        out.sort((a, b) => b.adCost - a.adCost)
+        return out
+      })(),
     },
     periodValidation: (() => {
       const NORMAL_MIN = 0.40
