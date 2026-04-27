@@ -137,7 +137,14 @@ export async function POST(request: Request) {
       const itemKey = `${KEY_ITEM_PREFIX}${newId}`;
       await saveData(itemKey, newSnapshot);
 
-      return NextResponse.json({ ok: true, type: 'explicit', id: newId });
+      // 클라이언트 optimistic 업데이트용 메타 (list endpoint와 동일한 형태)
+      const { adRows, sellerStats, ...meta } = newSnapshot as any;
+      const snapshotMeta = {
+        ...meta,
+        _hasRaw: !!(adRows?.length || sellerStats?.length),
+      };
+
+      return NextResponse.json({ ok: true, type: 'explicit', id: newId, snapshotMeta });
     }
 
     return NextResponse.json({ error: 'type=last|explicit' }, { status: 400 });

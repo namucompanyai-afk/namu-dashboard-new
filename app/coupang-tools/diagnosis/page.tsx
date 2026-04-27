@@ -549,11 +549,28 @@ export default function DiagnosisPage() {
         body: JSON.stringify({ type: 'explicit', snapshot }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      
-      // 목록 다시 가져오기
-      const listRes = await fetch('/api/coupang-diagnoses?type=list')
-      const listJson = await listRes.json()
-      if (listJson?.diagnoses) setSavedAnalyses(listJson.diagnoses)
+      const json = await res.json()
+
+      // optimistic 업데이트: GET list 왕복 생략
+      // 서버 POST 와 동일한 충돌 규칙으로 기존 항목 교체/추가
+      if (json?.snapshotMeta) {
+        const meta = json.snapshotMeta
+        setSavedAnalyses((prev) => {
+          const filtered = prev.filter((a) => {
+            if (a.id === meta.id) return false
+            if (!meta.includeInTrend || !a.includeInTrend) return true
+            if (meta.weekKey && a.weekKey === meta.weekKey) return false
+            if (
+              meta.monthKey &&
+              a.monthKey === meta.monthKey &&
+              a.trendType !== 'weekly' &&
+              meta.trendType !== 'weekly'
+            ) return false
+            return true
+          })
+          return [...filtered, meta]
+        })
+      }
 
       setShowSaveDialog(false)
       alert(includeInTrend ? '✓ 저장 완료 (월별 추이 그래프에 추가됨)' : '✓ 저장 완료')

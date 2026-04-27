@@ -58,21 +58,26 @@ export async function listByPrefix(prefix: string) {
     return [];
   }
   if (!idRows || idRows.length === 0) return [];
-  const BATCH_SIZE = 5;
-  const allRows: any[] = [];
+  const BATCH_SIZE = 100;
+  const batches: { id: string }[][] = [];
   for (let i = 0; i < idRows.length; i += BATCH_SIZE) {
-    const batch = idRows.slice(i, i + BATCH_SIZE);
-    const ids = batch.map((r: any) => r.id);
-    const { data, error } = await client
-      .from('dashboard_data')
-      .select('id, data, updated_at')
-      .in('id', ids);
-    if (error) {
-      console.error('listByPrefix batch error:', error);
-      continue;
-    }
-    if (data) allRows.push(...data);
+    batches.push(idRows.slice(i, i + BATCH_SIZE) as { id: string }[]);
   }
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      const ids = batch.map((r) => r.id);
+      const { data, error } = await client
+        .from('dashboard_data')
+        .select('id, data, updated_at')
+        .in('id', ids);
+      if (error) {
+        console.error('listByPrefix batch error:', error);
+        return [];
+      }
+      return data ?? [];
+    }),
+  );
+  const allRows = results.flat();
   allRows.sort((a: any, b: any) => a.id.localeCompare(b.id));
   return allRows;
 }
