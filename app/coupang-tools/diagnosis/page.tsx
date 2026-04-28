@@ -1416,15 +1416,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
           {onPointClick && <span className="ml-2 text-orange-600">· 점 클릭 시 해당 시점 데이터로 진단</span>}
         </div>
         <ResponsiveContainer width="100%" height={250}>
-          <LineChart
-            data={trendData}
-            onClick={(state: any) => {
-              if (!onPointClick) return
-              const a = state?.activePayload?.[0]?.payload?._analysis
-              if (a) onPointClick(a)
-            }}
-            style={{ cursor: onPointClick ? 'pointer' : 'default' }}
-          >
+          <LineChart data={trendData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="label" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v.toLocaleString()}만`} />
