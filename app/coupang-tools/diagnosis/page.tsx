@@ -1208,6 +1208,43 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd,
 }
 
 // ─────────────────────────────────────────────────────────────
+// 추이 차트 헬퍼 — hit area 큰 dot, 컴팩트한 툴팁
+// ─────────────────────────────────────────────────────────────
+
+// 투명 r=14 hit area + 시각 r=4 원. 17점 빽빽한 차트도 점 클릭 쉬움.
+const BigHitDot = (props: any) => {
+  const { cx, cy, fill, stroke } = props
+  if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={14} fill="transparent" style={{ cursor: 'pointer' }} />
+      <circle cx={cx} cy={cy} r={4} fill={fill || stroke} stroke="#fff" strokeWidth={1} />
+    </g>
+  )
+}
+
+// 컴팩트 툴팁 — 폰트/padding 축소, 항목 순서 강제 (매출 → 광고비 → 순이익)
+const CompactTrendTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null
+  const order: Record<string, number> = { '매출': 1, '광고비': 2, '순이익': 3 }
+  const items = [...payload]
+    .filter(p => p.dataKey in order)
+    .sort((a, b) => (order[a.dataKey] ?? 9) - (order[b.dataKey] ?? 9))
+  return (
+    <div className="rounded border border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm px-2 py-1.5 text-[11px]">
+      <div className="font-medium text-gray-700 mb-0.5">{label}</div>
+      {items.map((p: any) => (
+        <div key={p.dataKey} className="flex items-center gap-1.5 leading-tight">
+          <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+          <span className="text-gray-500 w-10">{p.dataKey}</span>
+          <span className="font-mono text-gray-900">{(p.value ?? 0).toLocaleString()}만원</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
 // 월별 추이 그래프
 // ─────────────────────────────────────────────────────────────
 
@@ -1390,9 +1427,9 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
             <XAxis dataKey="label" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v.toLocaleString()}만`} />
             <Tooltip
-              formatter={(v: any) => `${v.toLocaleString()}만원`}
-              itemSorter={(it: any) => (({ '매출': 1, '광고비': 2, '순이익': 3 } as any)[it.dataKey] ?? 9)}
-              cursor={{ stroke: '#f97316', strokeWidth: 1, strokeDasharray: '3 3' }}
+              content={<CompactTrendTooltip />}
+              offset={20}
+              cursor={{ stroke: '#f97316', strokeWidth: 24, strokeOpacity: 0.10 }}
             />
             <Legend />
             <Line
@@ -1400,9 +1437,9 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               dataKey="매출"
               stroke="#2563eb"
               strokeWidth={2}
-              dot={{ r: 4, cursor: onPointClick ? 'pointer' : 'default' }}
+              dot={<BigHitDot />}
               activeDot={{
-                r: 7,
+                r: 10,
                 cursor: onPointClick ? 'pointer' : 'default',
                 onClick: (_: any, ev: any) => {
                   if (!onPointClick) return
@@ -1416,9 +1453,9 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               dataKey="광고비"
               stroke="#f97316"
               strokeWidth={2}
-              dot={{ r: 4, cursor: onPointClick ? 'pointer' : 'default' }}
+              dot={<BigHitDot />}
               activeDot={{
-                r: 7,
+                r: 10,
                 cursor: onPointClick ? 'pointer' : 'default',
                 onClick: (_: any, ev: any) => {
                   if (!onPointClick) return
@@ -1432,9 +1469,9 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               dataKey="순이익"
               stroke="#10b981"
               strokeWidth={2}
-              dot={{ r: 4, cursor: onPointClick ? 'pointer' : 'default' }}
+              dot={<BigHitDot />}
               activeDot={{
-                r: 7,
+                r: 10,
                 cursor: onPointClick ? 'pointer' : 'default',
                 onClick: (_: any, ev: any) => {
                   if (!onPointClick) return
