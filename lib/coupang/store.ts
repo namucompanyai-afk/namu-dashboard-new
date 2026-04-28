@@ -112,6 +112,8 @@ interface MarginStore {
   deleteSelected: () => void
 
   reset: () => void
+  /** 마진마스터 (priceInventory/settlement/marginMaster/costBook) 만 보존하고 광고+SELLER+화면 상태 비움 */
+  resetExceptMargin: () => void
 }
 
 const emptyUploads: ExtendedUploadStatus = {
@@ -364,4 +366,24 @@ export const useMarginStore = create<MarginStore>((set, get) => ({
       marginMasterStats: emptyStats,
     })
   },
+
+  resetExceptMargin: () =>
+    set((s) => ({
+      // 마진마스터 관련 보존: rawPriceInventory, rawSettlement, marginMaster, marginMasterStats, options(파생), uploads.priceInventory/settlement/marginMaster
+      rawSalesInsight: [],
+      rawAdCampaign: [],
+      rawPromotion: [],
+      diagnosisResult: null,
+      uploads: {
+        ...s.uploads,
+        salesInsight: null,
+        adCampaign: null,
+        promotion: null,
+      },
+      filter: 'all',
+      selectedOptionIds: new Set(),
+      adPeriod: null,
+      sellerPeriodDays: 30,
+      warnings: emptyWarnings,
+    })),
 }))

@@ -61,7 +61,7 @@ export default function DiagnosisPage() {
     diagnosisResult,
     setSalesInsight, setAdCampaign,
     setMarginMaster, setSettlement, setPriceInventory,
-    reset,
+    reset, resetExceptMargin,
   } = useMarginStore()
 
   const [verdictFilter, setVerdictFilter] = useState<VerdictCode | 'all'>('all')
@@ -521,7 +521,7 @@ export default function DiagnosisPage() {
                 📊 저장된 분석 ({savedAnalyses.length})
               </button>
               <button
-                onClick={() => { if (confirm('모든 데이터를 초기화합니다.')) { setLoadedSnapshot(null); reset() } }}
+                onClick={() => { if (confirm('광고 + SELLER 데이터를 초기화합니다. (마진마스터는 유지)')) { setLoadedSnapshot(null); resetExceptMargin() } }}
                 className="text-sm px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
               >
                 전체 초기화
