@@ -1211,14 +1211,16 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd,
 // 추이 차트 헬퍼 — hit area 큰 dot, 컴팩트한 툴팁
 // ─────────────────────────────────────────────────────────────
 
-// 투명 r=14 hit area + 시각 r=4 원. 17점 빽빽한 차트도 점 클릭 쉬움.
+// 투명 r=14 hit area + 시각 r=3 원 (ROAS 추이 default dot 과 동일 스타일: 흰 fill + 라인색 테두리).
+// 17점 빽빽한 차트도 점 클릭 쉬움.
 const BigHitDot = (props: any) => {
-  const { cx, cy, fill, stroke } = props
+  const { cx, cy, stroke } = props
   if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null
+  const color = stroke || '#666'
   return (
     <g>
       <circle cx={cx} cy={cy} r={14} fill="transparent" style={{ cursor: 'pointer' }} />
-      <circle cx={cx} cy={cy} r={4} fill={fill || stroke} stroke="#fff" strokeWidth={1} />
+      <circle cx={cx} cy={cy} r={3} fill="#fff" stroke={color} strokeWidth={2} />
     </g>
   )
 }
