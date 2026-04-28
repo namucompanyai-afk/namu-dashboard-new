@@ -265,16 +265,20 @@ export default function DiagnosisPage() {
   //     periodEndDate 가 현재 periodStartDate 직전(0~2일 전)인 가장 최근 1개를 찾음
   //   - 7일 → 직전 7일, 30일 → 직전 30일 비교가 자동으로 매칭됨
   const prevSummary = useMemo(() => {
-    if (!adPeriod || !adPeriod.startDate || !adPeriod.days) return undefined
-    const days = adPeriod.days
-    const curStartMs = new Date(adPeriod.startDate).getTime()
+    // frozen view 일 땐 loadedSnapshot, 아니면 라이브 adPeriod 기준
+    const baseStart = loadedSnapshot ? loadedSnapshot.periodStartDate : adPeriod?.startDate
+    const baseDays = loadedSnapshot ? loadedSnapshot.periodDays : adPeriod?.days
+    const baseId = loadedSnapshot?.id  // 자기 자신 제외용
+    if (!baseStart || !baseDays) return undefined
+    const curStartMs = new Date(baseStart).getTime()
     if (!Number.isFinite(curStartMs)) return undefined
 
     type Cand = { summary: any; endMs: number }
     const candidates: Cand[] = []
     for (const a of savedAnalyses) {
+      if (baseId && a?.id === baseId) continue  // 자기 자신 비교 안 함
       if (!a?.periodEndDate || !a?.periodDays) continue
-      if (Math.abs((a.periodDays || 0) - days) > 1) continue
+      if (Math.abs((a.periodDays || 0) - baseDays) > 1) continue
       const endMs = new Date(a.periodEndDate).getTime()
       if (!Number.isFinite(endMs)) continue
       const gapDays = (curStartMs - endMs) / (1000 * 60 * 60 * 24)
@@ -284,7 +288,7 @@ export default function DiagnosisPage() {
     }
     candidates.sort((x, y) => y.endMs - x.endMs)
     return candidates[0]?.summary
-  }, [adPeriod, savedAnalyses])
+  }, [loadedSnapshot, adPeriod, savedAnalyses])
 
   // 저장된 분석 클릭 → frozen view 로 로드 (재계산 없이 저장 시점 데이터 그대로 표시)
   // list endpoint 는 raw 빼고 메타/summary 만 반환 → summary 없으면 ?type=item&id 로 풀 가져옴
@@ -772,7 +776,14 @@ export default function DiagnosisPage() {
             )}
 
             {/* 요약 KPI */}
-            <SummarySection result={displayResult || diagnosisResult} viewMode={viewMode} prevSummary={prevSummary} periodStart={adPeriod?.startDate} periodEnd={adPeriod?.endDate} />
+            <SummarySection
+              result={displayResult || diagnosisResult}
+              viewMode={viewMode}
+              prevSummary={prevSummary}
+              periodStart={loadedSnapshot ? loadedSnapshot.periodStartDate : adPeriod?.startDate}
+              periodEnd={loadedSnapshot ? loadedSnapshot.periodEndDate : adPeriod?.endDate}
+              periodDays={loadedSnapshot ? loadedSnapshot.periodDays : adPeriod?.days}
+            />
 
             {/* 월별 추이 그래프 */}
             <TrendChartSection
@@ -1052,15 +1063,17 @@ function formatPeriodRange(start?: string | null, end?: string | null): string |
   return `${startStr} ~ ${ey}.${pad(em)}.${pad(ed)}`
 }
 
-function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd }: {
+function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd, periodDays }: {
   result: DiagnosisResult
   viewMode: ViewMode
-  prevSummary?: any  // 직전 동일 기간 요약 (있으면 화살표 표시)
+  prevSummary?: any
   periodStart?: string | null
   periodEnd?: string | null
+  periodDays?: number | null
 }) {
   const s = result.summary
-  const days = result.period.days
+  // 우선순위: prop periodDays (loadedSnapshot 또는 adPeriod) > result.period.days
+  const days = (periodDays && periodDays > 0) ? periodDays : result.period.days
 
   // 월환산 스케일 (실제 → 30일 환산)
   const scale = viewMode === 'monthly' && days > 0 ? 30 / days : 1
@@ -1105,6 +1118,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="총 매출"
           value={formatMan(adj(s.totalRevenue))}
+          formula="Σ (옵션 판매수 × 마진M 실판매가)"
           sub={fmtCount(s.totalSold ?? 0)}
           compare={cmpRevenue}
           compareGood="up"
@@ -1112,6 +1126,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="광고 매출"
           value={formatMan(adj(s.totalAdRevenue))}
+          formula="Σ (광고 14일 판매수 × 마진M 실판매가)"
           sub={`${fmtCount(s.totalAdSold ?? 0)} (${adShare.toFixed(1)}%)`}
           compare={cmpAdRev}
           compareGood="up"
@@ -1119,6 +1134,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="오가닉 매출"
           value={formatMan(adj(s.totalOrganicRevenue))}
+          formula="총 매출 − 광고 매출"
           sub={`${fmtCount(s.totalOrganicSold ?? 0)} (${organicShare.toFixed(1)}%)`}
           compare={cmpOrgRev}
           compareGood="up"
@@ -1130,6 +1146,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
             const range = formatPeriodRange(periodStart, periodEnd)
             return range || `${days}일`
           })()}
+          formula="분석 기간"
           sub={(() => {
             const scaleNote = result.period.sellerScale !== 1 ? `SELLER ×${result.period.sellerScale.toFixed(2)}` : 'SELLER 동일기간'
             if (viewMode === 'monthly') return days !== 30 ? `실제: ${days}일` : scaleNote
@@ -1142,6 +1159,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="광고비 (+VAT)"
           value={formatMan(adj(s.totalAdCost))}
+          formula="Σ 쿠팡 광고비 × 1.1"
           sub={(() => {
             const u = (result as any).unmatched?.adCost
             if (u && Number.isFinite(u) && u > 0) {
@@ -1156,6 +1174,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="총 마진"
           value={formatMan(adj(s.totalMargin))}
+          formula="Σ (옵션 판매수 × 마진M 건당순이익)"
           sub={`마진율 ${(s.marginRate*100).toFixed(1)}%`}
           compare={cmpMargin}
           compareGood="up"
@@ -1163,6 +1182,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="순이익"
           value={formatMan(adj(s.totalNetProfit), true)}
+          formula="총 마진 − 광고비 (+VAT)"
           sub="총 마진 − 광고비"
           accent={adj(s.totalNetProfit) >= 0 ? 'green' : 'red'}
           compare={cmpProfit}
@@ -1171,6 +1191,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
         <KpiCard
           label="ROAS (귀속)"
           value={formatPct(s.adRoasAttr)}
+          formula="광고 매출 ÷ 광고비 × 100"
           sub="실판매가 기준"
           compare={cmpRoas}
           compareGood="up"
@@ -1244,15 +1265,13 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
     }
   }
 
-  // 주별 데이터
+  // 주별 데이터 — 항상 saved summary 그대로 (LIVE swap 제거. frozen view 와 hover/click 일관)
   const weeklyData = useMemo(() => {
     return analyses
       .filter(a => a.includeInTrend && a.trendType === 'weekly' && a.weekKey)
       .sort((a, b) => (a.weekKey || '').localeCompare(b.weekKey || ''))
       .map(a => {
-        // 현재 분석 기간과 같은 weekKey 면 LIVE summary 로 swap (KPI 와 일치 보장)
-        const isLive = !!liveSummary && liveWeekKey != null && a.weekKey === liveWeekKey
-        const s = isLive ? liveSummary : extractSummary(a)
+        const s = extractSummary(a)
         if (!s) return null
         const days = a.periodDays || 7
         const scale = 7 / Math.max(days, 1)  // 주 단위로 정규화
@@ -1264,21 +1283,20 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
           순이익: Math.round(((s.totalNetProfit || 0) * scale) / 10000),
           ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
           광고의존도: Math.round((s.adDependency || 0) * 100),
-          _analysis: a,  // 클릭 시 사용
-          _isLive: isLive,
+          _analysis: a,
+          _isLive: false,
         }
       })
       .filter(Boolean) as any[]
-  }, [analyses, selectedAlias, liveSummary, liveWeekKey])
+  }, [analyses, selectedAlias])
 
-  // 월별 데이터
+  // 월별 데이터 — 항상 saved summary 그대로
   const monthlyData = useMemo(() => {
     return analyses
       .filter(a => a.includeInTrend && (a.trendType === 'monthly' || (!a.trendType && a.monthKey)) && a.monthKey)
       .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
       .map(a => {
-        const isLive = !!liveSummary && liveMonthKey != null && a.monthKey === liveMonthKey
-        const s = isLive ? liveSummary : extractSummary(a)
+        const s = extractSummary(a)
         if (!s) return null
         const days = a.periodDays || 30
         const scale = 30 / Math.max(days, 1)
@@ -1291,11 +1309,11 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
           ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
           광고의존도: Math.round((s.adDependency || 0) * 100),
           _analysis: a,
-          _isLive: isLive,
+          _isLive: false,
         }
       })
       .filter(Boolean) as any[]
-  }, [analyses, selectedAlias, liveSummary, liveMonthKey])
+  }, [analyses, selectedAlias])
 
   const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
   const periodLabel = chartMode === 'weekly' ? '주' : '월'
@@ -1790,6 +1808,7 @@ function KpiCard(props: {
   label: string
   value: string
   sub?: string
+  formula?: string
   accent?: 'green' | 'red' | 'orange'
   compare?: { text: string; up: boolean } | null
   compareGood?: 'up' | 'down'  // up: 증가가 좋음, down: 감소가 좋음
@@ -1811,7 +1830,10 @@ function KpiCard(props: {
     <div className="rounded-lg border border-gray-200 bg-white p-4">
       <div className="text-xs text-gray-500 mb-1">{props.label}</div>
       <div className={`text-xl font-bold font-mono ${colorClass}`}>{props.value}</div>
-      {props.sub && <div className="text-xs text-gray-400 mt-0.5">{props.sub}</div>}
+      {props.formula && (
+        <div className="text-[10px] text-gray-400 font-mono mt-1">{props.formula}</div>
+      )}
+      {props.sub && <div className="text-xs text-gray-500 mt-0.5">{props.sub}</div>}
       {props.compare && (
         <div className={`text-xs font-medium mt-1 ${cmpClass}`}>{props.compare.text}</div>
       )}
