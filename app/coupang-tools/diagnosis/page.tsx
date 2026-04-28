@@ -1513,8 +1513,13 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
       <div className="grid grid-cols-2 gap-4">
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <h3 className="text-sm font-semibold mb-3">📊 ROAS 추이</h3>
+          <div
+            tabIndex={-1}
+            className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+            style={{ outline: 'none' }}
+          >
           <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={trendData}>
+            <LineChart data={trendData} tabIndex={-1} style={{ outline: 'none' }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
@@ -1522,12 +1527,18 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               <Line type="monotone" dataKey="ROAS" stroke="#8b5cf6" strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
+          </div>
         </div>
 
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <h3 className="text-sm font-semibold mb-3">📊 광고 의존도</h3>
+          <div
+            tabIndex={-1}
+            className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+            style={{ outline: 'none' }}
+          >
           <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={trendData}>
+            <LineChart data={trendData} tabIndex={-1} style={{ outline: 'none' }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
               <XAxis dataKey="label" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} domain={[0, 100]} />
@@ -1535,6 +1546,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               <Line type="monotone" dataKey="광고의존도" stroke="#ef4444" strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
+          </div>
         </div>
       </div>
     </div>
