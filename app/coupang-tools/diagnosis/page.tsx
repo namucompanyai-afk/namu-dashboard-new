@@ -1725,7 +1725,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
           <thead className="bg-gray-50 text-xs text-gray-500">
             <tr>
               {/* 코너 셀: sticky-top + sticky-left → z-30 (단순 sticky-top z-20, sticky-left body z-10보다 위) */}
-              <th className="text-left px-4 py-3 font-medium sticky left-0 top-0 bg-gray-50 z-30 cursor-pointer hover:text-gray-900 select-none whitespace-nowrap min-w-[200px]"
+              <th className="text-left px-4 py-3 font-medium sticky left-0 top-0 bg-gray-50 z-30 cursor-pointer hover:text-gray-900 select-none whitespace-nowrap min-w-[200px] border-r border-gray-200 shadow-[2px_0_4px_rgba(0,0,0,0.05)]"
                   onClick={() => toggleSort('alias')}>
                 별칭
                 {sortKey === 'alias' && (
@@ -1761,10 +1761,10 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
               return (
                 <React.Fragment key={p.alias}>
                   <tr
-                    className={`hover:bg-blue-50 cursor-pointer ${style.bg}`}
+                    className={`group hover:bg-blue-50 cursor-pointer ${style.bg}`}
                     onClick={() => toggleExpand(p.alias)}
                   >
-                    <td className="px-4 py-3 sticky left-0 z-10 bg-inherit min-w-[200px]" style={{ background: 'inherit' }}>
+                    <td className={`px-4 py-3 sticky left-0 z-10 min-w-[200px] ${style.bg} group-hover:bg-blue-50 border-r border-gray-200 shadow-[2px_0_4px_rgba(0,0,0,0.05)]`}>
                       <div className="font-medium flex items-center gap-1">
                         <span className="text-gray-400 text-xs">{isExpanded ? '▼' : '▶'}</span>
                         {p.alias}
@@ -1820,7 +1820,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                     const optStyle = VERDICT_STYLES[opt.verdict]
                     return (
                       <tr key={`${p.alias}-${opt.optionId}`} className="bg-blue-50/50">
-                        <td className="pl-12 pr-4 py-2 sticky left-0 z-10 bg-blue-50/50 min-w-[200px]">
+                        <td className="pl-12 pr-4 py-2 sticky left-0 z-10 bg-blue-50 min-w-[200px] border-r border-gray-200 shadow-[2px_0_4px_rgba(0,0,0,0.05)]">
                           <div className="text-xs text-gray-700">└ {opt.optionName}</div>
                           <div className="text-[10px] text-gray-400">옵션ID {opt.optionId}</div>
                         </td>
@@ -2083,8 +2083,10 @@ function UnmatchedAdOptionsSection({ result }: { result: any }) {
           <thead className="bg-amber-100/60">
             <tr>
               <th className="px-3 py-2 text-left text-amber-900">옵션ID</th>
-              <th className="px-3 py-2 text-left text-amber-900">대표 캠페인</th>
-              <th className="px-3 py-2 text-right text-amber-900">광고비 (VAT)</th>
+              <th className="px-3 py-2 text-left text-amber-900">캠페인명</th>
+              <th className="px-3 py-2 text-left text-amber-900">상품명</th>
+              <th className="px-3 py-2 text-left text-amber-900">옵션</th>
+              <th className="px-3 py-2 text-right text-amber-900">광고비 (+VAT)</th>
               <th className="px-3 py-2 text-right text-amber-900">광고매출</th>
               <th className="px-3 py-2 text-right text-amber-900">ROAS</th>
               <th className="px-3 py-2 text-center text-amber-900">복사</th>
@@ -2097,6 +2099,8 @@ function UnmatchedAdOptionsSection({ result }: { result: any }) {
                 <tr key={o.optionId} className={`border-t border-amber-100 ${i % 2 ? 'bg-amber-50/30' : ''}`}>
                   <td className="px-3 py-1.5 font-mono text-gray-800">{o.optionId}</td>
                   <td className="px-3 py-1.5 text-gray-700">{(o.campaigns || []).join(' / ') || '—'}</td>
+                  <td className="px-3 py-1.5 text-gray-800">{o.productName || '—'}</td>
+                  <td className="px-3 py-1.5 text-gray-600">{o.optionLabel || '—'}</td>
                   <td className="px-3 py-1.5 text-right font-mono text-gray-900">{Math.round(o.adCost).toLocaleString('ko-KR')}</td>
                   <td className="px-3 py-1.5 text-right font-mono text-gray-700">{Math.round(o.adRevenue).toLocaleString('ko-KR')}</td>
                   <td className="px-3 py-1.5 text-right font-mono text-gray-700">{roas != null ? `${Math.round(roas)}%` : '—'}</td>

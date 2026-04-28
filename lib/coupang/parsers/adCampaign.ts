@@ -54,6 +54,8 @@ const COLUMN_ALIASES = {
   revenue14d:       ['총전환매출액(14일)', '총전환매출액14일', 'revenue14d'],
   directRevenue14d: ['직접전환매출액(14일)', '직접전환매출액14일'],
   indirectRevenue14d:['간접전환매출액(14일)', '간접전환매출액14일'],
+  convProductName:  ['광고전환매출발생상품명', '전환매출발생상품명', '전환상품명'],
+  adProductName:    ['광고집행상품명', '집행상품명'],
 } as const
 
 type AliasKey = keyof typeof COLUMN_ALIASES
@@ -81,6 +83,9 @@ export interface AdCampaignRow {
   revenue14d: number
   directRevenue14d: number
   indirectRevenue14d: number
+  /** 광고전환매출발생 상품명 (없으면 광고집행 상품명). 포맷: "상품명,옵션,옵션,..." */
+  convProductName: string
+  adProductName: string
 }
 
 export interface AdCampaignParseResult {
@@ -239,6 +244,8 @@ export function parseAdCampaign(
       revenue14d: toNum(r[cols.revenue14d]),
       directRevenue14d: toNum(r[cols.directRevenue14d]),
       indirectRevenue14d: toNum(r[cols.indirectRevenue14d]),
+      convProductName: toStr(r[cols.convProductName]),
+      adProductName: toStr(r[cols.adProductName]),
     })
   }
 

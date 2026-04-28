@@ -204,6 +204,10 @@ export interface UnmatchedAdOption {
   adRevenue: number
   /** 등장한 캠페인명 — 최대 5개 */
   campaigns: string[]
+  /** 광고 엑셀 상품명 (콤마 split 첫 부분) — 마진 마스터 미매칭이라 별칭 대신 사용 */
+  productName?: string
+  /** 옵션 라벨 — 콤마 split 나머지 ("1개,1개,2kg,2kg") */
+  optionLabel?: string
 }
 
 export interface DiagnosisResult {
@@ -671,14 +675,33 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
           const adExec = adExecByOpt.get(optId)
           if (!adExec || adExec.cost <= 0) continue
           const campaigns = new Set<string>()
+          let rawProductName = ''
           for (const r of adRows) {
-            if (r.adOptionId === optId && r.campaignName) campaigns.add(r.campaignName)
+            if (r.adOptionId === optId) {
+              if (r.campaignName) campaigns.add(r.campaignName)
+              if (!rawProductName) {
+                rawProductName = ((r as any).convProductName || '').trim() || ((r as any).adProductName || '').trim()
+              }
+            }
+          }
+          let productName: string | undefined
+          let optionLabel: string | undefined
+          if (rawProductName) {
+            const idx = rawProductName.indexOf(',')
+            if (idx >= 0) {
+              productName = rawProductName.slice(0, idx).trim()
+              optionLabel = rawProductName.slice(idx + 1).trim()
+            } else {
+              productName = rawProductName
+            }
           }
           out.push({
             optionId: optId,
             adCost: adExec.cost,
             adRevenue: adExec.campRevenue,
             campaigns: Array.from(campaigns).slice(0, 5),
+            productName,
+            optionLabel,
           })
         }
         out.sort((a, b) => b.adCost - a.adCost)
