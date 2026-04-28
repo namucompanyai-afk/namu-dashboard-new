@@ -13,6 +13,8 @@ import { getData, saveData, deleteData, listByPrefix } from "@/lib/supabase";
 
 const KEY_LAST = 'coupang_diagnosis_last';
 const KEY_ITEM_PREFIX = 'coupang_diagnosis_item__';
+// raw 데이터 (adRows/sellerStats) 별도 저장 — 메인 row 4.5MB Vercel limit 회피
+const KEY_RAW_PREFIX = 'coupang_diagnosis_raw__';
 // 옛날 묶음 키 (마이그레이션용)
 const KEY_LIST_OLD = 'coupang_diagnosis_list';
 
@@ -80,74 +82,101 @@ export async function GET(request: Request) {
       const data = await getData(`${KEY_ITEM_PREFIX}${id}`);
       return NextResponse.json(data || null);
     }
-    return NextResponse.json({ error: 'type=last|list|item' }, { status: 400 });
+
+    // raw 데이터 (adRows/sellerStats) 별도 조회. 디버깅/재계산용 — frozen view 에서는 호출 안 함.
+    if (type === 'raw') {
+      const id = searchParams.get('id');
+      if (!id) return NextResponse.json({ error: 'id 필요' }, { status: 400 });
+      const data = await getData(`${KEY_RAW_PREFIX}${id}`);
+      return NextResponse.json(data || null);
+    }
+    return NextResponse.json({ error: 'type=last|list|item|raw' }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
-/** POST — 자동 저장 또는 명시 저장 */
+/** POST — 자동 저장(last) / 명시 저장(explicit, 메인 row만) / raw(별도 row, raw 만) */
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { type, snapshot } = body as { type: 'last' | 'explicit'; snapshot: DiagnosisSnapshot };
-
-    if (!snapshot) {
-      return NextResponse.json({ error: 'snapshot 필요' }, { status: 400 });
-    }
+    const { type } = body as { type: 'last' | 'explicit' | 'raw' };
 
     // 1) 마지막 분석 자동 저장 (덮어쓰기)
     if (type === 'last') {
+      const { snapshot } = body as { snapshot: DiagnosisSnapshot };
+      if (!snapshot) return NextResponse.json({ error: 'snapshot 필요' }, { status: 400 });
       await saveData(KEY_LAST, snapshot);
       return NextResponse.json({ ok: true, type: 'last' });
     }
 
-    // 2) 명시 저장 — 개별 키로 저장
+    // 2) 명시 저장 — 메인 row 만 (raw 박혀있으면 분리해서 raw key 에도 저장)
     if (type === 'explicit') {
+      const { snapshot } = body as { snapshot: DiagnosisSnapshot };
+      if (!snapshot) return NextResponse.json({ error: 'snapshot 필요' }, { status: 400 });
+
       const newId = snapshot.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const newSnapshot: DiagnosisSnapshot = {
-        ...snapshot,
+      // raw 분리 — 메인 row 에서 빼고 별도로 저장 (4.5MB Vercel body limit 회피)
+      const { adRows, sellerStats, ...mainSnapshot } = snapshot as any;
+      const newMain: DiagnosisSnapshot = {
+        ...mainSnapshot,
         id: newId,
         createdAt: snapshot.createdAt || new Date().toISOString(),
+        // 메인 row 에는 raw 빈 배열로 마커 (호환성 — list endpoint 의 _hasRaw 판정 등)
+        adRows: [],
+        sellerStats: [],
       };
 
-      // 같은 키(주별/월별)이고 includeInTrend=true이면 → 기존 거 삭제 후 저장
-      if (newSnapshot.includeInTrend) {
+      // 같은 키(주별/월별)이고 includeInTrend=true이면 → 기존 거 메인+raw 삭제 후 저장
+      if (newMain.includeInTrend) {
         const allRows = await listByPrefix(KEY_ITEM_PREFIX);
         const conflicts = allRows.filter((r: any) => {
           const d = r.data as DiagnosisSnapshot;
           if (!d?.includeInTrend) return false;
-          // weekKey 충돌
-          if (newSnapshot.weekKey && d.weekKey === newSnapshot.weekKey) return true;
-          // monthKey 충돌 (월별만)
+          if (newMain.weekKey && d.weekKey === newMain.weekKey) return true;
           if (
-            newSnapshot.monthKey &&
-            d.monthKey === newSnapshot.monthKey &&
+            newMain.monthKey &&
+            d.monthKey === newMain.monthKey &&
             (d.trendType !== 'weekly') &&
-            (newSnapshot.trendType !== 'weekly')
+            (newMain.trendType !== 'weekly')
           ) return true;
           return false;
         });
         for (const c of conflicts) {
+          const cId = (c.data as any)?.id;
           await deleteData(c.id);
+          if (cId) { try { await deleteData(`${KEY_RAW_PREFIX}${cId}`); } catch {} }
         }
       }
 
-      // 개별 키로 저장 — 1개 row만 쓰면 됨!
-      const itemKey = `${KEY_ITEM_PREFIX}${newId}`;
-      await saveData(itemKey, newSnapshot);
+      // 메인 row 저장
+      await saveData(`${KEY_ITEM_PREFIX}${newId}`, newMain);
 
-      // 클라이언트 optimistic 업데이트용 메타 (list endpoint와 동일한 형태)
-      const { adRows, sellerStats, ...meta } = newSnapshot as any;
-      const snapshotMeta = {
-        ...meta,
-        _hasRaw: !!(adRows?.length || sellerStats?.length),
-      };
+      // raw 가 같이 들어왔으면 함께 저장 (옛 클라이언트 호환). 분리 클라이언트는 type='raw' 로 별도 호출.
+      let rawSaved = false;
+      if ((adRows?.length || 0) > 0 || (sellerStats?.length || 0) > 0) {
+        try {
+          await saveData(`${KEY_RAW_PREFIX}${newId}`, { id: newId, adRows: adRows || [], sellerStats: sellerStats || [] });
+          rawSaved = true;
+        } catch (e) {
+          // raw 실패해도 메인은 살아있음 → frozen view 동작
+          console.error('[diagnoses POST explicit] raw 저장 실패:', e);
+        }
+      }
 
-      return NextResponse.json({ ok: true, type: 'explicit', id: newId, snapshotMeta });
+      const snapshotMeta = { ...newMain, _hasRaw: rawSaved };
+      return NextResponse.json({ ok: true, type: 'explicit', id: newId, snapshotMeta, rawSaved });
     }
 
-    return NextResponse.json({ error: 'type=last|explicit' }, { status: 400 });
+    // 3) raw 별도 저장 — 클라이언트가 explicit 후 두 번째로 호출. 페이로드는 raw 만.
+    if (type === 'raw') {
+      const { id, adRows, sellerStats } = body as { id: string; adRows: any[]; sellerStats: any[] };
+      if (!id) return NextResponse.json({ error: 'id 필요' }, { status: 400 });
+      await saveData(`${KEY_RAW_PREFIX}${id}`, { id, adRows: adRows || [], sellerStats: sellerStats || [] });
+      return NextResponse.json({ ok: true, type: 'raw', id });
+    }
+
+    return NextResponse.json({ error: 'type=last|explicit|raw' }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
@@ -162,10 +191,10 @@ export async function DELETE(request: Request) {
     const purgeLegacy = searchParams.get('purgeLegacyBundle') === '1';
     const purgeAll = searchParams.get('purgeAll') === '1';
 
-    // 모든 진단 데이터 일괄 폐기 — 개별 키 + legacy bundle + last 슬롯
+    // 모든 진단 데이터 일괄 폐기 — 개별 키 + raw 키 + legacy bundle + last 슬롯
     if (purgeAll) {
-      const result: any = { ok: true, purgedAll: true, deleted: { individual: 0, legacy: 0, last: 0 }, errors: [] as string[] };
-      // 개별 키 모두
+      const result: any = { ok: true, purgedAll: true, deleted: { individual: 0, raw: 0, legacy: 0, last: 0 }, errors: [] as string[] };
+      // 개별 메인 키 모두
       try {
         const rows = await listByPrefix(KEY_ITEM_PREFIX);
         for (const r of rows as any[]) {
@@ -176,7 +205,19 @@ export async function DELETE(request: Request) {
             result.errors.push(`item ${r.id}: ${String(e)}`);
           }
         }
-      } catch (e) { result.errors.push(`listByPrefix: ${String(e)}`); }
+      } catch (e) { result.errors.push(`listByPrefix item: ${String(e)}`); }
+      // raw 키 모두
+      try {
+        const rawRows = await listByPrefix(KEY_RAW_PREFIX);
+        for (const r of rawRows as any[]) {
+          try {
+            const cnt = await deleteData(r.id);
+            result.deleted.raw += cnt;
+          } catch (e) {
+            result.errors.push(`raw ${r.id}: ${String(e)}`);
+          }
+        }
+      } catch (e) { result.errors.push(`listByPrefix raw: ${String(e)}`); }
       // legacy 묶음
       try { result.deleted.legacy = await deleteData(KEY_LIST_OLD); } catch (e) { result.errors.push(`legacy: ${String(e)}`); }
       // last 자동 저장 슬롯
@@ -200,7 +241,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: 'id 파라미터 필요' }, { status: 400 });
     }
 
-    // 1) 새 방식: 개별 키 삭제 시도
+    // 1) 새 방식: 개별 키 삭제 시도 (메인 + raw 둘 다)
     let deletedCount = 0;
     let individualError: string | null = null;
     try {
@@ -208,6 +249,12 @@ export async function DELETE(request: Request) {
     } catch (e) {
       individualError = String(e);
       console.error('[diagnoses DELETE] 개별 키 삭제 실패:', id, e);
+    }
+    let rawDeletedCount = 0;
+    try {
+      rawDeletedCount = await deleteData(`${KEY_RAW_PREFIX}${id}`);
+    } catch (e) {
+      console.error('[diagnoses DELETE] raw 키 삭제 실패:', id, e);
     }
 
     // 2) 옛날 묶음 키에서도 삭제 (마이그레이션 안 된 거).
@@ -234,7 +281,7 @@ export async function DELETE(request: Request) {
       return NextResponse.json({ error: individualError, oldRewriteError }, { status: 500 });
     }
 
-    return NextResponse.json({ ok: true, deleted: id, deletedCount, oldRemoved, oldRewriteError });
+    return NextResponse.json({ ok: true, deleted: id, deletedCount, rawDeletedCount, oldRemoved, oldRewriteError });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

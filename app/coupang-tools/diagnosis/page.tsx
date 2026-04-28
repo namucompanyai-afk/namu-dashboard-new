@@ -398,23 +398,23 @@ export default function DiagnosisPage() {
         includeInTrend,
         adFileName: uploads.adCampaign?.fileName,
         sellerFileName: uploads.salesInsight?.fileName,
-        adRows: rawAdCampaign,
-        sellerStats: rawSalesInsight,
+        // raw 는 메인 row 에 박지 않음 — 별도 type='raw' POST 로 분리 저장 (Vercel 4.5MB body limit 회피)
+        adRows: [],
+        sellerStats: [],
         periodStartDate: adPeriod.startDate,
         periodEndDate: adPeriod.endDate,
         periodDays: adPeriod.days,
         sellerPeriodDays: adPeriod.days,
-        savedAt: new Date().toISOString(),  // frozen view 표시용 타임스탬프
+        savedAt: new Date().toISOString(),
         summary: diagnosisResult.summary,
-        // products 전체 (optionDetails 포함) — 점 클릭 시 그대로 복원
         products: diagnosisResult.products,
-        // diagnosisResult 의 부속 정보도 frozen view 복원에 필요
         unmatched: diagnosisResult.unmatched,
         periodValidation: diagnosisResult.periodValidation,
         period: diagnosisResult.period,
         marginSnapshot,
       }
 
+      // 1차: 메인 row 저장 (raw 제외 → 가벼움)
       const res = await fetch('/api/coupang-diagnoses', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -422,6 +422,23 @@ export default function DiagnosisPage() {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = await res.json()
+      const newId = json?.id
+
+      // 2차: raw 별도 row 저장 (있으면). 실패해도 frozen view 는 메인만으로 동작 → 경고만 출력.
+      if (newId && (rawAdCampaign.length > 0 || rawSalesInsight.length > 0)) {
+        try {
+          const rawRes = await fetch('/api/coupang-diagnoses', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'raw', id: newId, adRows: rawAdCampaign, sellerStats: rawSalesInsight }),
+          })
+          if (!rawRes.ok) {
+            console.warn(`[save] raw 저장 실패 (HTTP ${rawRes.status}) — frozen view 는 정상 동작`)
+          }
+        } catch (e) {
+          console.warn('[save] raw 저장 예외 — frozen view 는 정상 동작:', e)
+        }
+      }
 
       // optimistic 업데이트: GET list 왕복 생략
       // 서버 POST 와 동일한 충돌 규칙으로 기존 항목 교체/추가
