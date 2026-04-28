@@ -674,8 +674,8 @@ export default function DiagnosisPage() {
           </div>
         )}
 
-        {/* 광고 기간 안내 — 광고 업로드되면 큰 배너로 표시 */}
-        {adPeriod && rawSalesInsight.length === 0 && (
+        {/* 광고 기간 안내 — LIVE 모드에서 광고 업로드 후 SELLER 미업로드 시. frozen view 일 땐 숨김 */}
+        {!loadedSnapshot && adPeriod && rawSalesInsight.length === 0 && (
           <div className="mb-6 rounded-lg border-2 border-blue-400 bg-blue-50 p-5">
             <div className="flex items-center gap-3 mb-3">
               <span className="text-2xl">📅</span>
@@ -697,8 +697,8 @@ export default function DiagnosisPage() {
           </div>
         )}
 
-        {/* 데이터 부족 안내 */}
-        {marginMaster && !diagnosisResult && (
+        {/* 데이터 부족 안내 — frozen view (loadedSnapshot) 일 땐 baseResult 가 채워지므로 안내 미노출 */}
+        {marginMaster && !baseResult && (
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-5 text-sm text-gray-700">
             진단을 실행하려면 다음 3개 엑셀이 추가로 필요합니다:
             <ul className="list-disc ml-6 mt-2 space-y-1">
@@ -709,8 +709,8 @@ export default function DiagnosisPage() {
           </div>
         )}
 
-        {/* 진단 결과 */}
-        {diagnosisResult && (
+        {/* 진단 결과 — frozen view 또는 LIVE */}
+        {baseResult && (
           <>
             {/* 저장 버튼 + 보기 모드 토글 */}
             <div className="mb-4 flex items-center justify-between rounded-lg border border-gray-200 bg-white p-3">
@@ -747,7 +747,7 @@ export default function DiagnosisPage() {
             </div>
 
             {/* 상품 필터 드롭다운 */}
-            {diagnosisResult.products.length > 0 && (
+            {baseResult.products.length > 0 && (
               <div className="mb-4 flex items-center gap-2">
                 <span className="text-sm text-gray-600">📦 상품:</span>
                 <select
@@ -755,8 +755,8 @@ export default function DiagnosisPage() {
                   onChange={e => setSelectedAlias(e.target.value)}
                   className="rounded border border-gray-300 px-3 py-1.5 text-sm bg-white focus:border-orange-400 focus:outline-none min-w-[280px]"
                 >
-                  <option value="__ALL__">전체 ({diagnosisResult.products.length}개)</option>
-                  {[...diagnosisResult.products]
+                  <option value="__ALL__">전체 ({baseResult.products.length}개)</option>
+                  {[...baseResult.products]
                     .sort((a, b) => a.alias.localeCompare(b.alias))
                     .map(p => (
                       <option key={p.alias} value={p.alias}>
@@ -777,7 +777,7 @@ export default function DiagnosisPage() {
 
             {/* 요약 KPI */}
             <SummarySection
-              result={displayResult || diagnosisResult}
+              result={displayResult || baseResult}
               viewMode={viewMode}
               prevSummary={prevSummary}
               periodStart={loadedSnapshot ? loadedSnapshot.periodStartDate : adPeriod?.startDate}
@@ -790,13 +790,13 @@ export default function DiagnosisPage() {
               analyses={savedAnalyses}
               onPointClick={handleLoadAnalysis}
               selectedAlias={selectedAlias}
-              liveResult={displayResult || diagnosisResult}
+              liveResult={displayResult || baseResult}
               liveAdPeriod={adPeriod}
             />
 
             {/* 기간 검증 배너 */}
             {(() => {
-              const v = diagnosisResult.periodValidation
+              const v = baseResult.periodValidation
               const ratioPct = (v.ratio * 100).toFixed(0)
               const minPct = (v.normalRange.min * 100).toFixed(0)
               const maxPct = (v.normalRange.max * 100).toFixed(0)
@@ -835,13 +835,13 @@ export default function DiagnosisPage() {
             })()}
 
             {/* 매칭 누락 경고 */}
-            {diagnosisResult.unmatched.optionCount > 0 && (
+            {baseResult.unmatched.optionCount > 0 && (
               <div className="mb-6 rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-sm">
                 <strong className="text-yellow-700">⚠ 매칭 누락:</strong>{' '}
                 <span className="text-gray-700">
-                  마진 마스터에 등록되지 않은 옵션 {diagnosisResult.unmatched.optionCount}개 /
-                  매출 {formatKRW(diagnosisResult.unmatched.sellerRevenue)} /
-                  광고비 {formatKRW(diagnosisResult.unmatched.adCost)}
+                  마진 마스터에 등록되지 않은 옵션 {baseResult.unmatched.optionCount}개 /
+                  매출 {formatKRW(baseResult.unmatched.sellerRevenue)} /
+                  광고비 {formatKRW(baseResult.unmatched.adCost)}
                 </span>
               </div>
             )}
@@ -851,22 +851,22 @@ export default function DiagnosisPage() {
               <FilterChip
                 active={verdictFilter === 'all'}
                 onClick={() => setVerdictFilter('all')}
-                label={`전체 (${diagnosisResult.products.length})`}
+                label={`전체 (${baseResult.products.length})`}
               />
               <FilterChip
                 active={verdictFilter === 'profitable'}
                 onClick={() => setVerdictFilter('profitable')}
-                label={`🟢 흑자 (${diagnosisResult.summary.counts.profitable})`}
+                label={`🟢 흑자 (${baseResult.summary.counts.profitable})`}
               />
               <FilterChip
                 active={verdictFilter === 'trap'}
                 onClick={() => setVerdictFilter('trap')}
-                label={`🟡 함정 (${diagnosisResult.summary.counts.trap})`}
+                label={`🟡 함정 (${baseResult.summary.counts.trap})`}
               />
               <FilterChip
                 active={verdictFilter === 'structural_loss'}
                 onClick={() => setVerdictFilter('structural_loss')}
-                label={`🔴 적자 (${diagnosisResult.summary.counts.structural_loss})`}
+                label={`🔴 적자 (${baseResult.summary.counts.structural_loss})`}
               />
             </div>
 
@@ -874,7 +874,7 @@ export default function DiagnosisPage() {
             <ProductScannerTable products={filteredProducts} />
 
             {/* 마진 마스터 미매칭 옵션 (광고비 누수) */}
-            <UnmatchedAdOptionsSection result={diagnosisResult} />
+            <UnmatchedAdOptionsSection result={baseResult} />
           </>
         )}
       </div>
