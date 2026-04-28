@@ -127,6 +127,8 @@ export interface ProductDiagnosis {
   crossSellRate: number | null
   /** 광고 의존도 = adRevenue / revenue */
   adDependency: number
+  /** 별칭 단위 BEP ROAS (배율, 예: 3.06). 옵션별 bepRoas 를 광고매출 가중평균. 광고매출 0 이면 매출 가중평균 fallback */
+  bepRoas: number | null
 
   // ── 판정 ──
   verdict: VerdictCode
@@ -538,6 +540,25 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
     // 봉투 개수 오름차순 정렬
     optionDetails.sort((a, b) => a.bagCount - b.bagCount || a.optionName.localeCompare(b.optionName))
 
+    // 별칭 단위 BEP ROAS — 광고매출 가중평균. 광고매출 0 인 별칭은 매출(판매) 가중평균 fallback
+    let bepRoas: number | null = null
+    {
+      let wSum = 0, wTotal = 0
+      for (const o of optionDetails) {
+        if (o.bepRoas == null || !Number.isFinite(o.bepRoas)) continue
+        const w = o.adRevenue
+        if (w > 0) { wSum += o.bepRoas * w; wTotal += w }
+      }
+      if (wTotal === 0) {
+        for (const o of optionDetails) {
+          if (o.bepRoas == null || !Number.isFinite(o.bepRoas)) continue
+          const w = o.revenue
+          if (w > 0) { wSum += o.bepRoas * w; wTotal += w }
+        }
+      }
+      if (wTotal > 0) bepRoas = wSum / wTotal
+    }
+
     products.push({
       alias: g.alias,
       exposureIds: Array.from(g.exposureIds),
@@ -562,6 +583,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       adRoasCamp,
       crossSellRate,
       adDependency,
+      bepRoas,
       verdict,
       verdictLabel,
       optionDetails,

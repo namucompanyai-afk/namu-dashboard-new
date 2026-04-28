@@ -1617,8 +1617,26 @@ function ChannelDistribution({ options }: { options?: { channel?: string }[] }) 
   )
 }
 
-type SortKey = 'alias' | 'revenue' | 'adCost' | 'adRevenue' | 'organicRevenue' | 'adNetProfit' | 'totalNetProfit' | 'marginRate' | 'adRoasAttr' | 'verdict'
+type SortKey = 'alias' | 'revenue' | 'adCost' | 'adRevenue' | 'organicRevenue' | 'adNetProfit' | 'totalNetProfit' | 'marginRate' | 'bepRoas' | 'adRoasAttr' | 'gap' | 'verdict'
 type SortDir = 'asc' | 'desc'
+
+// gap_pp = ROAS(%) − BEP_ROAS(배율) × 100. ±5%p 이내 노랑 (광고 ON/OFF 경계). 광고 미집행이면 null.
+function computeGapPp(adRoasAttr: number | null | undefined, bepRoasRatio: number | null | undefined): number | null {
+  if (adRoasAttr == null || !Number.isFinite(adRoasAttr)) return null
+  if (bepRoasRatio == null || !Number.isFinite(bepRoasRatio)) return null
+  return adRoasAttr - bepRoasRatio * 100
+}
+function gapToneClass(g: number | null): string {
+  if (g == null) return 'text-gray-400'
+  if (g >= 5) return 'text-green-700'
+  if (g <= -5) return 'text-red-700'
+  return 'text-amber-600'
+}
+function formatGap(g: number | null): string {
+  if (g == null) return '–'
+  const sign = g > 0 ? '+' : ''
+  return `${sign}${g.toFixed(0)}%p`
+}
 
 function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
   const [sortKey, setSortKey] = useState<SortKey>('totalNetProfit')
@@ -1627,10 +1645,17 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
 
   const sortedProducts = useMemo(() => {
     const arr = [...products]
+    // gap_pp = adRoasAttr(%) − bepRoas(배율) × 100. 둘 중 하나라도 없으면 정렬 시 가장 뒤로
+    const gapOf = (p: any) => {
+      if (p.adRoasAttr == null || p.bepRoas == null) return Number.NEGATIVE_INFINITY
+      return p.adRoasAttr - p.bepRoas * 100
+    }
     arr.sort((a: any, b: any) => {
       let av: any, bv: any
       if (sortKey === 'alias') { av = a.alias; bv = b.alias }
       else if (sortKey === 'verdict') { av = a.verdict; bv = b.verdict }
+      else if (sortKey === 'gap') { av = gapOf(a); bv = gapOf(b) }
+      else if (sortKey === 'bepRoas') { av = a.bepRoas ?? Number.NEGATIVE_INFINITY; bv = b.bepRoas ?? Number.NEGATIVE_INFINITY }
       else { av = a[sortKey] ?? 0; bv = b[sortKey] ?? 0 }
 
       if (typeof av === 'string') {
@@ -1706,13 +1731,15 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                   <span className="ml-1 text-orange-500">{sortDir === 'desc' ? '▼' : '▲'}</span>
                 )}
               </th>
-              <SortHeader k="adCost" label="광고비" />
+              <SortHeader k="adCost" label="광고비 (VAT)" />
               <SortHeader k="adRevenue" label="광고매출" />
               <SortHeader k="organicRevenue" label="오가닉매출" />
               <SortHeader k="adNetProfit" label="광고손익" />
               <SortHeader k="totalNetProfit" label="순이익" />
               <SortHeader k="marginRate" label="마진율" />
+              <SortHeader k="bepRoas" label="BEP ROAS" />
               <SortHeader k="adRoasAttr" label="ROAS" />
+              <SortHeader k="gap" label="갭" />
               <SortHeader k="verdict" label="판정" align="left" />
             </tr>
           </thead>
@@ -1759,9 +1786,20 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                     <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap min-w-[60px]">
                       {(p.marginRate * 100).toFixed(1)}%
                     </td>
+                    <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap min-w-[70px] text-gray-600">
+                      {p.bepRoas != null ? `${(p.bepRoas * 100).toFixed(0)}%` : '–'}
+                    </td>
                     <td className="px-3 py-3 text-right font-mono text-xs whitespace-nowrap min-w-[60px]">
                       {p.adRoasAttr ? `${p.adRoasAttr.toFixed(0)}%` : '–'}
                     </td>
+                    {(() => {
+                      const g = computeGapPp(p.adRoasAttr, p.bepRoas)
+                      return (
+                        <td className={`px-3 py-3 text-right font-mono text-xs font-semibold whitespace-nowrap min-w-[70px] ${gapToneClass(g)}`}>
+                          {formatGap(g)}
+                        </td>
+                      )
+                    })()}
                     <td className={`px-3 py-3 ${style.text} text-xs font-medium whitespace-nowrap`}>
                       {style.dot} {style.label}
                     </td>
@@ -1799,9 +1837,20 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                         <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap min-w-[60px]">
                           {(opt.marginRate * 100).toFixed(1)}%
                         </td>
+                        <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap min-w-[70px] text-gray-600">
+                          {opt.bepRoas != null ? `${(opt.bepRoas * 100).toFixed(0)}%` : '–'}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap min-w-[60px]">
                           {opt.adRoasAttr ? `${opt.adRoasAttr.toFixed(0)}%` : '–'}
                         </td>
+                        {(() => {
+                          const g = computeGapPp(opt.adRoasAttr, opt.bepRoas)
+                          return (
+                            <td className={`px-3 py-2 text-right font-mono text-[11px] font-semibold whitespace-nowrap min-w-[70px] ${gapToneClass(g)}`}>
+                              {formatGap(g)}
+                            </td>
+                          )
+                        })()}
                         <td className={`px-3 py-2 ${optStyle.text} text-[11px] whitespace-nowrap`}>
                           {optStyle.dot} {optStyle.label}
                         </td>
