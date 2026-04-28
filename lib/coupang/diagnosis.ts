@@ -217,6 +217,12 @@ export interface DiagnosisResult {
     totalAdCost: number
     totalMargin: number
     totalNetProfit: number
+    /** 총 판매 건수 (매칭 옵션만) */
+    totalSold: number
+    /** 광고 14일 판매 건수 (매칭 옵션만) */
+    totalAdSold: number
+    /** 오가닉 판매 건수 = totalSold − totalAdSold */
+    totalOrganicSold: number
     marginRate: number
     adRoasAttr: number | null
     adRoasCamp: number | null
@@ -235,6 +241,8 @@ export interface DiagnosisResult {
     adCost: number
     /** 옵션 수 */
     optionCount: number
+    /** 매칭 옵션 가중평균 마진율을 미매칭 매출에 곱해 추정한 마진 (KPI 합산에 이미 반영됨) */
+    estimatedMargin: number
     /** 광고비가 발생한 미매칭 옵션의 옵션ID 별 breakdown — 광고비 큰 순 */
     adOptions: UnmatchedAdOption[]
   }
@@ -397,13 +405,16 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
 
     const seller = sellerByOpt.get(optId)
     if (seller) {
-      g.revenue += seller.revenue
+      // 매출 = 판매수 × 마진 마스터 실판매가 (정가 기준 표준화)
+      const actualPrice = getActualPrice(optId) ?? marginRow.actualPrice ?? 0
+      const sellerRev = seller.quantity * actualPrice
+      g.revenue += sellerRev
       g.sold += seller.quantity
       // 마진 = 수량 × 옵션의 순이익
       const netProfit = marginRow.netProfit ?? 0
       g.totalMargin += seller.quantity * netProfit
       // 옵션별
-      optAcc.revenue += seller.revenue
+      optAcc.revenue += sellerRev
       optAcc.sold += seller.quantity
       optAcc.totalMargin += seller.quantity * netProfit
     }
@@ -594,19 +605,24 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   products.sort((a, b) => b.totalNetProfit - a.totalNetProfit)
 
   // 6) summary
-  // ── KPI 광고비/광고매출/캠페인매출은 "쿠팡 청구 기준" raw 합산으로 정의 (광고 분석 페이지와 동일).
-  //    옵션 매칭 안 된 row 도 포함해야 실제 청구액과 일치 → 순이익이 실제보다 부풀려지는 문제 해소.
-  //    옵션별/별칭별 g.adCost 등은 매칭 필수 그대로 유지하므로 옵션 카드 광고비는 변경 없음.
+  // ── 새 공식 (KPI 8개 카드 기준):
+  //    총 매출    = Σ (SELLER 옵션별 판매수 × 마진M 실판매가) — 매칭 옵션만 (미매칭 제외)
+  //    광고 매출  = Σ (광고 14일 판매수 × 마진M 실판매가) — 매칭 옵션만
+  //    오가닉    = 총 매출 − 광고 매출
+  //    광고비    = Σ 쿠팡 광고비 × 1.1 (raw, 매칭 무관 — 청구 기준)
+  //    총 마진   = Σ (SELLER 판매수 × 옵션 건당순이익) — 매칭 옵션만
+  //    순이익    = 총 마진 − 광고비
+  //    ROAS     = 광고 매출 / 광고비 × 100
+  // products[].revenue / .adRevenue 는 모두 위 정의로 누적되므로 sum 만 하면 됨.
   const totalRevenue = sum(products, 'revenue')
-  const totalAdCost = adRows.reduce((s, r) => s + (r.adCost || 0), 0) * AD_VAT_MULTIPLIER
-  const totalAdRevenue = adRows.reduce((s, r) => s + (r.revenue14d || 0), 0)
-  // 광고 분석 페이지와 동일하게 totalCampaignRevenue 도 raw 합산 (= 광고 row 의 14일 전환매출 합).
-  // 진단 옵션별 g.campaignRevenue 와 같은 정의이지만, 마진 매칭 필터 거치지 않은 raw 합산이라
-  // 둘이 정확히 일치 (현재 진단 옵션별은 if(adOptionId) 가드 통과한 row 만 포함하므로
-  // adOptionId 빈 row 광고비를 가진 분량 만큼 살짝 적게 잡힘. 새 정의는 그것까지 포함).
-  const totalCampaignRevenue = totalAdRevenue
+  const totalAdRevenue = sum(products, 'adRevenue')
+  const totalSold = sum(products, 'sold')
+  const totalAdSold = sum(products, 'adSold')
   const totalOrganicRevenue = totalRevenue - totalAdRevenue
+  const totalOrganicSold = totalSold - totalAdSold
   const totalMargin = sum(products, 'totalMargin')
+  const totalAdCost = adRows.reduce((s, r) => s + (r.adCost || 0), 0) * AD_VAT_MULTIPLIER
+  const totalCampaignRevenue = adRows.reduce((s, r) => s + (r.revenue14d || 0), 0)
   const totalNetProfit = totalMargin - totalAdCost
   const marginRateOverall = totalRevenue > 0 ? totalMargin / totalRevenue : 0
   const adRoasAttrOverall = totalAdCost > 0 ? (totalAdRevenue / totalAdCost) * 100 : null
@@ -629,6 +645,9 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       totalAdCost,
       totalMargin,
       totalNetProfit,
+      totalSold,
+      totalAdSold,
+      totalOrganicSold,
       marginRate: marginRateOverall,
       adRoasAttr: adRoasAttrOverall,
       adRoasCamp: adRoasCampOverall,
@@ -643,6 +662,8 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       sellerRevenue: unmatchedSellerRev,
       adCost: unmatchedAdCost,
       optionCount: unmatchedOpts.size,
+      // 새 KPI 공식은 미매칭 옵션을 합산에서 제외 — 추정 마진 0 으로 명시
+      estimatedMargin: 0,
       adOptions: (() => {
         const out: UnmatchedAdOption[] = []
         // 광고비 발생한 미매칭 옵션만 추출 (SELLER만 누락은 별도 의미라 제외)

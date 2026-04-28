@@ -441,15 +441,22 @@ export default function DiagnosisPage() {
         return
       }
     }
+    // 옛 스냅샷은 periodStartDate/EndDate 가 비어있을 수 있음 — weekKey + periodDays 로 보정
+    const days = full.periodDays || 7
+    const startStr = full.periodStartDate || full.weekKey || null
+    let endStr: string | null = full.periodEndDate || null
+    if (!endStr && startStr) {
+      const sMs = new Date(startStr).getTime()
+      if (Number.isFinite(sMs)) {
+        const e = new Date(sMs + (days - 1) * 86400000)
+        endStr = `${e.getFullYear()}-${String(e.getMonth()+1).padStart(2,'0')}-${String(e.getDate()).padStart(2,'0')}`
+      }
+    }
     setAdCampaign(full.adRows, {
       fileName: full.adFileName || full.label,
       uploadedAt: full.createdAt || new Date().toISOString(),
       rowCount: full.adRows.length,
-    }, full.periodStartDate && full.periodEndDate ? {
-      startDate: full.periodStartDate,
-      endDate: full.periodEndDate,
-      days: full.periodDays || 30,
-    } : null)
+    }, startStr && endStr ? { startDate: startStr, endDate: endStr, days } : null)
     setSalesInsight(full.sellerStats, {
       fileName: full.sellerFileName || full.label,
       uploadedAt: full.createdAt || new Date().toISOString(),
@@ -1201,69 +1208,36 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
   const cmpMargin = showCompare ? compare(adj(s.totalMargin), adj(prevSummary.totalMargin)) : null
   const cmpProfit = showCompare ? compare(adj(s.totalNetProfit), adj(prevSummary.totalNetProfit)) : null
 
+  // 새 KPI 8장 (4×2):
+  //  [1행]  총 매출 · 광고 매출 · 오가닉 매출 · 기간
+  //  [2행]  광고비 (+VAT) · 총 마진 · 순이익 · ROAS (귀속)
+  const adShare = s.totalRevenue > 0 ? (s.totalAdRevenue / s.totalRevenue) * 100 : 0
+  const organicShare = s.totalRevenue > 0 ? (s.totalOrganicRevenue / s.totalRevenue) * 100 : 0
+  const fmtCount = (n: number) => `${Math.round(adj(n)).toLocaleString('ko-KR')}건`
+
   return (
     <div className="mb-6">
-      {/* 1행: 매출 분해 */}
+      {/* 1행: 매출 분해 + 기간 */}
       <div className="grid grid-cols-4 gap-4 mb-3">
         <KpiCard
           label="총 매출"
           value={formatMan(adj(s.totalRevenue))}
-          sub={`${s.productCount}개 상품`}
+          sub={fmtCount(s.totalSold ?? 0)}
           compare={cmpRevenue}
-          // 매출 ↑ 좋음
           compareGood="up"
         />
         <KpiCard
-          label="광고 귀속 매출"
+          label="광고 매출"
           value={formatMan(adj(s.totalAdRevenue))}
-          sub={`${(s.adDependency*100).toFixed(0)}%`}
+          sub={`${fmtCount(s.totalAdSold ?? 0)} (${adShare.toFixed(1)}%)`}
           compare={cmpAdRev}
           compareGood="up"
         />
         <KpiCard
           label="오가닉 매출"
           value={formatMan(adj(s.totalOrganicRevenue))}
-          sub={`${((1-s.adDependency)*100).toFixed(0)}%`}
+          sub={`${fmtCount(s.totalOrganicSold ?? 0)} (${organicShare.toFixed(1)}%)`}
           compare={cmpOrgRev}
-          compareGood="up"
-        />
-        <KpiCard
-          label="ROAS (귀속)"
-          value={formatPct(s.adRoasAttr)}
-          sub="실판매가 기준"
-          compare={cmpRoas}
-          compareGood="up"
-        />
-      </div>
-      {/* 2행: 손익 */}
-      <div className="grid grid-cols-4 gap-4">
-        <KpiCard
-          label="광고비 (VAT)"
-          value={formatMan(adj(s.totalAdCost))}
-          sub={(() => {
-            const u = (result as any).unmatched?.adCost
-            if (u && Number.isFinite(u) && u > 0) {
-              return `쿠팡 청구 기준 · 매칭 누락 ${formatMan(adj(u))} 포함`
-            }
-            return '쿠팡 청구 기준'
-          })()}
-          accent="orange"
-          compare={cmpAdCost}
-          // 광고비 ↓ 좋음
-          compareGood="down"
-        />
-        <KpiCard
-          label="총 마진"
-          value={formatMan(adj(s.totalMargin))}
-          sub={`${(s.marginRate*100).toFixed(1)}%`}
-          compare={cmpMargin}
-          compareGood="up"
-        />
-        <KpiCard
-          label="순이익 (= 마진 − 광고비)"
-          value={formatMan(adj(s.totalNetProfit), true)}
-          accent={adj(s.totalNetProfit) >= 0 ? 'green' : 'red'}
-          compare={cmpProfit}
           compareGood="up"
         />
         <KpiCard
@@ -1278,6 +1252,45 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd 
             if (viewMode === 'monthly') return days !== 30 ? `실제: ${days}일` : scaleNote
             return `${days}일 · ${scaleNote}`
           })()}
+        />
+      </div>
+      {/* 2행: 손익 + ROAS */}
+      <div className="grid grid-cols-4 gap-4">
+        <KpiCard
+          label="광고비 (+VAT)"
+          value={formatMan(adj(s.totalAdCost))}
+          sub={(() => {
+            const u = (result as any).unmatched?.adCost
+            if (u && Number.isFinite(u) && u > 0) {
+              return `쿠팡 청구 기준 · 매칭 누락 ${formatMan(adj(u))} 포함`
+            }
+            return '쿠팡 청구 기준'
+          })()}
+          accent="orange"
+          compare={cmpAdCost}
+          compareGood="down"
+        />
+        <KpiCard
+          label="총 마진"
+          value={formatMan(adj(s.totalMargin))}
+          sub={`마진율 ${(s.marginRate*100).toFixed(1)}%`}
+          compare={cmpMargin}
+          compareGood="up"
+        />
+        <KpiCard
+          label="순이익"
+          value={formatMan(adj(s.totalNetProfit), true)}
+          sub="총 마진 − 광고비"
+          accent={adj(s.totalNetProfit) >= 0 ? 'green' : 'red'}
+          compare={cmpProfit}
+          compareGood="up"
+        />
+        <KpiCard
+          label="ROAS (귀속)"
+          value={formatPct(s.adRoasAttr)}
+          sub="실판매가 기준"
+          compare={cmpRoas}
+          compareGood="up"
         />
       </div>
     </div>
@@ -1995,12 +2008,15 @@ function LastUpdateBadge({ analyses, adPeriod }: {
       .sort((a, b) => (b.monthKey || '').localeCompare(a.monthKey || ''))[0]
   }, [analyses])
 
-  // 표시할 정보 결정 — 누적 데이터 있으면 그걸로, 없으면 현재 진단 광고 기간
+  // 표시할 정보 결정 — store 의 adPeriod 우선 (점 클릭으로 로드된 분석 또는 라이브 업로드).
+  // adPeriod 없을 때만 누적 데이터 최신점으로 fallback.
   let label = ''
   let detail = ''
 
-  if (latestWeekly || latestMonthly) {
-    // 더 최근 종료일 사용
+  if (adPeriod) {
+    label = '현재 보고 있는 분석'
+    detail = `${adPeriod.startDate} ~ ${adPeriod.endDate} (${adPeriod.days}일)`
+  } else if (latestWeekly || latestMonthly) {
     const wEnd = latestWeekly?.periodEndDate || ''
     const mEnd = latestMonthly?.periodEndDate || ''
     const useWeekly = wEnd >= mEnd
@@ -2012,9 +2028,6 @@ function LastUpdateBadge({ analyses, adPeriod }: {
       label = '최신 월별 데이터'
       detail = `${latestMonthly.periodStartDate} ~ ${latestMonthly.periodEndDate}`
     }
-  } else if (adPeriod) {
-    label = '현재 진단 데이터'
-    detail = `${adPeriod.startDate} ~ ${adPeriod.endDate} (${adPeriod.days}일)`
   } else {
     return null
   }
