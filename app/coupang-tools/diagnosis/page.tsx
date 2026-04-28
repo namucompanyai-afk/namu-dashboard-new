@@ -1742,7 +1742,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                   <span className="ml-1 text-orange-500">{sortDir === 'desc' ? '▼' : '▲'}</span>
                 )}
               </th>
-              <SortHeader k="adCost" label="광고비 (VAT)" />
+              <SortHeader k="adCost" label="광고비 (+VAT)" />
               <SortHeader k="adRevenue" label="광고매출" />
               <SortHeader k="organicRevenue" label="오가닉매출" />
               <SortHeader k="adNetProfit" label="광고손익" />
