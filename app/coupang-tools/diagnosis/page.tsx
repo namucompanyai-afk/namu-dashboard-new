@@ -882,7 +882,7 @@ export default function DiagnosisPage() {
             )}
 
             {/* 요약 KPI */}
-            <SummarySection result={displayResult || diagnosisResult} viewMode={viewMode} prevSummary={prevSummary} />
+            <SummarySection result={displayResult || diagnosisResult} viewMode={viewMode} prevSummary={prevSummary} periodStart={adPeriod?.startDate} periodEnd={adPeriod?.endDate} />
 
             {/* 월별 추이 그래프 */}
             <TrendChartSection
@@ -1147,10 +1147,27 @@ function UploadSlot(props: {
 
 type ViewMode = 'actual' | 'monthly'
 
-function SummarySection({ result, viewMode, prevSummary }: {
+// "2026-04-19" ~ "2026-04-25" → "2026.04.19 ~ 04.25" (같은 달이면 뒤는 MM.DD).
+// 다른 달/년은 풀 포맷. 입력 누락이면 null.
+function formatPeriodRange(start?: string | null, end?: string | null): string | null {
+  if (!start || !end) return null
+  const s = new Date(start), e = new Date(end)
+  if (isNaN(s.getTime()) || isNaN(e.getTime())) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const sy = s.getFullYear(), sm = s.getMonth()+1, sd = s.getDate()
+  const ey = e.getFullYear(), em = e.getMonth()+1, ed = e.getDate()
+  const startStr = `${sy}.${pad(sm)}.${pad(sd)}`
+  if (sy === ey && sm === em) return `${startStr} ~ ${pad(ed)}`
+  if (sy === ey) return `${startStr} ~ ${pad(em)}.${pad(ed)}`
+  return `${startStr} ~ ${ey}.${pad(em)}.${pad(ed)}`
+}
+
+function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd }: {
   result: DiagnosisResult
   viewMode: ViewMode
   prevSummary?: any  // 직전 동일 기간 요약 (있으면 화살표 표시)
+  periodStart?: string | null
+  periodEnd?: string | null
 }) {
   const s = result.summary
   const days = result.period.days
@@ -1251,8 +1268,16 @@ function SummarySection({ result, viewMode, prevSummary }: {
         />
         <KpiCard
           label="기간"
-          value={viewMode === 'monthly' ? '30일 환산' : `${days}일`}
-          sub={viewMode === 'monthly' && days !== 30 ? `실제: ${days}일` : (result.period.sellerScale !== 1 ? `SELLER ×${result.period.sellerScale.toFixed(2)}` : 'SELLER 동일기간')}
+          value={(() => {
+            if (viewMode === 'monthly') return '30일 환산'
+            const range = formatPeriodRange(periodStart, periodEnd)
+            return range || `${days}일`
+          })()}
+          sub={(() => {
+            const scaleNote = result.period.sellerScale !== 1 ? `SELLER ×${result.period.sellerScale.toFixed(2)}` : 'SELLER 동일기간'
+            if (viewMode === 'monthly') return days !== 30 ? `실제: ${days}일` : scaleNote
+            return `${days}일 · ${scaleNote}`
+          })()}
         />
       </div>
     </div>
