@@ -511,7 +511,7 @@ export default function DiagnosisPage() {
                   className="text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100"
                   title="저장된 분석 보기 종료 — 라이브 모드 (현재 업로드된 광고/SELLER 기준)"
                 >
-                  📌 라이브로 돌아가기
+                  📌 라이브 모드
                 </button>
               )}
               <button
