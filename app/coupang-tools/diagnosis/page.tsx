@@ -1,5 +1,4 @@
 'use client'
-import { hasCostMaster, setCostMaster } from '@/lib/coupang/costBook'
 
 /**
  * 쿠팡 수익 진단 페이지
@@ -17,7 +16,6 @@ import { hasCostMaster, setCostMaster } from '@/lib/coupang/costBook'
 import React, { useState, useMemo, useEffect } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
 import type { ProductDiagnosis, VerdictCode, DiagnosisResult, OptionDiagnosis } from '@/lib/coupang/diagnosis'
-import { diagnose } from '@/lib/coupang/diagnosis'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
@@ -70,6 +68,12 @@ export default function DiagnosisPage() {
   const [selectedAlias, setSelectedAlias] = useState<string>('__ALL__')
   const [autoLoading, setAutoLoading] = useState(true)
 
+  // ── 저장된 분석 보기 모드 (frozen view) ──
+  // 점 클릭 또는 자동 로드 시 setLoadedSnapshot 만 호출. store recomputeDiagnosis 우회.
+  // 저장 시점 summary/products/optionDetails/marginSnapshot 그대로 표시 — 마진M 갱신 영향 X.
+  const [loadedSnapshot, setLoadedSnapshot] = useState<any | null>(null)
+  const exitSnapshotView = () => setLoadedSnapshot(null)
+
   // Supabase에서 마스터 데이터 자동 로드 (마진 마스터 없으면)
   useEffect(() => {
     if (marginMaster) {
@@ -115,33 +119,18 @@ export default function DiagnosisPage() {
           setSavedAnalyses(listJson.diagnoses)
         }
 
-        // 가장 최근 주차 분석을 자동 로드
+        // 가장 최근 저장 분석을 frozen view 로 자동 로드 (재계산 없음)
         const all = listJson?.diagnoses || []
-        const weeklies = all
-          .filter((a: any) => a.weekKey && a._hasRaw)
-          .sort((a: any, b: any) => (b.weekKey || '').localeCompare(a.weekKey || ''))
-
-        const meta = weeklies[0]
-        let target: any = null
+        const sorted = all
+          .filter((a: any) => a.periodEndDate || a.weekKey || a.monthKey)
+          .sort((a: any, b: any) => (b.periodEndDate || b.weekKey || b.monthKey || '').localeCompare(a.periodEndDate || a.weekKey || a.monthKey || ''))
+        const meta = sorted[0]
         if (meta?.id) {
-          const itemRes = await fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`)
-          target = await itemRes.json()
-        }
-        if (target) {
-          setAdCampaign(target.adRows, {
-            fileName: target.adFileName || '저장된 분석',
-            uploadedAt: target.createdAt || new Date().toISOString(),
-            rowCount: target.adRows.length,
-          }, target.periodStartDate && target.periodEndDate ? {
-            startDate: target.periodStartDate,
-            endDate: target.periodEndDate,
-            days: target.periodDays || 30,
-          } : null)
-          setSalesInsight(target.sellerStats, {
-            fileName: target.sellerFileName || '저장된 분석',
-            uploadedAt: target.createdAt || new Date().toISOString(),
-            rowCount: target.sellerStats.length,
-          })
+          try {
+            const itemRes = await fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`)
+            const target = await itemRes.json()
+            if (target?.summary) setLoadedSnapshot(target)
+          } catch (e) { console.warn('자동 로드 실패:', e) }
         }
       } catch (err) {
         console.error('자동 로드 실패:', err)
@@ -157,20 +146,36 @@ export default function DiagnosisPage() {
   // ─────────────────────────────────────────────────────────────
   // 마이그레이션 useEffect는 savedAnalyses 선언 이후로 이동됨
 
-  // 필터된 상품 목록
+  // ── 화면 표시용 진단 결과: loadedSnapshot 우선, 없으면 라이브 diagnosisResult ──
+  // loadedSnapshot 는 저장 시점 summary/products/optionDetails 를 그대로 가짐 → frozen view.
+  const baseResult: DiagnosisResult | null = useMemo(() => {
+    if (loadedSnapshot?.summary) {
+      return {
+        products: (loadedSnapshot.products || []) as any,
+        summary: loadedSnapshot.summary,
+        period: { days: loadedSnapshot.periodDays || 7, sellerScale: 1 },
+        unmatched: loadedSnapshot.unmatched || { sellerRevenue: 0, adCost: 0, optionCount: 0, estimatedMargin: 0, adOptions: [] },
+        periodValidation: loadedSnapshot.periodValidation || { adRevenueRaw: 0, sellerRevenueRaw: 0, ratio: 0, status: 'ok', normalRange: { min: 0.4, max: 0.9 } },
+      } as any
+    }
+    return diagnosisResult
+  }, [loadedSnapshot, diagnosisResult])
+
+  // 필터된 상품 목록 (loadedSnapshot 또는 라이브)
   const filteredProducts = useMemo(() => {
-    if (!diagnosisResult) return []
-    if (verdictFilter === 'all') return diagnosisResult.products
-    return diagnosisResult.products.filter((p) => p.verdict === verdictFilter)
-  }, [diagnosisResult, verdictFilter])
+    const src = baseResult
+    if (!src) return []
+    if (verdictFilter === 'all') return src.products
+    return src.products.filter((p) => p.verdict === verdictFilter)
+  }, [baseResult, verdictFilter])
 
   // 상품별 필터 적용된 진단 결과 (KPI/그래프용)
   const displayResult = useMemo(() => {
-    if (!diagnosisResult) return null
-    if (selectedAlias === '__ALL__') return diagnosisResult
+    if (!baseResult) return null
+    if (selectedAlias === '__ALL__') return baseResult
 
-    const filtered = diagnosisResult.products.filter(p => p.alias === selectedAlias)
-    if (filtered.length === 0) return diagnosisResult
+    const filtered = baseResult.products.filter(p => p.alias === selectedAlias)
+    if (filtered.length === 0) return baseResult
 
     // 선택된 상품들의 합계로 summary 재계산
     const totalRevenue = filtered.reduce((s, p) => s + p.revenue, 0)
@@ -189,10 +194,10 @@ export default function DiagnosisPage() {
     for (const p of filtered) counts[p.verdict]++
 
     return {
-      ...diagnosisResult,
+      ...baseResult,
       products: filtered,
       summary: {
-        ...diagnosisResult.summary,
+        ...baseResult.summary,
         totalRevenue,
         totalAdRevenue,
         totalOrganicRevenue,
@@ -208,7 +213,7 @@ export default function DiagnosisPage() {
         counts,
       },
     }
-  }, [diagnosisResult, selectedAlias])
+  }, [baseResult, selectedAlias])
 
   // ─────────────────────────────────────────────────────────────
   // 진단 결과 자동 저장 (마지막 분석)
@@ -249,145 +254,7 @@ export default function DiagnosisPage() {
 
   // 명시 저장된 분석 목록
   const [savedAnalyses, setSavedAnalyses] = useState<any[]>([])
-  const [recalcing, setRecalcing] = useState(false)
-  const [recalcProgress, setRecalcProgress] = useState({ done: 0, total: 0 })
-
-  const handleRecalcAll = async () => {
-    if (!marginMaster) { alert('마진 엑셀을 먼저 업로드하세요'); return }
-    // 모듈 전역에 마진 마스터 다시 주입 (재계산 시 안전장치)
-    if (!hasCostMaster()) {
-      console.warn('[recalc] 모듈 전역 비어있음 - store에서 재주입')
-      setCostMaster(marginMaster as any)
-    }
-    if (!hasCostMaster()) {
-      alert('마진 마스터 로드 실패. 마진 엑셀을 다시 업로드해주세요.')
-      return
-    }
-    if (!confirm(`저장된 ${savedAnalyses.length}개 분석을 재계산합니다. 계속하시겠습니까?`)) return
-    
-    setRecalcing(true)
-    setRecalcProgress({ done: 0, total: savedAnalyses.length })
-    let success = 0
-    
-    for (let i = 0; i < savedAnalyses.length; i++) {
-      const meta = savedAnalyses[i]
-      try {
-        const itemRes = await fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`)
-        const item = await itemRes.json()
-        if (!item?.adRows?.length || !item?.sellerStats?.length) {
-          console.warn('[recalc] skip (no raw):', meta.label)
-          continue
-        }
-        // 저장된 sellerStats는 SalesInsightRow 형식(revenue90d/sales90d).
-        // diagnose()는 SellerStat 형식(totalRevenue/totalQuantity)을 기대하므로 변환.
-        const sellerStats = (item.sellerStats as any[]).map((s) => ({
-          optionId: s.optionId,
-          totalRevenue: s.revenue90d ?? s.totalRevenue ?? 0,
-          totalQuantity: s.sales90d ?? s.totalQuantity ?? 0,
-        }))
-        // sellerPeriodDays는 항상 periodDays를 우선 사용 (라이브 store 동작과 동일).
-        // 과거 잘못 저장된 sellerPeriodDays=30 값은 의도적으로 무시하여 마이그레이션 효과.
-        const result = diagnose({
-          sellerStats,
-          adRows: item.adRows,
-          periodDays: item.periodDays || 7,
-          sellerPeriodDays: item.periodDays || item.sellerPeriodDays || 7,
-        })
-        const products = result.products.map(p => ({
-          alias: p.alias, revenue: p.revenue, sold: p.sold,
-          adRevenue: p.adRevenue, adSold: p.adSold,
-          organicRevenue: p.organicRevenue, adCost: p.adCost,
-          campaignRevenue: p.campaignRevenue,
-          totalMargin: p.totalMargin, totalNetProfit: p.totalNetProfit,
-          adRoasAttr: p.adRoasAttr, adRoasCamp: p.adRoasCamp,
-          adDependency: p.adDependency,
-        }))
-        const updated = { ...item, products, summary: result.summary }
-        await fetch('/api/coupang-diagnoses', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'explicit', snapshot: updated }),
-        })
-        success++
-      } catch (err) {
-        console.error('[recalc] 실패:', meta.label, err)
-      }
-      setRecalcProgress({ done: i + 1, total: savedAnalyses.length })
-    }
-    
-    const listRes = await fetch('/api/coupang-diagnoses?type=list')
-    const listJson = await listRes.json()
-    if (listJson?.diagnoses) setSavedAnalyses(listJson.diagnoses)
-    
-    setRecalcing(false)
-    alert(`재계산 완료: ${success}/${savedAnalyses.length}`)
-  }
   const [showHistoryPanel, setShowHistoryPanel] = useState(false)
-
-  // 마이그레이션: products 필드 없는 분석 자동 채우기
-  const [migrationRun, setMigrationRun] = useState(false)
-  useEffect(() => {
-    return; if (migrationRun) return
-    if (!marginMaster) return
-    if (savedAnalyses.length === 0) return
-
-    const needsMigration = savedAnalyses.filter(a =>
-      a.adRows?.length > 0 && a.sellerStats?.length > 0 && (!a.products || a.products.some((p: any) => p.revenue == null))
-    )
-    if (needsMigration.length === 0) {
-      setMigrationRun(true)
-      return
-    }
-
-    setMigrationRun(true)
-    console.log(`[migration] ${needsMigration.length}개 분석에 products 필드 추가 중...`)
-
-    ;(async () => {
-      let successCount = 0
-      for (const a of needsMigration) {
-        try {
-          const sellerStats = (a.sellerStats as any[]).map((s) => ({
-            optionId: s.optionId,
-            totalRevenue: s.revenue90d ?? s.totalRevenue ?? 0,
-            totalQuantity: s.sales90d ?? s.totalQuantity ?? 0,
-          }))
-          const result = diagnose({
-            sellerStats,
-            adRows: a.adRows,
-            periodDays: a.periodDays || 7,
-            sellerPeriodDays: a.periodDays || a.sellerPeriodDays || 7,
-          })
-          const products = result.products.map(p => ({
-            alias: p.alias,
-            revenue: p.revenue,
-            sold: p.sold,
-            adRevenue: p.adRevenue,
-            adSold: p.adSold,
-            organicRevenue: p.organicRevenue,
-            adCost: p.adCost,
-            totalMargin: p.totalMargin,
-            totalNetProfit: p.totalNetProfit,
-            adRoasAttr: p.adRoasAttr,
-            adDependency: p.adDependency,
-          }))
-          const updated = { ...a, products }
-          await fetch('/api/coupang-diagnoses', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'explicit', snapshot: updated }),
-          })
-          successCount++
-        } catch (err) {
-          console.error('[migration] 실패:', a.label, err)
-        }
-      }
-      console.log(`[migration] ${successCount}/${needsMigration.length} 완료`)
-
-      const listRes = await fetch('/api/coupang-diagnoses?type=list')
-      const listJson = await listRes.json()
-      if (listJson?.diagnoses) setSavedAnalyses(listJson.diagnoses)
-    })()
-  }, [marginMaster, savedAnalyses, migrationRun])
 
   // 보기 모드: 실제 기간 / 월 환산
   const [viewMode, setViewMode] = useState<'actual' | 'monthly'>('actual')
@@ -419,49 +286,21 @@ export default function DiagnosisPage() {
     return candidates[0]?.summary
   }, [adPeriod, savedAnalyses])
 
-  // 저장된 분석 클릭 → 그 분석으로 로드
-  // list endpoint는 raw 데이터(adRows/sellerStats)를 빼고 메타만 반환하므로,
-  // raw가 없으면 ?type=item&id=... 으로 풀 데이터를 다시 가져온다.
+  // 저장된 분석 클릭 → frozen view 로 로드 (재계산 없이 저장 시점 데이터 그대로 표시)
+  // list endpoint 는 raw 빼고 메타/summary 만 반환 → summary 없으면 ?type=item&id 로 풀 가져옴
   const handleLoadAnalysis = async (a: any) => {
     let full = a
-    if (!a.adRows?.length || !a.sellerStats?.length) {
-      if (!a.id) {
-        alert('이 분석은 데이터가 손상되어 로드할 수 없습니다.')
-        return
-      }
+    if (!a.summary || !a.products) {
+      if (!a.id) { alert('이 분석은 ID가 없어 로드할 수 없습니다.'); return }
       try {
         const res = await fetch(`/api/coupang-diagnoses?type=item&id=${a.id}`)
         full = await res.json()
       } catch {
-        alert('분석 데이터를 불러오지 못했습니다.')
-        return
+        alert('분석 데이터를 불러오지 못했습니다.'); return
       }
-      if (!full?.adRows?.length || !full?.sellerStats?.length) {
-        alert('이 분석은 데이터가 손상되어 로드할 수 없습니다.')
-        return
-      }
+      if (!full?.summary) { alert('이 분석은 summary 가 없어 표시할 수 없습니다.'); return }
     }
-    // 옛 스냅샷은 periodStartDate/EndDate 가 비어있을 수 있음 — weekKey + periodDays 로 보정
-    const days = full.periodDays || 7
-    const startStr = full.periodStartDate || full.weekKey || null
-    let endStr: string | null = full.periodEndDate || null
-    if (!endStr && startStr) {
-      const sMs = new Date(startStr).getTime()
-      if (Number.isFinite(sMs)) {
-        const e = new Date(sMs + (days - 1) * 86400000)
-        endStr = `${e.getFullYear()}-${String(e.getMonth()+1).padStart(2,'0')}-${String(e.getDate()).padStart(2,'0')}`
-      }
-    }
-    setAdCampaign(full.adRows, {
-      fileName: full.adFileName || full.label,
-      uploadedAt: full.createdAt || new Date().toISOString(),
-      rowCount: full.adRows.length,
-    }, startStr && endStr ? { startDate: startStr, endDate: endStr, days } : null)
-    setSalesInsight(full.sellerStats, {
-      fileName: full.sellerFileName || full.label,
-      uploadedAt: full.createdAt || new Date().toISOString(),
-      rowCount: full.sellerStats.length,
-    })
+    setLoadedSnapshot(full)
     setShowHistoryPanel(false)
   }
 
@@ -528,6 +367,29 @@ export default function DiagnosisPage() {
         ? adPeriod.startDate
         : null
 
+      // 마진M 스냅샷: 이 분석에 등장한 옵션ID 한정 — frozen view 시 마스터 갱신 영향 없게
+      const marginSnapshot: Record<string, any> = {}
+      const masterRows = (marginMaster as any)?.marginRows || []
+      const masterByOptId = new Map(masterRows.map((r: any) => [String(r.optionId).trim(), r]))
+      const collectOptIds = new Set<string>()
+      for (const p of diagnosisResult.products) {
+        for (const oid of p.optionIds || []) collectOptIds.add(String(oid).trim())
+      }
+      for (const oid of collectOptIds) {
+        const r: any = masterByOptId.get(oid)
+        if (!r) continue
+        marginSnapshot[oid] = {
+          actualPrice: r.actualPrice ?? 0,
+          totalCost: r.totalCost ?? 0,
+          netProfit: r.netProfit ?? 0,
+          bepRoas: r.bepRoas ?? null,
+          alias: r.alias ?? '',
+          optionName: r.optionName ?? '',
+          kgPerBag: r.kgPerBag ?? 0,
+          channel: r.channel ?? '',
+        }
+      }
+
       const snapshot = {
         label: saveLabel,
         monthKey,
@@ -541,26 +403,16 @@ export default function DiagnosisPage() {
         periodStartDate: adPeriod.startDate,
         periodEndDate: adPeriod.endDate,
         periodDays: adPeriod.days,
-        // 라이브 store의 setAdCampaign이 sellerPeriodDays=period.days로 설정하므로
-        // 저장값도 동일하게 맞춰야 재계산 결과가 라이브와 일치.
         sellerPeriodDays: adPeriod.days,
+        savedAt: new Date().toISOString(),  // frozen view 표시용 타임스탬프
         summary: diagnosisResult.summary,
-        // 상품별 트렌드 그래프용 (별칭 필터 적용)
-        products: diagnosisResult.products.map(p => ({
-          alias: p.alias,
-          revenue: p.revenue,
-          sold: p.sold,
-          adRevenue: p.adRevenue,
-          adSold: p.adSold,
-          organicRevenue: p.organicRevenue,
-          adCost: p.adCost,
-          campaignRevenue: p.campaignRevenue,
-          totalMargin: p.totalMargin,
-          totalNetProfit: p.totalNetProfit,
-          adRoasAttr: p.adRoasAttr,
-          adRoasCamp: p.adRoasCamp,
-          adDependency: p.adDependency,
-        })),
+        // products 전체 (optionDetails 포함) — 점 클릭 시 그대로 복원
+        products: diagnosisResult.products,
+        // diagnosisResult 의 부속 정보도 frozen view 복원에 필요
+        unmatched: diagnosisResult.unmatched,
+        periodValidation: diagnosisResult.periodValidation,
+        period: diagnosisResult.period,
+        marginSnapshot,
       }
 
       const res = await fetch('/api/coupang-diagnoses', {
@@ -613,26 +465,36 @@ export default function DiagnosisPage() {
             </p>
           </div>
           <div className="flex items-end gap-3">
-            {/* 마지막 업데이트 데이터 */}
-            <LastUpdateBadge analyses={savedAnalyses} adPeriod={adPeriod} />
+            {/* 마지막 업데이트 데이터 (loadedSnapshot 우선 표시) */}
+            <LastUpdateBadge
+              analyses={savedAnalyses}
+              adPeriod={loadedSnapshot ? {
+                startDate: loadedSnapshot.periodStartDate || loadedSnapshot.weekKey || '',
+                endDate: loadedSnapshot.periodEndDate || '',
+                days: loadedSnapshot.periodDays || 7,
+              } : adPeriod}
+              snapshotMode={!!loadedSnapshot}
+              snapshotSavedAt={loadedSnapshot?.savedAt || loadedSnapshot?.createdAt}
+            />
 
             <div className="flex items-center gap-2">
+              {loadedSnapshot && (
+                <button
+                  onClick={exitSnapshotView}
+                  className="text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100"
+                  title="저장된 분석 보기 종료 — 라이브 모드 (현재 업로드된 광고/SELLER 기준)"
+                >
+                  📌 라이브로 돌아가기
+                </button>
+              )}
               <button
                 onClick={() => setShowHistoryPanel(!showHistoryPanel)}
                 className="text-sm px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
               >
                 📊 저장된 분석 ({savedAnalyses.length})
-                </button>
-                <button
-                  onClick={handleRecalcAll}
-                  disabled={recalcing || savedAnalyses.length === 0}
-                  className="ml-2 px-3 py-1 text-xs rounded border border-orange-300 text-orange-700 hover:bg-orange-50 disabled:opacity-50"
-                  title="저장된 모든 분석을 현재 마진 엑셀로 재계산"
-                >
-                  {recalcing ? `🔄 ${recalcProgress.done}/${recalcProgress.total}` : '🔄 전체 재계산'}
-                </button>
+              </button>
               <button
-                onClick={() => { if (confirm('모든 데이터를 초기화합니다.')) reset() }}
+                onClick={() => { if (confirm('모든 데이터를 초기화합니다.')) { setLoadedSnapshot(null); reset() } }}
                 className="text-sm px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
               >
                 전체 초기화
@@ -773,9 +635,13 @@ export default function DiagnosisPage() {
                 if (!ok) return  // 취소하면 업로드 안 함
               }
             }
+            setLoadedSnapshot(null)  // 새 SELLER 업로드 → frozen view 해제, LIVE 모드로
             setSalesInsight(rows, meta)
           }}
-          onAdCampaign={setAdCampaign}
+          onAdCampaign={(rows: any, meta: any, period: any) => {
+            setLoadedSnapshot(null)  // 새 광고 업로드 → frozen view 해제
+            setAdCampaign(rows, meta, period)
+          }}
         />
 
         {/* 마스터 통계 */}
@@ -1468,17 +1334,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
         <div className="text-xs text-gray-500 mb-2">
           매출 / 광고비 / 순이익 ({chartMode === 'weekly' ? '주' : '월'} 환산)
           {onPointClick && <span className="ml-2 text-orange-600">· 점 클릭 시 해당 시점 데이터로 진단</span>}
-          {hasLivePoint && (
-            <span className="ml-2 inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 border border-emerald-200">
-              ● LIVE 마지막 점은 현재 진단과 동일
-            </span>
-          )}
         </div>
-        {frozenCount > 0 && (
-          <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
-            ⚠ 마지막 점 외 {frozenCount}개 {periodLabel}차 데이터는 저장 시점 마진 마스터로 계산된 값입니다. 현재 마스터와 다를 수 있어요 — "전체 재계산" 버튼을 누르면 현재 기준으로 동기화됩니다.
-          </div>
-        )}
         <ResponsiveContainer width="100%" height={250}>
           <LineChart
             data={trendData}
@@ -1494,6 +1350,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v.toLocaleString()}만`} />
             <Tooltip
               formatter={(v: any) => `${v.toLocaleString()}만원`}
+              itemSorter={(it: any) => (({ '매출': 1, '광고비': 2, '순이익': 3 } as any)[it.dataKey] ?? 9)}
               cursor={{ stroke: '#f97316', strokeWidth: 1, strokeDasharray: '3 3' }}
             />
             <Legend />
@@ -1990,9 +1847,11 @@ function AnalysisItem(props: {
   )
 }
 
-function LastUpdateBadge({ analyses, adPeriod }: {
+function LastUpdateBadge({ analyses, adPeriod, snapshotMode, snapshotSavedAt }: {
   analyses: any[]
   adPeriod: { startDate: string; endDate: string; days: number } | null
+  snapshotMode?: boolean
+  snapshotSavedAt?: string
 }) {
   // 1) 가장 최근 누적된 주별 데이터 찾기
   const latestWeekly = useMemo(() => {
@@ -2008,14 +1867,21 @@ function LastUpdateBadge({ analyses, adPeriod }: {
       .sort((a, b) => (b.monthKey || '').localeCompare(a.monthKey || ''))[0]
   }, [analyses])
 
-  // 표시할 정보 결정 — store 의 adPeriod 우선 (점 클릭으로 로드된 분석 또는 라이브 업로드).
-  // adPeriod 없을 때만 누적 데이터 최신점으로 fallback.
+  // 표시할 정보 결정 — snapshot 모드면 frozen 라벨, adPeriod 있으면 라이브, 없으면 누적 fallback
   let label = ''
   let detail = ''
+  let savedLine: string | null = null
 
   if (adPeriod) {
-    label = '현재 보고 있는 분석'
+    label = snapshotMode ? '📌 저장된 분석 (frozen view)' : '현재 보고 있는 분석'
     detail = `${adPeriod.startDate} ~ ${adPeriod.endDate} (${adPeriod.days}일)`
+    if (snapshotMode && snapshotSavedAt) {
+      const d = new Date(snapshotSavedAt)
+      if (!isNaN(d.getTime())) {
+        const pad = (n: number) => String(n).padStart(2, '0')
+        savedLine = `저장: ${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+      }
+    }
   } else if (latestWeekly || latestMonthly) {
     const wEnd = latestWeekly?.periodEndDate || ''
     const mEnd = latestMonthly?.periodEndDate || ''
@@ -2037,6 +1903,7 @@ function LastUpdateBadge({ analyses, adPeriod }: {
       <div className="text-[10px] uppercase tracking-wide text-gray-500">마지막 업데이트 데이터</div>
       <div className="text-sm font-mono font-medium text-gray-800 mt-0.5">{detail}</div>
       <div className="text-[10px] text-gray-400">{label}</div>
+      {savedLine && <div className="text-[10px] text-blue-600 font-mono">{savedLine}</div>}
     </div>
   )
 }

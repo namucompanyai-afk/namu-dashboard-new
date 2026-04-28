@@ -153,12 +153,36 @@ export async function POST(request: Request) {
   }
 }
 
-/** DELETE — 명시 저장 삭제. ?purgeLegacyBundle=1 이면 옛 묶음 row 통째 폐기 */
+/** DELETE — 명시 저장 삭제. ?purgeLegacyBundle=1 이면 옛 묶음 row 통째 폐기.
+ *  ?purgeAll=1 이면 모든 진단 데이터 (개별 키 + 옛 묶음 + last 슬롯) 일괄 폐기 — 새 저장 포맷 마이그레이션용. */
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const purgeLegacy = searchParams.get('purgeLegacyBundle') === '1';
+    const purgeAll = searchParams.get('purgeAll') === '1';
+
+    // 모든 진단 데이터 일괄 폐기 — 개별 키 + legacy bundle + last 슬롯
+    if (purgeAll) {
+      const result: any = { ok: true, purgedAll: true, deleted: { individual: 0, legacy: 0, last: 0 }, errors: [] as string[] };
+      // 개별 키 모두
+      try {
+        const rows = await listByPrefix(KEY_ITEM_PREFIX);
+        for (const r of rows as any[]) {
+          try {
+            const cnt = await deleteData(r.id);
+            result.deleted.individual += cnt;
+          } catch (e) {
+            result.errors.push(`item ${r.id}: ${String(e)}`);
+          }
+        }
+      } catch (e) { result.errors.push(`listByPrefix: ${String(e)}`); }
+      // legacy 묶음
+      try { result.deleted.legacy = await deleteData(KEY_LIST_OLD); } catch (e) { result.errors.push(`legacy: ${String(e)}`); }
+      // last 자동 저장 슬롯
+      try { result.deleted.last = await deleteData(KEY_LAST); } catch (e) { result.errors.push(`last: ${String(e)}`); }
+      return NextResponse.json(result);
+    }
 
     // 옛 묶음 row 통째 삭제 (legacy 정리). raw 가 박힌 거대 JSONB 를 rewrite 하면
     // 크기/타임아웃에 걸려 실패하므로 row 자체를 drop.
