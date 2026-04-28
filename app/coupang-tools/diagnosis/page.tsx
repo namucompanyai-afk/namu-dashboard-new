@@ -1214,13 +1214,26 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd,
 // 투명 r=14 hit area + 시각 r=3 원 (ROAS 추이 default dot 과 동일 스타일: 흰 fill + 라인색 테두리).
 // 17점 빽빽한 차트도 점 클릭 쉬움.
 const BigHitDot = (props: any) => {
-  const { cx, cy, stroke } = props
+  const { cx, cy, stroke, onPointClick, payload } = props
   if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null
   const color = stroke || '#666'
+  const handleClick = (e: any) => {
+    if (onPointClick && payload?._analysis) onPointClick(payload._analysis)
+    try { (e?.currentTarget as any)?.blur?.() } catch {}
+    try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
+  }
   return (
-    <g>
-      <circle cx={cx} cy={cy} r={14} fill="transparent" style={{ cursor: 'pointer' }} />
-      <circle cx={cx} cy={cy} r={3} fill="#fff" stroke={color} strokeWidth={2} />
+    <g tabIndex={-1} style={{ outline: 'none' }}>
+      <circle
+        cx={cx}
+        cy={cy}
+        r={14}
+        fill="transparent"
+        style={{ cursor: onPointClick ? 'pointer' : 'default', outline: 'none' }}
+        tabIndex={-1}
+        onClick={onPointClick ? handleClick : undefined}
+      />
+      <circle cx={cx} cy={cy} r={3} fill="#fff" stroke={color} strokeWidth={2} style={{ outline: 'none' }} tabIndex={-1} />
     </g>
   )
 }
@@ -1235,13 +1248,20 @@ const CompactTrendTooltip = ({ active, payload, label }: any) => {
   return (
     <div className="rounded border border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm px-2 py-1.5 text-[11px]">
       <div className="font-medium text-gray-700 mb-0.5">{label}</div>
-      {items.map((p: any) => (
-        <div key={p.dataKey} className="flex items-center gap-1.5 leading-tight">
-          <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
-          <span className="text-gray-500 w-10">{p.dataKey}</span>
-          <span className="font-mono text-gray-900">{(p.value ?? 0).toLocaleString()}만원</span>
-        </div>
-      ))}
+      {items.map((p: any) => {
+        const v = p.value ?? 0
+        const isProfit = p.dataKey === '순이익'
+        const valueClass = isProfit
+          ? (v < 0 ? 'font-mono font-bold text-red-600' : 'font-mono font-bold text-green-600')
+          : 'font-mono text-gray-900'
+        return (
+          <div key={p.dataKey} className="flex items-center gap-1.5 leading-tight">
+            <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+            <span className="text-gray-500 w-10">{p.dataKey}</span>
+            <span className={valueClass}>{v.toLocaleString()}만원</span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -1415,8 +1435,13 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
           매출 / 광고비 / 순이익 ({chartMode === 'weekly' ? '주' : '월'} 환산)
           {onPointClick && <span className="ml-2 text-orange-600">· 점 클릭 시 해당 시점 데이터로 진단</span>}
         </div>
+        <div
+          tabIndex={-1}
+          className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+          style={{ outline: 'none' }}
+        >
         <ResponsiveContainer width="100%" height={250}>
-          <LineChart data={trendData}>
+          <LineChart data={trendData} tabIndex={-1} style={{ outline: 'none' }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="label" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v.toLocaleString()}만`} />
@@ -1431,7 +1456,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               dataKey="매출"
               stroke="#2563eb"
               strokeWidth={2}
-              dot={<BigHitDot />}
+              dot={<BigHitDot onPointClick={onPointClick} />}
               activeDot={{
                 r: 10,
                 cursor: onPointClick ? 'pointer' : 'default',
@@ -1439,6 +1464,8 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
                   if (!onPointClick) return
                   const idx = ev?.index
                   if (idx != null && trendData[idx]?._analysis) onPointClick(trendData[idx]._analysis)
+                  try { (ev?.currentTarget as any)?.blur?.() } catch {}
+                  try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
                 },
               }}
             />
@@ -1447,7 +1474,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               dataKey="광고비"
               stroke="#f97316"
               strokeWidth={2}
-              dot={<BigHitDot />}
+              dot={<BigHitDot onPointClick={onPointClick} />}
               activeDot={{
                 r: 10,
                 cursor: onPointClick ? 'pointer' : 'default',
@@ -1455,6 +1482,8 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
                   if (!onPointClick) return
                   const idx = ev?.index
                   if (idx != null && trendData[idx]?._analysis) onPointClick(trendData[idx]._analysis)
+                  try { (ev?.currentTarget as any)?.blur?.() } catch {}
+                  try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
                 },
               }}
             />
@@ -1463,7 +1492,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
               dataKey="순이익"
               stroke="#10b981"
               strokeWidth={2}
-              dot={<BigHitDot />}
+              dot={<BigHitDot onPointClick={onPointClick} />}
               activeDot={{
                 r: 10,
                 cursor: onPointClick ? 'pointer' : 'default',
@@ -1471,11 +1500,14 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
                   if (!onPointClick) return
                   const idx = ev?.index
                   if (idx != null && trendData[idx]?._analysis) onPointClick(trendData[idx]._analysis)
+                  try { (ev?.currentTarget as any)?.blur?.() } catch {}
+                  try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
                 },
               }}
             />
           </LineChart>
         </ResponsiveContainer>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
