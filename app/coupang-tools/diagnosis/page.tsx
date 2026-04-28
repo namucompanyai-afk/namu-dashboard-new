@@ -1444,7 +1444,7 @@ function TrendChartSection({ analyses, onPointClick, selectedAlias, liveResult, 
           <LineChart data={trendData} tabIndex={-1} style={{ outline: 'none' }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
             <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v.toLocaleString()}만`} />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => v < 0 ? '' : `${v.toLocaleString()}만`} />
             <Tooltip
               content={<CompactTrendTooltip />}
               offset={20}
