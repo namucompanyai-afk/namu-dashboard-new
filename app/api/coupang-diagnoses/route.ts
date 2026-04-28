@@ -153,11 +153,24 @@ export async function POST(request: Request) {
   }
 }
 
-/** DELETE — 명시 저장 삭제 */
+/** DELETE — 명시 저장 삭제. ?purgeLegacyBundle=1 이면 옛 묶음 row 통째 폐기 */
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const purgeLegacy = searchParams.get('purgeLegacyBundle') === '1';
+
+    // 옛 묶음 row 통째 삭제 (legacy 정리). raw 가 박힌 거대 JSONB 를 rewrite 하면
+    // 크기/타임아웃에 걸려 실패하므로 row 자체를 drop.
+    if (purgeLegacy) {
+      let removed = 0;
+      try {
+        removed = await deleteData(KEY_LIST_OLD);
+      } catch (e) {
+        return NextResponse.json({ error: `legacy purge 실패: ${String(e)}` }, { status: 500 });
+      }
+      return NextResponse.json({ ok: true, purgedLegacyBundle: true, removed });
+    }
 
     if (!id) {
       return NextResponse.json({ error: 'id 파라미터 필요' }, { status: 400 });
@@ -165,25 +178,39 @@ export async function DELETE(request: Request) {
 
     // 1) 새 방식: 개별 키 삭제 시도
     let deletedCount = 0;
+    let individualError: string | null = null;
     try {
       deletedCount = await deleteData(`${KEY_ITEM_PREFIX}${id}`);
     } catch (e) {
+      individualError = String(e);
       console.error('[diagnoses DELETE] 개별 키 삭제 실패:', id, e);
     }
 
-    // 2) 옛날 묶음 키에서도 삭제 (마이그레이션 안 된 거)
+    // 2) 옛날 묶음 키에서도 삭제 (마이그레이션 안 된 거).
+    //    묶음 rewrite 실패는 전체 응답을 500 으로 만들지 않음 — 개별 키 삭제는 이미 성공했을 수 있음.
     let oldRemoved = false;
-    const existing = await getData(KEY_LIST_OLD);
-    if (existing?.diagnoses) {
-      const list: DiagnosisSnapshot[] = existing.diagnoses;
-      const updated = list.filter(d => String(d.id) !== String(id));
-      if (updated.length !== list.length) {
-        await saveData(KEY_LIST_OLD, { diagnoses: updated });
-        oldRemoved = true;
+    let oldRewriteError: string | null = null;
+    try {
+      const existing = await getData(KEY_LIST_OLD);
+      if (existing?.diagnoses) {
+        const list: DiagnosisSnapshot[] = existing.diagnoses;
+        const updated = list.filter(d => String(d.id) !== String(id));
+        if (updated.length !== list.length) {
+          await saveData(KEY_LIST_OLD, { diagnoses: updated });
+          oldRemoved = true;
+        }
       }
+    } catch (e) {
+      oldRewriteError = String(e);
+      console.error('[diagnoses DELETE] 옛 묶음 rewrite 실패:', id, e);
     }
 
-    return NextResponse.json({ ok: true, deleted: id, deletedCount, oldRemoved });
+    // 둘 다 실패한 경우만 500
+    if (individualError && !oldRemoved && oldRewriteError) {
+      return NextResponse.json({ error: individualError, oldRewriteError }, { status: 500 });
+    }
+
+    return NextResponse.json({ ok: true, deleted: id, deletedCount, oldRemoved, oldRewriteError });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
