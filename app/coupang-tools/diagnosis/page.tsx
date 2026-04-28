@@ -466,7 +466,13 @@ export default function DiagnosisPage() {
       }
 
       setShowSaveDialog(false)
-      alert(includeInTrend ? '✓ 저장 완료 (월별 추이 그래프에 추가됨)' : '✓ 저장 완료')
+      alert(
+        includeInTrend
+          ? (trendType === 'weekly'
+              ? '✓ 저장 완료 (주별 추이 그래프에 추가됨)'
+              : '✓ 저장 완료 (월별 추이 그래프에 추가됨)')
+          : '✓ 저장 완료'
+      )
     } catch (err: any) {
       alert('저장 실패: ' + (err?.message || err))
     } finally {
@@ -716,7 +722,7 @@ export default function DiagnosisPage() {
             <div className="mb-4 flex items-center justify-between rounded-lg border border-gray-200 bg-white p-3">
               <div className="flex items-center gap-3">
                 <div className="text-xs text-gray-500">
-                  💡 자동 저장됨
+                  {loadedSnapshot ? '📌 저장된 분석 (frozen view)' : '💡 자동 저장됨'}
                 </div>
                 {/* 보기 모드 토글 */}
                 <div className="flex rounded border border-gray-300 overflow-hidden">
@@ -726,7 +732,7 @@ export default function DiagnosisPage() {
                       viewMode === 'actual' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
                     }`}
                   >
-                    실제 기간 ({adPeriod?.days || 0}일)
+                    실제 기간 ({(loadedSnapshot ? loadedSnapshot.periodDays : adPeriod?.days) || 0}일)
                   </button>
                   <button
                     onClick={() => setViewMode('monthly')}
