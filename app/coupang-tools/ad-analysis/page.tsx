@@ -16,6 +16,7 @@ import {
   buildManualReviewRows,
   buildBepMap,
   buildBepCpcForCampaign,
+  buildActualPriceMapById,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
@@ -250,22 +251,36 @@ function Header({ period, onPeriod, adPeriodLabel }: {
 // ── KPI ───────────────────────────────────────────────────────
 function KpiSection({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
   const roasUnder = view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
+  const u = view.unmatched
   return (
-    <div className="aa-kpi-grid">
-      <KpiCard label={<>광고비 <span className="aa-vat-tag">VAT 포함</span></>} value={fmtMan(view.totalAdCostVat)} sub={`캠페인 ${view.campaignCount}개`} />
-      <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub="14일 어트리뷰션" />
-      <KpiCard
-        label="평균 ROAS"
-        value={fmtRoas(view.avgRoasPct)}
-        valueClass={roasUnder ? 'text-bad' : undefined}
-        sub={view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음'}
-      />
-      <KpiCard
-        label="주문"
-        value={`${fmtNum(view.totalOrders)}건`}
-        sub={view.avgUnitPrice ? `평균 단가 ${fmtNum(view.avgUnitPrice)}원` : ''}
-      />
-    </div>
+    <>
+      <div className="aa-kpi-grid">
+        <KpiCard label={<>광고비 <span className="aa-vat-tag">VAT 포함</span></>} value={fmtMan(view.totalAdCostVat)} sub={`캠페인 ${view.campaignCount}개`} />
+        <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub="sold14d × 마진M 실판매가" />
+        <KpiCard
+          label="평균 ROAS"
+          value={fmtRoas(view.avgRoasPct)}
+          valueClass={roasUnder ? 'text-bad' : undefined}
+          sub={view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음'}
+        />
+        <KpiCard
+          label="주문"
+          value={`${fmtNum(view.totalOrders)}건`}
+          sub={view.avgUnitPrice ? `평균 단가 ${fmtNum(view.avgUnitPrice)}원` : ''}
+        />
+      </div>
+      {u.adCount > 0 && (
+        <div style={{
+          margin: '8px 0 16px', padding: '8px 12px',
+          background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6,
+          fontSize: 12, color: '#92400E',
+        }}>
+          ⚠️ 마진마스터 미등록 옵션 <strong>{u.adCount}개</strong>의 광고비{' '}
+          <strong>{fmtMan(u.adCostVat)}원</strong>이 매출/주문 KPI 및 표 산출에서 제외됨
+          (실판매가 매칭 불가)
+        </div>
+      )}
+    </>
   )
 }
 
@@ -404,7 +419,8 @@ function CampaignRowGroup({ c, isOpen, onToggle, master: _master }: {
 // ── AI Section ────────────────────────────────────────────────
 function AiSection({ campaign, master, onClose }: { campaign: CampaignDiag; master: any; onClose: () => void }) {
   const bepMap = useMemo(() => buildBepMap(master), [master])
-  const { search, nonSearch } = useMemo(() => buildKeywordRows(campaign, bepMap), [campaign, bepMap])
+  const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
+  const { search, nonSearch } = useMemo(() => buildKeywordRows(campaign, bepMap, priceMap), [campaign, bepMap, priceMap])
   const cpcEntries = useMemo(() => buildBepCpcForCampaign(campaign, master), [campaign, master])
 
   const [checked, setChecked] = useState<Set<string>>(new Set())
@@ -625,8 +641,9 @@ function ActionLegend() {
 // ── Manual Section ────────────────────────────────────────────
 function ManualSection({ campaign, master, onClose }: { campaign: CampaignDiag; master: any; onClose: () => void }) {
   const bepMap = useMemo(() => buildBepMap(master), [master])
+  const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const [bidByKeyword, setBidByKeyword] = useState<Map<string, number>>(new Map())
-  const rows = useMemo(() => buildManualReviewRows(campaign, bepMap, bidByKeyword), [campaign, bepMap, bidByKeyword])
+  const rows = useMemo(() => buildManualReviewRows(campaign, bepMap, priceMap, bidByKeyword), [campaign, bepMap, priceMap, bidByKeyword])
   const { sorted, key, dir, toggle } = useSort(rows, 'recommendedBidVatExcl' as keyof ManualKeywordRow, 'desc')
 
   const TH = ({ label, k, num, minWidth, sticky }: any) => (
