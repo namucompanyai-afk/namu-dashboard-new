@@ -45,6 +45,21 @@ export async function deleteData(id: string): Promise<number> {
   return count ?? 0;
 }
 
+// prefix로 시작하는 키만 조회 (data 미포함 — 존재 여부 체크 등 가벼운 용도)
+export async function listIdsByPrefix(prefix: string): Promise<string[]> {
+  const client = getClient();
+  const { data, error } = await client
+    .from('dashboard_data')
+    .select('id')
+    .like('id', `${prefix}%`)
+    .order('id', { ascending: true });
+  if (error) {
+    console.error('listIdsByPrefix error:', error);
+    return [];
+  }
+  return (data ?? []).map((r: any) => r.id);
+}
+
 // prefix로 시작하는 모든 키 조회 (id, data 함께)
 export async function listByPrefix(prefix: string) {
   const client = getClient();

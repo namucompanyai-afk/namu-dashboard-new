@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getData, saveData, deleteData, listByPrefix } from "@/lib/supabase";
+import { getData, saveData, deleteData, listByPrefix, listIdsByPrefix } from "@/lib/supabase";
 
 /**
  * 진단 결과 저장 API v3
@@ -53,24 +53,38 @@ export async function GET(request: Request) {
 
     if (type === 'list') {
       // 1) 새 방식: 개별 키 모두 조회 (목록은 가벼운 메타만)
-      const rows = await listByPrefix(KEY_ITEM_PREFIX);
+      //    raw 키는 id 만 가볍게 긁어서 _hasRaw 보강 (메인 row 의 adRows 는 explicit 저장 시 빈 배열 마커라 단독 판정 불가)
+      const [rows, rawIds, old] = await Promise.all([
+        listByPrefix(KEY_ITEM_PREFIX),
+        listIdsByPrefix(KEY_RAW_PREFIX),
+        getData(KEY_LIST_OLD),
+      ]);
+      const rawIdSet = new Set(rawIds.map((k) => k.replace(KEY_RAW_PREFIX, '')));
+
       const fromIndividual = rows
         .map((r: any) => r.data as DiagnosisSnapshot)
         .filter(Boolean)
         .map((d: any) => {
           const { adRows, sellerStats, ...meta } = d;
-          return { ...meta, _hasRaw: !!(adRows?.length || sellerStats?.length) };
+          return {
+            ...meta,
+            _hasRaw: !!(adRows?.length || sellerStats?.length || (d.id && rawIdSet.has(d.id))),
+          };
         });
 
       // 2) 옛날 묶음 키도 조회 (마이그레이션 안 된 데이터)
-      const old = await getData(KEY_LIST_OLD);
       const fromOld: DiagnosisSnapshot[] = old?.diagnoses || [];
 
       // 머지: 개별 키 우선, 그 외 옛날 키
       const seenIds = new Set(fromIndividual.map((d: any) => d.id).filter(Boolean));
       const merged = [
         ...fromIndividual,
-        ...fromOld.filter((d: any) => d.id && !seenIds.has(d.id)),
+        ...fromOld
+          .filter((d: any) => d.id && !seenIds.has(d.id))
+          .map((d: any) => ({
+            ...d,
+            _hasRaw: !!(d.adRows?.length || d.sellerStats?.length || (d.id && rawIdSet.has(d.id))),
+          })),
       ];
 
       return NextResponse.json({ diagnoses: merged });
