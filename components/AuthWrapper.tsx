@@ -30,7 +30,7 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
         <Sidebar />
         <main className="flex-1 min-w-0">
           <div className="mt-14 lg:mt-0 px-4 py-6 lg:px-10 lg:py-10">
-            <div className="max-w-6xl">{children}</div>
+            <div className="max-w-screen-2xl">{children}</div>
           </div>
         </main>
       </div>
