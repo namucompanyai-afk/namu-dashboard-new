@@ -19,10 +19,12 @@ import {
   buildBepMap,
   buildBepCpcForCampaign,
   buildActualPriceMapById,
+  buildMarginRowMap,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
 } from '@/lib/coupang/adAnalysis'
+import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 
 type Mode = 'saved' | 'live'
 
@@ -258,7 +260,7 @@ export default function AdAnalysisPage() {
         />
         {openCampaign && (
           openCampaign.type === 'manual'
-            ? <ManualSection campaign={openCampaign} master={marginMaster as any} onClose={() => setOpenCampId(null)} />
+            ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
             : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
         )}
       </div>
@@ -307,7 +309,7 @@ export default function AdAnalysisPage() {
       />
       {openCampaign && (
         openCampaign.type === 'manual'
-          ? <ManualSection campaign={openCampaign} master={marginMaster as any} onClose={() => setOpenCampId(null)} />
+          ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
           : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
       )}
     </div>
@@ -623,7 +625,19 @@ function CampaignRowGroup({ c, isOpen, onToggle, master: _master }: {
 function AiSection({ campaign, master, periodLabel, onClose }: { campaign: CampaignDiag; master: any; periodLabel: string; onClose: () => void }) {
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
-  const { search, nonSearch } = useMemo(() => buildKeywordRows(campaign, bepMap, priceMap), [campaign, bepMap, priceMap])
+  const rowMap = useMemo(() => buildMarginRowMap(master), [master])
+  const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap), [campaign.rows, bepMap, priceMap, rowMap])
+
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
+  const filteredCampaign = useMemo(() => {
+    if (!selectedOptionId) return campaign
+    return { ...campaign, rows: campaign.rows.filter((r) => String(r.adOptionId || '').trim() === selectedOptionId) }
+  }, [campaign, selectedOptionId])
+  const selectedOptionName = selectedOptionId
+    ? (options.find((o) => o.optionId === selectedOptionId)?.optionName ?? selectedOptionId)
+    : null
+
+  const { search, nonSearch } = useMemo(() => buildKeywordRows(filteredCampaign, bepMap, priceMap), [filteredCampaign, bepMap, priceMap])
   const cpcEntries = useMemo(() => buildBepCpcForCampaign(campaign, master), [campaign, master])
   const searchSold = useMemo(() => search.reduce((s, r) => s + (r.orders || 0), 0), [search])
   const nonSearchSold = useMemo(() => nonSearch.reduce((s, r) => s + (r.orders || 0), 0), [nonSearch])
@@ -677,6 +691,14 @@ function AiSection({ campaign, master, periodLabel, onClose }: { campaign: Campa
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
+        <OptionTable
+          rows={options}
+          selectedId={selectedOptionId}
+          onSelect={setSelectedOptionId}
+          campaignName={campaign.campaignName || campaign.campaignId}
+          periodLabel={periodLabel}
+        />
+        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={() => setSelectedOptionId(null)} />}
         <KeywordTable
           rows={search}
           campaignBep={campaign.bepPct}
@@ -702,6 +724,173 @@ function Row({ label, value, sub, valueClass }: { label: React.ReactNode; value:
     <div className="aa-metric-row">
       <span>{label}</span>
       <span className={`mono ${valueClass || ''}`}>{value}{sub && <span style={{ marginLeft: 4, color: '#94A3B8', fontSize: 11 }}>{sub}</span>}</span>
+    </div>
+  )
+}
+
+// ── 옵션별 드릴다운 ───────────────────────────────────────────
+interface OptionDiag {
+  optionId: string
+  optionName: string
+  adCostVat: number
+  revenue: number
+  sold: number
+  roasPct: number | null
+  bepPct: number | null
+  gapPct: number | null
+  matched: boolean
+}
+
+function computeOptions(
+  rows: AdCampaignRow[],
+  bepMap: Map<string, number>,
+  priceMap: Map<string, number>,
+  rowMap: Map<string, { optionName?: string }>,
+): OptionDiag[] {
+  const grp = new Map<string, AdCampaignRow[]>()
+  for (const r of rows) {
+    const id = String(r.adOptionId || '').trim() || '_'
+    const arr = grp.get(id) ?? []
+    arr.push(r)
+    grp.set(id, arr)
+  }
+  const out: OptionDiag[] = []
+  for (const [optId, rs] of grp) {
+    const adCostRaw = rs.reduce((s, r) => s + (r.adCost || 0), 0)
+    const adCostVat = adCostRaw * 1.1
+    const sold = rs.reduce((s, r) => s + (r.sold14d || 0), 0)
+    const revenue = rs.reduce((s, r) => {
+      const cId = String(r.convOptionId || '').trim()
+      if (!cId) return s
+      const p = priceMap.get(cId)
+      return p ? s + (r.sold14d || 0) * p : s
+    }, 0)
+    const roasPct = adCostVat > 0 ? (revenue / adCostVat) * 100 : null
+    const bepPct = bepMap.get(optId) ?? null
+    const gapPct = roasPct != null && bepPct != null ? roasPct - bepPct : null
+    const mr = rowMap.get(optId)
+    const matched = !!mr
+    const optionName = mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`
+    out.push({ optionId: optId, optionName, adCostVat, revenue, sold, roasPct, bepPct, gapPct, matched })
+  }
+  out.sort((a, b) => b.adCostVat - a.adCostVat)
+  return out
+}
+
+function OptionTable({ rows, selectedId, onSelect, campaignName, periodLabel }: {
+  rows: OptionDiag[]
+  selectedId: string | null
+  onSelect: (id: string | null) => void
+  campaignName: string
+  periodLabel: string
+}) {
+  const { sorted, key, dir, toggle } = useSort(rows, 'adCostVat' as keyof OptionDiag, 'desc')
+
+  const TH = ({ label, k, num, minWidth }: any) => (
+    <th
+      className={['sortable', num ? 'num' : '', key === k ? (dir === 'asc' ? 'sorted-asc' : 'sorted-desc') : ''].filter(Boolean).join(' ')}
+      style={minWidth ? { minWidth } : undefined}
+      onClick={() => toggle(k)}
+    >{label}</th>
+  )
+
+  function exportAll() {
+    if (sorted.length === 0) { alert('내보낼 옵션이 없습니다.'); return }
+    const data = sorted.map((r) => ({
+      '옵션명': r.optionName,
+      '옵션ID': r.optionId,
+      '광고비 (+VAT)': r.adCostVat,
+      '광고 매출': r.revenue,
+      '광고 판매수': r.sold,
+      'ROAS(%)': r.roasPct,
+      'BEP(%)': r.bepPct,
+      '갭(%p)': r.gapPct,
+    }))
+    const filename = `광고분석_옵션별_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
+    exportXlsx(data, filename, '옵션별')
+  }
+
+  return (
+    <div className="aa-sub-section" style={{ marginTop: 12 }}>
+      <div className="aa-sub-section-title">
+        <span>⭐ 옵션별 ({sorted.length}개) <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400 }}>· 행 클릭 시 아래 키워드 표가 옵션 단위로 필터링됩니다</span></span>
+        <button
+          className="aa-btn btn-sm"
+          onClick={exportAll}
+          style={{ fontSize: 11, padding: '4px 10px' }}
+        >⬇ 전체 다운로드</button>
+      </div>
+      <div className="aa-table-wrap shorter">
+        <table>
+          <thead>
+            <tr>
+              <TH label="옵션명" k="optionName" minWidth={200} />
+              <TH label="광고비 (+VAT)" k="adCostVat" num />
+              <TH label="광고 매출" k="revenue" num />
+              <TH label="광고 판매수" k="sold" num />
+              <TH label="ROAS" k="roasPct" num />
+              <TH label="BEP" k="bepPct" num />
+              <TH label="갭" k="gapPct" num />
+              <th>상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((o) => {
+              const isSelected = selectedId === o.optionId
+              const roasUnder = o.roasPct != null && o.bepPct != null && o.roasPct < o.bepPct
+              const roasClass = o.roasPct == null || o.bepPct == null ? '' : (roasUnder ? 'text-bad' : 'text-good')
+              const gapClass = o.gapPct == null ? '' : (o.gapPct < 0 ? 'text-bad' : 'text-good')
+              const status = o.adCostVat <= 0
+                ? <span className="text-muted">—</span>
+                : o.roasPct == null || o.bepPct == null
+                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94A3B8' }} /><span style={{ fontSize: 11, color: '#64748B' }}>BEP 없음</span></span>
+                  : roasUnder
+                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#EF4444' }} /><span style={{ fontSize: 11, color: '#991B1B' }}>BEP 미달</span></span>
+                    : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981' }} /><span style={{ fontSize: 11, color: '#065F46' }}>BEP 도달</span></span>
+              return (
+                <tr
+                  key={o.optionId}
+                  onClick={() => onSelect(isSelected ? null : o.optionId)}
+                  style={{
+                    cursor: 'pointer',
+                    background: isSelected ? '#EFF6FF' : undefined,
+                    borderLeft: isSelected ? '3px solid #3B82F6' : undefined,
+                  }}
+                >
+                  <td><strong>{o.optionName}</strong>{!o.matched && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400E' }}>⚠</span>}</td>
+                  <td className="num">{fmtMan(o.adCostVat)}</td>
+                  <td className="num">{fmtMan(o.revenue)}</td>
+                  <td className="num">{fmtNum(o.sold)}</td>
+                  <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
+                  <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
+                  <td className={`num ${gapClass}`}>{o.gapPct != null ? `${o.gapPct > 0 ? '+' : ''}${Math.round(o.gapPct)}%p` : '—'}</td>
+                  <td>{status}</td>
+                </tr>
+              )
+            })}
+            {sorted.length === 0 && (
+              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>옵션 없음</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 14,
+      padding: '4px 10px', fontSize: 12, color: '#1E40AF', margin: '8px 0',
+    }}>
+      <span>옵션 필터: <strong>{label}</strong></span>
+      <button
+        onClick={onClear}
+        style={{ background: 'transparent', border: 'none', color: '#1E40AF', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 }}
+        title="필터 해제"
+      >✕</button>
     </div>
   )
 }
@@ -1025,11 +1214,23 @@ function ActionLegend() {
 }
 
 // ── Manual Section ────────────────────────────────────────────
-function ManualSection({ campaign, master, onClose }: { campaign: CampaignDiag; master: any; onClose: () => void }) {
+function ManualSection({ campaign, master, periodLabel, onClose }: { campaign: CampaignDiag; master: any; periodLabel: string; onClose: () => void }) {
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
+  const rowMap = useMemo(() => buildMarginRowMap(master), [master])
+  const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap), [campaign.rows, bepMap, priceMap, rowMap])
+
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
+  const filteredCampaign = useMemo(() => {
+    if (!selectedOptionId) return campaign
+    return { ...campaign, rows: campaign.rows.filter((r) => String(r.adOptionId || '').trim() === selectedOptionId) }
+  }, [campaign, selectedOptionId])
+  const selectedOptionName = selectedOptionId
+    ? (options.find((o) => o.optionId === selectedOptionId)?.optionName ?? selectedOptionId)
+    : null
+
   const [bidByKeyword, setBidByKeyword] = useState<Map<string, number>>(new Map())
-  const rows = useMemo(() => buildManualReviewRows(campaign, bepMap, priceMap, bidByKeyword), [campaign, bepMap, priceMap, bidByKeyword])
+  const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword), [filteredCampaign, bepMap, priceMap, bidByKeyword])
   const { sorted, key, dir, toggle } = useSort(rows, 'recommendedBidVatExcl' as keyof ManualKeywordRow, 'desc')
 
   const TH = ({ label, k, num, minWidth, sticky }: any) => (
@@ -1064,6 +1265,14 @@ function ManualSection({ campaign, master, onClose }: { campaign: CampaignDiag; 
         <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
       </div>
       <div className="aa-section-body">
+        <OptionTable
+          rows={options}
+          selectedId={selectedOptionId}
+          onSelect={setSelectedOptionId}
+          campaignName={campaign.campaignName || campaign.campaignId}
+          periodLabel={periodLabel}
+        />
+        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={() => setSelectedOptionId(null)} />}
         <div className="aa-table-wrap shorter">
           <table>
             <thead>
@@ -1072,7 +1281,7 @@ function ManualSection({ campaign, master, onClose }: { campaign: CampaignDiag; 
                 <TH label="노출" k="impressions" num />
                 <TH label="클릭" k="clicks" num />
                 <TH label="CTR" k="ctrPct" num />
-                <TH label="주문" k="orders" num />
+                <TH label="광고 판매수" k="orders" num />
                 <TH label="CVR" k="cvrPct" num />
                 <TH label="매출" k="revenue" num />
                 <th className="num">현재 입찰가<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(VAT 별도)</span></th>
