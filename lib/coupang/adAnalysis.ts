@@ -74,13 +74,14 @@ function weightedBep(
   return num / den
 }
 
-/** 추천 입찰가 (VAT 별도). 클릭 < 20 또는 BEP 없음이면 null. */
+/** 추천 입찰가 (VAT 별도). 클릭 < 20 또는 BEP 없음이면 null.
+ *  공식: 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) — BEP 대비 5% 여유 + VAT 환산. */
 export function recommendedBid(revenue: number, clicks: number, bepPct: number | null): number | null {
   if (!bepPct || bepPct <= 0) return null
   if (clicks < 20) return null
   if (revenue <= 0) return null
-  // BEP 는 % 단위 (예: 433 → 4.33)
-  const bid = revenue / (clicks * (bepPct / 100) * 1.21)
+  // BEP 는 % 단위 (예: 433 → 4.33). 1.155 = 1.05 (5% 여유) × 1.1 (VAT)
+  const bid = revenue / (clicks * (bepPct / 100) * 1.155)
   if (!Number.isFinite(bid) || bid <= 0) return null
   return bid
 }

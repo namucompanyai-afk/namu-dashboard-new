@@ -8,7 +8,7 @@
  * 자동 입찰 적용은 영구 안 함 — 사용자가 키워드 복사해서 쿠팡 광고센터에 직접 입력.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -20,6 +20,7 @@ import {
   buildBepCpcForCampaign,
   buildActualPriceMapById,
   buildMarginRowMap,
+  isSearchPlacement,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
@@ -579,11 +580,12 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
               <TH label="타입" k={'type'} />
               <TH label="광고비 (+VAT)" k={'adCostVat'} num />
               <TH label="광고 매출" k={'revenue'} num />
+              <TH label="광고 판매수" k={'orders'} num />
               <TH label="ROAS" k={'roasPct'} num />
               <TH label="BEP" k={'bepPct'} num />
               <TH label="갭" k={'gapPct'} num />
+              <TH label="전환율" k={'clicks'} num />
               <TH label="검색/비검색" k={'searchShare'} minWidth={200} />
-              <TH label="상태" k={'roasPct'} />
             </tr>
           </thead>
           <tbody>
@@ -633,14 +635,9 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
     c.type === 'manual' ? <span className="aa-badge badge-manual">🎯 수동</span> :
     <span className="aa-badge badge-unsorted">미분류</span>
 
-  const statusBadge =
-    c.type === 'manual' ? <span className="aa-badge badge-info">노출/후광용</span> :
-    roasUnder ? <span className="aa-badge badge-bad">🔴 BEP 미달</span> :
-    c.roasPct != null && c.bepPct != null ? <span className="aa-badge badge-good">🟢 BEP 도달</span> :
-    <span className="aa-badge badge-unsorted">BEP 없음</span>
-
   const searchPct = Math.round(c.searchShare * 100)
   const isManual = c.type === 'manual'
+  const cvrPct = c.clicks > 0 ? (c.orders / c.clicks) * 100 : null
 
   return (
     <>
@@ -658,9 +655,11 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>
         <td className="num">{fmtMan(c.revenue)}</td>
+        <td className="num">{fmtNum(c.orders)}</td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
         <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
         <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>
+        <td className="num">{cvrPct != null ? `${cvrPct.toFixed(1)}%` : <span className="text-muted">—</span>}</td>
         <td>
           {c.adCostRaw > 0 ? (
             <div className="aa-search-bar">
@@ -670,7 +669,6 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
             </div>
           ) : <span className="text-muted">—</span>}
         </td>
-        <td>{statusBadge}</td>
       </tr>
       {isExpanded && options.map((o) => (
         <OptionInlineRow
@@ -682,7 +680,7 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
       ))}
       {isExpanded && options.length === 0 && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
+          <td className="sticky-left aa-option-cell" colSpan={10} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
         </tr>
       )}
     </>
@@ -693,13 +691,8 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
   const roasUnder = o.roasPct != null && o.bepPct != null && o.roasPct < o.bepPct
   const roasClass = o.roasPct == null || o.bepPct == null ? '' : (roasUnder ? 'text-bad' : 'text-good')
   const gapClass = o.gapPct == null ? '' : (o.gapPct < 0 ? 'text-bad' : 'text-good')
-  const status = o.adCostVat <= 0
-    ? <span className="text-muted">—</span>
-    : o.roasPct == null || o.bepPct == null
-      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94A3B8' }} /><span style={{ fontSize: 11, color: '#64748B' }}>BEP 없음</span></span>
-      : roasUnder
-        ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#EF4444' }} /><span style={{ fontSize: 11, color: '#991B1B' }}>BEP 미달</span></span>
-        : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981' }} /><span style={{ fontSize: 11, color: '#065F46' }}>BEP 도달</span></span>
+  const adCostRaw = o.searchAdCostRaw + o.nonSearchAdCostRaw
+  const searchPct = Math.round(o.searchShare * 100)
 
   return (
     <tr
@@ -718,11 +711,20 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
       <td><span className="text-muted">—</span></td>
       <td className="num">{fmtMan(o.adCostVat)}</td>
       <td className="num">{fmtMan(o.revenue)}</td>
+      <td className="num">{fmtNum(o.sold)}</td>
       <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
       <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
       <td className={`num ${gapClass}`}>{o.gapPct != null ? `${o.gapPct > 0 ? '+' : ''}${Math.round(o.gapPct)}%p` : '—'}</td>
-      <td><span className="text-muted">—</span></td>
-      <td>{status}</td>
+      <td className="num">{o.cvrPct != null ? `${o.cvrPct.toFixed(1)}%` : <span className="text-muted">—</span>}</td>
+      <td>
+        {adCostRaw > 0 ? (
+          <div className="aa-search-bar">
+            <span style={{ width: 32, color: '#3B82F6' }}>{searchPct}%</span>
+            <div className="aa-search-bar-bg"><div className="aa-search-bar-fill" style={{ width: `${searchPct}%` }} /></div>
+            <span style={{ width: 32, color: '#A855F7' }}>{100 - searchPct}%</span>
+          </div>
+        ) : <span className="text-muted">—</span>}
+      </td>
     </tr>
   )
 }
@@ -792,6 +794,7 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
             <Row label="광고 매출" value={fmtMan(campaign.searchRevenue)} />
             <Row label="판매건수" value={`${fmtNum(searchSold)}건`} />
             <Row label="ROAS" value={fmtRoas(campaign.searchRoasPct)} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
+            <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />
             <Row label="BEP 갭" value={campaign.searchRoasPct != null && campaign.bepPct != null ? `${Math.round(campaign.searchRoasPct - campaign.bepPct)}%p` : '—'} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : 'text-good'} />
           </div>
           <div className="aa-metric-box nonsearch">
@@ -800,18 +803,23 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
             <Row label="광고 매출" value={fmtMan(campaign.nonSearchRevenue)} />
             <Row label="판매건수" value={`${fmtNum(nonSearchSold)}건`} />
             <Row label="ROAS" value={fmtRoas(campaign.nonSearchRoasPct)} valueClass={campaign.nonSearchRoasPct != null && campaign.bepPct != null && campaign.nonSearchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
+            <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
         {selectedOptionName && <FilterChip label={selectedOptionName} onClear={onClearOption} />}
         <KeywordTable
           rows={search}
+          campaignRows={campaign.rows}
           campaignBep={campaign.bepPct}
           checked={checked}
           onToggle={toggleCheck}
           nonSearchCount={nonSearch.length}
           campaignName={campaign.campaignName || campaign.campaignId}
           periodLabel={periodLabel}
+          bepMap={bepMap}
+          priceMap={priceMap}
+          rowMap={rowMap}
         />
         <NonSearchKeywordTable
           rows={nonSearch}
@@ -842,6 +850,11 @@ interface OptionDiag {
   adCostVat: number
   revenue: number
   sold: number
+  clicks: number
+  cvrPct: number | null
+  searchAdCostRaw: number
+  nonSearchAdCostRaw: number
+  searchShare: number
   roasPct: number | null
   bepPct: number | null
   gapPct: number | null
@@ -866,24 +879,36 @@ function computeOptions(
     const adCostRaw = rs.reduce((s, r) => s + (r.adCost || 0), 0)
     const adCostVat = adCostRaw * 1.1
     const sold = rs.reduce((s, r) => s + (r.sold14d || 0), 0)
+    const clicks = rs.reduce((s, r) => s + (r.clicks || 0), 0)
     const revenue = rs.reduce((s, r) => {
       const cId = String(r.convOptionId || '').trim()
       if (!cId) return s
       const p = priceMap.get(cId)
       return p ? s + (r.sold14d || 0) * p : s
     }, 0)
+    let searchRaw = 0
+    let nonSearchRaw = 0
+    for (const r of rs) {
+      if (isSearchPlacement(r.placement)) searchRaw += r.adCost || 0
+      else nonSearchRaw += r.adCost || 0
+    }
     const roasPct = adCostVat > 0 ? (revenue / adCostVat) * 100 : null
     const bepPct = bepMap.get(optId) ?? null
     const gapPct = roasPct != null && bepPct != null ? roasPct - bepPct : null
     const mr = rowMap.get(optId)
     const matched = !!mr
     const optionName = mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`
+    const cvrPct = clicks > 0 ? (sold / clicks) * 100 : null
     out.push({
       optionId: optId,
       optionName,
       alias: mr?.alias || '',
       channel: mr?.channel || '',
-      adCostVat, revenue, sold, roasPct, bepPct, gapPct, matched,
+      adCostVat, revenue, sold, clicks, cvrPct,
+      searchAdCostRaw: searchRaw,
+      nonSearchAdCostRaw: nonSearchRaw,
+      searchShare: adCostRaw > 0 ? searchRaw / adCostRaw : 0,
+      roasPct, bepPct, gapPct, matched,
     })
   }
   out.sort((a, b) => b.adCostVat - a.adCostVat)
@@ -907,16 +932,127 @@ function FilterChip({ label, onClear }: { label: string; onClear: () => void }) 
   )
 }
 
-function KeywordTable({ rows, campaignBep, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel }: {
+// ── 검색 키워드 표 옵션 드릴다운 ──────────────────────────────
+interface KeywordOption {
+  optionId: string
+  optionName: string
+  alias: string
+  channel: string
+  matched: boolean
+  sold: number
+  share: number
+  clicks: number
+  cvrPct: number | null
+  bepCpcVatExcl: number | null
+  recommendedBidVatExcl: number | null
+}
+
+function computeKeywordOptions(
+  keyword: string,
+  campaignRows: AdCampaignRow[],
+  bepMap: Map<string, number>,
+  priceMap: Map<string, number>,
+  rowMap: ReturnType<typeof buildMarginRowMap>,
+): KeywordOption[] {
+  // 검색 영역 + 해당 키워드만
+  const filtered = campaignRows.filter((r) =>
+    isSearchPlacement(r.placement) && (r.keyword || '-') === keyword,
+  )
+  if (!filtered.length) return []
+  const totalSold = filtered.reduce((s, r) => s + (r.sold14d || 0), 0)
+  // 매출 발생 옵션 (convOptionId) 단위 그룹핑
+  const grp = new Map<string, AdCampaignRow[]>()
+  for (const r of filtered) {
+    const id = String(r.convOptionId || '').trim()
+    if (!id) continue
+    const arr = grp.get(id) ?? []
+    arr.push(r)
+    grp.set(id, arr)
+  }
+  const out: KeywordOption[] = []
+  for (const [optId, rs] of grp) {
+    const sold = rs.reduce((s, r) => s + (r.sold14d || 0), 0)
+    const clicks = rs.reduce((s, r) => s + (r.clicks || 0), 0)
+    const cvrPct = clicks > 0 ? (sold / clicks) * 100 : null
+    const mr = rowMap.get(optId)
+    const matched = !!mr
+    const price = priceMap.get(optId) ?? null
+    const bep = bepMap.get(optId) ?? null
+    let bepCpcVatExcl: number | null = null
+    let recBid: number | null = null
+    if (cvrPct != null && price && bep && bep > 0) {
+      // BEP CPC (VAT 별도) = (CVR × 단가) / (BEP × 1.1). 추천 입찰가 = BEP CPC × 0.95 (5% 안전마진).
+      const cpc = ((cvrPct / 100) * price) / ((bep / 100) * 1.1)
+      if (Number.isFinite(cpc) && cpc > 0) {
+        bepCpcVatExcl = cpc
+        recBid = cpc * 0.95
+      }
+    }
+    out.push({
+      optionId: optId,
+      optionName: mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`,
+      alias: mr?.alias || '',
+      channel: mr?.channel || '',
+      matched,
+      sold,
+      share: totalSold > 0 ? sold / totalSold : 0,
+      clicks,
+      cvrPct,
+      bepCpcVatExcl,
+      recommendedBidVatExcl: recBid,
+    })
+  }
+  out.sort((a, b) => b.sold - a.sold)
+  return out
+}
+
+function KeywordOptionRow({ entry }: { entry: KeywordOption }) {
+  return (
+    <tr className="aa-keyword-option-row">
+      <td colSpan={13} className="aa-keyword-option-cell">
+        <div className="aa-keyword-option-flex">
+          <span className="aa-option-prefix">└─</span>
+          <span className="aa-option-text">
+            {entry.alias && <span className="aa-option-alias">{entry.alias}</span>}
+            <span className="aa-option-name">{entry.optionName}</span>
+            {!entry.matched && <span style={{ marginLeft: 4, fontSize: 10, color: '#92400E' }}>⚠</span>}
+            <ChannelBadge raw={entry.channel} />
+          </span>
+          <span className="aa-kw-opt-metric">판매 <strong className="mono">{fmtNum(entry.sold)}</strong>개 <span className="text-muted">({Math.round(entry.share * 100)}%)</span></span>
+          <span className="aa-kw-opt-metric">전환율 <strong className="mono">{entry.cvrPct != null ? `${entry.cvrPct.toFixed(1)}%` : '—'}</strong></span>
+          <span className="aa-kw-opt-metric">BEP CPC <strong className="mono">{entry.bepCpcVatExcl != null ? `${Math.round(entry.bepCpcVatExcl).toLocaleString('ko-KR')}원` : '—'}</strong></span>
+          <span className="aa-kw-opt-metric">추천 입찰가 {entry.recommendedBidVatExcl != null
+            ? <span className="bid-recommend">{Math.round(entry.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
+            : <span className="text-muted">—</span>}
+          </span>
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap }: {
   rows: KeywordRow[]
+  campaignRows: AdCampaignRow[]
   campaignBep: number | null
   checked: Set<string>
   onToggle: (k: string) => void
   nonSearchCount: number
   campaignName: string
   periodLabel: string
+  bepMap: Map<string, number>
+  priceMap: Map<string, number>
+  rowMap: ReturnType<typeof buildMarginRowMap>
 }) {
   const { sorted, key, dir, toggle } = useSort(rows, 'adCostVat' as keyof KeywordRow, 'desc')
+  const [expandedKws, setExpandedKws] = useState<Set<string>>(new Set())
+  function toggleKw(k: string) {
+    setExpandedKws((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k); else next.add(k)
+      return next
+    })
+  }
 
   const TH = ({ label, k, num, minWidth, sticky, sticky2, width }: any) => (
     <th
@@ -964,15 +1100,15 @@ function KeywordTable({ rows, campaignBep, checked, onToggle, nonSearchCount: _n
       '키워드': r.keyword,
       '노출': r.impressions,
       '클릭': r.clicks,
-      'CTR(%)': r.ctrPct,
+      '클릭율(%)': r.ctrPct,
       '광고 판매수': r.orders,
-      'CVR(%)': r.cvrPct,
+      '전환율(%)': r.cvrPct,
       'ROAS(%)': r.roasPct,
       'BEP(%)': r.bepPct,
       '광고비 (+VAT)': r.adCostVat,
       '광고 매출': r.revenue,
       '추천 액션': r.action === 'keep' ? '유지' : r.action === 'move' ? '수동 이동' : '제외',
-      '추천 입찰가 (VAT 별도)': r.recommendedBidVatExcl,
+      '추천 입찰가 (VAT 별도, 5% 안전마진)': r.recommendedBidVatExcl,
     }))
     const filename = `광고분석_검색키워드_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
     exportXlsx(data, filename, '검색키워드')
@@ -1009,21 +1145,43 @@ function KeywordTable({ rows, campaignBep, checked, onToggle, nonSearchCount: _n
               <TH label="키워드" k="keyword" sticky2 minWidth={140} />
               <TH label="노출" k="impressions" num />
               <TH label="클릭" k="clicks" num />
-              <TH label="CTR" k="ctrPct" num />
+              <TH label="클릭율" k="ctrPct" num />
               <TH label="광고 판매수" k="orders" num />
-              <TH label="CVR" k="cvrPct" num />
+              <TH label="전환율" k="cvrPct" num />
               <TH label="ROAS" k="roasPct" num />
               <TH label="BEP" k="bepPct" num />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
               <TH label="광고 매출" k="revenue" num />
               <th>추천 액션</th>
-              <TH label={<>수동 이동 시<br />추천 입찰가 <span style={{ fontSize: 10, color: '#94A3B8' }}>(VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={130} />
+              <TH label={<>추천 입찰가<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />
             </tr>
           </thead>
           <tbody>
-            {sorted.map((r) => (
-              <KeywordRowComp key={r.keyword} r={r} checked={checked.has(r.keyword)} onToggle={() => onToggle(r.keyword)} />
-            ))}
+            {sorted.map((r) => {
+              const isExpanded = expandedKws.has(r.keyword)
+              const opts = isExpanded
+                ? computeKeywordOptions(r.keyword, campaignRows, bepMap, priceMap, rowMap)
+                : []
+              return (
+                <React.Fragment key={r.keyword}>
+                  <KeywordRowComp
+                    r={r}
+                    checked={checked.has(r.keyword)}
+                    onToggle={() => onToggle(r.keyword)}
+                    isExpanded={isExpanded}
+                    onToggleExpand={() => toggleKw(r.keyword)}
+                  />
+                  {isExpanded && opts.map((opt) => (
+                    <KeywordOptionRow key={`${r.keyword}::${opt.optionId}`} entry={opt} />
+                  ))}
+                  {isExpanded && opts.length === 0 && (
+                    <tr className="aa-keyword-option-row">
+                      <td colSpan={13} style={{ textAlign: 'center', color: '#94A3B8', padding: 12, fontSize: 12 }}>옵션 매출 데이터 없음</td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              )
+            })}
             {sorted.length === 0 && (
               <tr><td colSpan={13} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
             )}
@@ -1042,7 +1200,7 @@ function KeywordTable({ rows, campaignBep, checked, onToggle, nonSearchCount: _n
   )
 }
 
-function KeywordRowComp({ r, checked, onToggle }: { r: KeywordRow; checked: boolean; onToggle: () => void }) {
+function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { r: KeywordRow; checked: boolean; onToggle: () => void; isExpanded: boolean; onToggleExpand: () => void }) {
   const action =
     r.action === 'keep' ? <span className="aa-action-chip action-keep">유지</span> :
     r.action === 'move' ? <span className="aa-action-chip action-move">➡️ 수동 이동</span> :
@@ -1060,7 +1218,16 @@ function KeywordRowComp({ r, checked, onToggle }: { r: KeywordRow; checked: bool
   return (
     <tr>
       <td className="sticky-left"><input type="checkbox" checked={checked} onChange={onToggle} /></td>
-      <td className="sticky-left-2"><strong>{r.keyword}</strong></td>
+      <td className="sticky-left-2">
+        <span
+          className="aa-expand-toggle"
+          onClick={onToggleExpand}
+          title={isExpanded ? '옵션 접기' : '옵션 펼치기'}
+        >
+          {isExpanded ? '▾' : '▸'}
+        </span>
+        <strong>{r.keyword}</strong>
+      </td>
       <td className="num">{fmtNum(r.impressions)}</td>
       <td className="num">{fmtNum(r.clicks)}</td>
       <td className="num">{fmtPctVal(r.ctrPct, 2)}</td>
@@ -1120,9 +1287,9 @@ function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }:
       '지면': r.keyword,
       '노출': r.impressions,
       '클릭': r.clicks,
-      'CTR(%)': r.ctrPct,
+      '클릭율(%)': r.ctrPct,
       '광고 판매수': r.orders,
-      'CVR(%)': r.cvrPct,
+      '전환율(%)': r.cvrPct,
       'ROAS(%)': r.roasPct,
       'BEP(%)': r.bepPct,
       '광고비 (+VAT)': r.adCostVat,
@@ -1159,9 +1326,9 @@ function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }:
               <TH label="지면" k="keyword" minWidth={140} />
               <TH label="노출" k="impressions" num />
               <TH label="클릭" k="clicks" num />
-              <TH label="CTR" k="ctrPct" num />
+              <TH label="클릭율" k="ctrPct" num />
               <TH label="광고 판매수" k="orders" num />
-              <TH label="CVR" k="cvrPct" num />
+              <TH label="전환율" k="cvrPct" num />
               <TH label="ROAS" k="roasPct" num />
               <TH label="BEP" k="bepPct" num />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
@@ -1219,8 +1386,8 @@ function ActionLegend() {
       <br />• <span className="aa-action-chip action-move">➡️ 수동 이동</span> ROAS &lt; BEP 이면서 광고비 50만원 이상 (빅키워드 후보)
       <br />• <span className="aa-action-chip action-exclude">🚫 제외</span> ROAS &lt; BEP 이면서 광고비 50만원 미만 또는 ROAS &lt; BEP × 0.5
       <br /><br />
-      <strong style={{ color: '#1F2937' }}>추천 입찰가 공식:</strong> 매출 ÷ (클릭수 × BEP × 1.1) ÷ 1.1 = 매출 ÷ (클릭수 × BEP × 1.21){' '}
-      <span style={{ fontSize: 11 }}>— BEP 대비 10% 여유 / (VAT 별도) = 쿠팡 광고센터 입력값 / 클릭 &lt; 20 → 데이터 부족</span>
+      <strong style={{ color: '#1F2937' }}>추천 입찰가 공식:</strong> 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) = 매출 ÷ (클릭수 × BEP × 1.155){' '}
+      <span style={{ fontSize: 11 }}>— BEP 대비 5% 여유 / VAT 별도 = 쿠팡 광고센터 입력값 / 클릭 &lt; 20 → 데이터 부족</span>
     </div>
   )
 }
@@ -1291,12 +1458,12 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
                 <TH label="키워드" k="keyword" sticky minWidth={140} />
                 <TH label="노출" k="impressions" num />
                 <TH label="클릭" k="clicks" num />
-                <TH label="CTR" k="ctrPct" num />
+                <TH label="클릭율" k="ctrPct" num />
                 <TH label="광고 판매수" k="orders" num />
-                <TH label="CVR" k="cvrPct" num />
+                <TH label="전환율" k="cvrPct" num />
                 <TH label="매출" k="revenue" num />
                 <th className="num">현재 입찰가<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(VAT 별도)</span></th>
-                <TH label={<>추천 입찰가<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(VAT 별도)</span></>} k="recommendedBidVatExcl" num />
+                <TH label={<>추천 입찰가<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />
                 <TH label="차이" k="bidDiff" num />
                 <th>신뢰도</th>
                 <th>점검</th>
@@ -1462,6 +1629,10 @@ function Style() {
       .aa-option-text { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
       .aa-option-alias { color: #1E40AF; font-weight: 600; font-size: 12.5px; }
       .aa-option-name { color: #475569; font-size: 12px; }
+      .aa-table-wrap tr.aa-keyword-option-row td.aa-keyword-option-cell { background: #F8FAFC; padding: 8px 14px 8px 56px; border-bottom: 1px solid #E2E8F0; }
+      .aa-keyword-option-flex { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; font-size: 12px; }
+      .aa-kw-opt-metric { color: #475569; }
+      .aa-kw-opt-metric strong { color: #1F2937; }
     `}</style>
   )
 }
