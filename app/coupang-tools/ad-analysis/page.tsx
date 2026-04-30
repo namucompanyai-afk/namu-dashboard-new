@@ -20,6 +20,8 @@ import {
   buildBepCpcForCampaign,
   buildActualPriceMapById,
   buildMarginRowMap,
+  buildExposureMapByOptionId,
+  splitRowRevenue,
   isSearchPlacement,
   type CampaignDiag,
   type KeywordRow,
@@ -548,6 +550,7 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
+  const exposureMap = useMemo(() => buildExposureMapByOptionId(master), [master])
 
   const TH = ({ label, k, num, minWidth, sticky }: { label: React.ReactNode; k: keyof CampaignDiag; num?: boolean; minWidth?: number; sticky?: boolean }) => (
     <th
@@ -580,6 +583,7 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
               <TH label="타입" k={'type'} />
               <TH label="광고비 (+VAT)" k={'adCostVat'} num />
               <TH label="광고 매출" k={'revenue'} num />
+              <TH label={<>교차 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'crossRevenue'} num minWidth={110} />
               <TH label="광고 판매수" k={'orders'} num />
               <TH label="ROAS" k={'roasPct'} num />
               <TH label="BEP" k={'bepPct'} num />
@@ -593,7 +597,7 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
               const isOpen = c.campaignId === openCampId
               const isExpanded = expandedCampIds.has(c.campaignId)
               const opts = isExpanded
-                ? computeOptions(c.rows, bepMap, priceMap, rowMap)
+                ? computeOptions(c.rows, bepMap, priceMap, rowMap, exposureMap)
                 : []
               return (
                 <CampaignRowGroup
@@ -655,6 +659,7 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>
         <td className="num">{fmtMan(c.revenue)}</td>
+        <td className="num text-muted">{c.crossRevenue > 0 ? fmtMan(c.crossRevenue) : '—'}</td>
         <td className="num">{fmtNum(c.orders)}</td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
         <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
@@ -680,7 +685,7 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
       ))}
       {isExpanded && options.length === 0 && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={10} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
+          <td className="sticky-left aa-option-cell" colSpan={11} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
         </tr>
       )}
     </>
@@ -711,6 +716,7 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
       <td><span className="text-muted">—</span></td>
       <td className="num">{fmtMan(o.adCostVat)}</td>
       <td className="num">{fmtMan(o.revenue)}</td>
+      <td className="num text-muted">{o.crossRevenue > 0 ? fmtMan(o.crossRevenue) : '—'}</td>
       <td className="num">{fmtNum(o.sold)}</td>
       <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
       <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
@@ -741,7 +747,8 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
-  const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap), [campaign.rows, bepMap, priceMap, rowMap])
+  const exposureMap = useMemo(() => buildExposureMapByOptionId(master), [master])
+  const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap, exposureMap), [campaign.rows, bepMap, priceMap, rowMap, exposureMap])
 
   const filteredCampaign = useMemo(() => {
     if (!selectedOptionId) return campaign
@@ -751,7 +758,7 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
     ? (options.find((o) => o.optionId === selectedOptionId)?.optionName ?? selectedOptionId)
     : null
 
-  const { search, nonSearch } = useMemo(() => buildKeywordRows(filteredCampaign, bepMap, priceMap), [filteredCampaign, bepMap, priceMap])
+  const { search, nonSearch } = useMemo(() => buildKeywordRows(filteredCampaign, bepMap, priceMap, exposureMap), [filteredCampaign, bepMap, priceMap, exposureMap])
   const cpcEntries = useMemo(() => buildBepCpcForCampaign(campaign, master), [campaign, master])
   const searchSold = useMemo(() => search.reduce((s, r) => s + (r.orders || 0), 0), [search])
   const nonSearchSold = useMemo(() => nonSearch.reduce((s, r) => s + (r.orders || 0), 0), [nonSearch])
@@ -851,6 +858,7 @@ interface OptionDiag {
   channel: string
   adCostVat: number
   revenue: number
+  crossRevenue: number
   sold: number
   clicks: number
   cvrPct: number | null
@@ -868,6 +876,7 @@ function computeOptions(
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
   rowMap: Map<string, { optionName?: string; alias?: string; channel?: string }>,
+  exposureByOptionId: Map<string, string>,
 ): OptionDiag[] {
   const grp = new Map<string, AdCampaignRow[]>()
   for (const r of rows) {
@@ -882,12 +891,13 @@ function computeOptions(
     const adCostVat = adCostRaw * 1.1
     const sold = rs.reduce((s, r) => s + (r.sold14d || 0), 0)
     const clicks = rs.reduce((s, r) => s + (r.clicks || 0), 0)
-    const revenue = rs.reduce((s, r) => {
-      const cId = String(r.convOptionId || '').trim()
-      if (!cId) return s
-      const p = priceMap.get(cId)
-      return p ? s + (r.sold14d || 0) * p : s
-    }, 0)
+    let revenue = 0
+    let crossRevenue = 0
+    for (const r of rs) {
+      const split = splitRowRevenue(r, priceMap, exposureByOptionId)
+      revenue += split.self
+      crossRevenue += split.cross
+    }
     let searchRaw = 0
     let nonSearchRaw = 0
     for (const r of rs) {
@@ -906,7 +916,7 @@ function computeOptions(
       optionName,
       alias: mr?.alias || '',
       channel: mr?.channel || '',
-      adCostVat, revenue, sold, clicks, cvrPct,
+      adCostVat, revenue, crossRevenue, sold, clicks, cvrPct,
       searchAdCostRaw: searchRaw,
       nonSearchAdCostRaw: nonSearchRaw,
       searchShare: adCostRaw > 0 ? searchRaw / adCostRaw : 0,
@@ -1419,7 +1429,8 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
-  const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap), [campaign.rows, bepMap, priceMap, rowMap])
+  const exposureMap = useMemo(() => buildExposureMapByOptionId(master), [master])
+  const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap, exposureMap), [campaign.rows, bepMap, priceMap, rowMap, exposureMap])
 
   const filteredCampaign = useMemo(() => {
     if (!selectedOptionId) return campaign
@@ -1430,7 +1441,7 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
     : null
 
   const [bidByKeyword, setBidByKeyword] = useState<Map<string, number>>(new Map())
-  const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword), [filteredCampaign, bepMap, priceMap, bidByKeyword])
+  const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap), [filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap])
   const { sorted, key, dir, toggle } = useSort(rows, 'recommendedBidVatExcl' as keyof ManualKeywordRow, 'desc')
 
   const TH = ({ label, k, num, minWidth, sticky }: any) => (

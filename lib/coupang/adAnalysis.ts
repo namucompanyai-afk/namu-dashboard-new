@@ -45,27 +45,51 @@ export function isSearchPlacement(placement: string): boolean {
   return SEARCH_PLACEMENT_HINTS.some((h) => placement.includes(h))
 }
 
-/** row 매출: convOptionId 기준 sold14d × 마진M 실판매가. 매칭 안 되면 0. */
-function rowRevenue(r: AdCampaignRow, priceMap: Map<string, number>): number {
-  const optId = String(r.convOptionId || '').trim()
-  if (!optId) return 0
-  const price = priceMap.get(optId)
-  if (!price || price <= 0) return 0
-  return (r.sold14d || 0) * price
+/** row 매출 분리: 자기 매출(self) vs 교차판매 매출(cross).
+ *  교차판매 정의: ad/conv 옵션의 노출ID가 다름 (다른 상품으로 전환).
+ *  같은 노출ID 내 옵션 변경(봉수/규격 등)은 self 로 인정.
+ *  노출ID 매핑이 없으면 self 로 fallback (기존 동작 유지). */
+export function splitRowRevenue(
+  r: AdCampaignRow,
+  priceMap: Map<string, number>,
+  exposureByOptionId: Map<string, string>,
+): { self: number; cross: number } {
+  const convId = String(r.convOptionId || '').trim()
+  if (!convId) return { self: 0, cross: 0 }
+  const price = priceMap.get(convId)
+  if (!price || price <= 0) return { self: 0, cross: 0 }
+  const fullRev = (r.sold14d || 0) * price
+  const adId = String(r.adOptionId || '').trim()
+  if (!adId || convId === adId) return { self: fullRev, cross: 0 }
+  const adExp = exposureByOptionId.get(adId)
+  const convExp = exposureByOptionId.get(convId)
+  if (!adExp || !convExp) return { self: fullRev, cross: 0 }
+  if (adExp === convExp) return { self: fullRev, cross: 0 }
+  return { self: 0, cross: fullRev }
 }
 
-/** 가중평균 BEP — 옵션 매출 × 옵션 BEP / Σ 매출. 매출 = sold14d × 실판매가 (진단 일관). */
+/** row 매출 (자기 매출만). ROAS/BEP 산출에 사용. 교차판매 분량은 별도 crossRevenue 로 집계. */
+function rowRevenue(
+  r: AdCampaignRow,
+  priceMap: Map<string, number>,
+  exposureByOptionId: Map<string, string>,
+): number {
+  return splitRowRevenue(r, priceMap, exposureByOptionId).self
+}
+
+/** 가중평균 BEP — 옵션 매출 × 옵션 BEP / Σ 매출. 매출 = self 매출만 (교차판매 제외). */
 function weightedBep(
   rows: AdCampaignRow[],
   bepByOptionId: Map<string, number>,
   priceMap: Map<string, number>,
+  exposureByOptionId: Map<string, string>,
 ): number | null {
   let num = 0
   let den = 0
   for (const r of rows) {
     const bep = bepByOptionId.get(r.adOptionId)
     if (bep == null || !Number.isFinite(bep) || bep <= 0) continue
-    const rev = rowRevenue(r, priceMap)
+    const rev = rowRevenue(r, priceMap, exposureByOptionId)
     if (rev <= 0) continue
     num += rev * bep
     den += rev
@@ -110,6 +134,8 @@ export interface CampaignDiag {
   /** 광고비 (VAT 포함, ×1.1) */
   adCostVat: number
   revenue: number
+  /** 교차판매 매출 — 다른 노출ID 로 전환된 분량 (참고용, ROAS 산출 제외) */
+  crossRevenue: number
   /** ROAS = revenue / adCostVat × 100 (%) */
   roasPct: number | null
   /** 가중 BEP (%) */
@@ -222,6 +248,17 @@ export function buildMarginRowMap(master: CostMaster | null): Map<string, Margin
   return m
 }
 
+/** 마진 마스터 → optionId 별 exposureId 맵. 교차판매(다른 노출ID 전환) 판단용. */
+export function buildExposureMapByOptionId(master: CostMaster | null): Map<string, string> {
+  const m = new Map<string, string>()
+  if (!master) return m
+  for (const r of master.marginRows) {
+    if (!r.optionId || !r.exposureId) continue
+    m.set(String(r.optionId).trim(), String(r.exposureId).trim())
+  }
+  return m
+}
+
 function safeDiv(a: number, b: number): number | null {
   if (!Number.isFinite(b) || b === 0) return null
   return a / b
@@ -250,6 +287,7 @@ export function buildAdAnalysisView(
 
   const bepMap = buildBepMap(master)
   const priceMap = buildActualPriceMapById(master)
+  const exposureMap = buildExposureMapByOptionId(master)
 
   // 미매칭 집계 — convOptionId(매출 기준) priceMap 에 없는 row 의 광고비/판매수 합
   let unmatchedAdCostRaw = 0
@@ -285,8 +323,14 @@ export function buildAdAnalysisView(
     const first = rows[0]
     const adCostRaw = rows.reduce((s, r) => s + (r.adCost || 0), 0)
     const adCostVat = adCostRaw * 1.1
-    // 매출 = Σ (sold14d × 마진M 실판매가) — 진단 일관. 매칭 안 된 row 는 0 기여.
-    const revenue = rows.reduce((s, r) => s + rowRevenue(r, priceMap), 0)
+    // 매출 = Σ (sold14d × 마진M 실판매가) — self 만. 교차판매(다른 노출ID 전환)는 cross 로 별도.
+    let revenue = 0
+    let crossRevenue = 0
+    for (const r of rows) {
+      const split = splitRowRevenue(r, priceMap, exposureMap)
+      revenue += split.self
+      crossRevenue += split.cross
+    }
     // 주문 라벨이지만 실제 컬럼은 sold14d (수량) — 진단의 adSold 와 일관.
     const orders = rows.reduce((s, r) => s + (r.sold14d || 0), 0)
     const clicks = rows.reduce((s, r) => s + (r.clicks || 0), 0)
@@ -296,7 +340,7 @@ export function buildAdAnalysisView(
     let searchRev = 0
     let nonSearchRev = 0
     for (const r of rows) {
-      const rev = rowRevenue(r, priceMap)
+      const rev = rowRevenue(r, priceMap, exposureMap)
       if (isSearchPlacement(r.placement)) {
         searchRaw += r.adCost || 0
         searchRev += rev
@@ -309,7 +353,7 @@ export function buildAdAnalysisView(
     const nonSearchAdCostVat = nonSearchRaw * 1.1
 
     const roasPct = safeDiv(revenue, adCostVat)
-    const bepPct = weightedBep(rows, bepMap, priceMap)
+    const bepPct = weightedBep(rows, bepMap, priceMap, exposureMap)
     const gapPct = roasPct != null && bepPct != null ? roasPct * 100 - bepPct : null
 
     const searchRoas = safeDiv(searchRev, searchAdCostVat)
@@ -322,6 +366,7 @@ export function buildAdAnalysisView(
       adCostRaw,
       adCostVat,
       revenue,
+      crossRevenue,
       roasPct: roasPct != null ? roasPct * 100 : null,
       bepPct,
       gapPct,
@@ -373,6 +418,7 @@ export function buildKeywordRows(
   campaign: CampaignDiag,
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
+  exposureByOptionId: Map<string, string>,
 ): { search: KeywordRow[]; nonSearch: KeywordRow[] } {
   const search = new Map<string, AdCampaignRow[]>()
   const nonSearch = new Map<string, AdCampaignRow[]>()
@@ -394,11 +440,11 @@ export function buildKeywordRows(
     const adCostRaw = rows.reduce((s, r) => s + (r.adCost || 0), 0)
     const adCostVat = adCostRaw * 1.1
     // 매출 = Σ (sold14d × 마진M 실판매가)
-    const revenue = rows.reduce((s, r) => s + rowRevenue(r, priceMap), 0)
+    const revenue = rows.reduce((s, r) => s + rowRevenue(r, priceMap, exposureByOptionId), 0)
     const ctr = safeDiv(clicks, impressions)
     const cvr = safeDiv(orders, clicks)
     const roas = safeDiv(revenue, adCostVat)
-    const bep = weightedBep(rows, bepMap, priceMap)
+    const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId)
     const roasPct = roas != null ? roas * 100 : null
     const bid = recommendedBid(revenue, clicks, bep)
     const action: KeywordAction = classifyKeywordAction(roasPct, bep, adCostVat)
@@ -447,8 +493,9 @@ export function buildManualReviewRows(
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
   currentBidByKeyword: Map<string, number>,
+  exposureByOptionId: Map<string, string>,
 ): ManualKeywordRow[] {
-  const { search } = buildKeywordRows(campaign, bepMap, priceMap)
+  const { search } = buildKeywordRows(campaign, bepMap, priceMap, exposureByOptionId)
   return search.map<ManualKeywordRow>((k) => {
     const bid = recommendedBid(k.revenue, k.clicks, k.bepPct)
     const cur = currentBidByKeyword.get(k.keyword) ?? null
