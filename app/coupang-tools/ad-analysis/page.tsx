@@ -8,8 +8,9 @@
  * 자동 입찰 적용은 영구 안 함 — 사용자가 키워드 복사해서 쿠팡 광고센터에 직접 입력.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
+import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import {
   buildAdAnalysisView,
   buildKeywordRows,
@@ -22,7 +23,7 @@ import {
   type ManualKeywordRow,
 } from '@/lib/coupang/adAnalysis'
 
-type Period = 7 | 30 | 90
+type Mode = 'saved' | 'live'
 
 // ── formatters ────────────────────────────────────────────────
 const fmtMan = (n: number | null | undefined): string => {
@@ -74,12 +75,16 @@ export default function AdAnalysisPage() {
   const marginMaster = useMarginStore((s) => s.marginMaster)
   const rawAdCampaign = useMarginStore((s) => s.rawAdCampaign)
   const adPeriod = useMarginStore((s) => s.adPeriod)
+  const adAnalysisLive = useMarginStore((s) => s.adAnalysisLive)
   const setMarginMaster = useMarginStore((s) => s.setMarginMaster)
   const setAdCampaign = useMarginStore((s) => s.setAdCampaign)
   const setSalesInsight = useMarginStore((s) => s.setSalesInsight)
-  const [period, setPeriod] = useState<Period>(30)
+  const setAdAnalysisLive = useMarginStore((s) => s.setAdAnalysisLive)
+  const clearAdAnalysisLive = useMarginStore((s) => s.clearAdAnalysisLive)
+  const [mode, setMode] = useState<Mode>('saved')
   const [openCampId, setOpenCampId] = useState<string | null>(null)
   const [autoLoading, setAutoLoading] = useState(true)
+  const [uploadError, setUploadError] = useState<string | null>(null)
 
   // 마운트 시점 자동 로드 — 수익 진단 페이지를 거치지 않고 직접 진입해도 동작.
   // 진단 페이지의 자동 로드 로직 중 광고 분석에 필요한 것만 발췌:
@@ -160,34 +165,120 @@ export default function AdAnalysisPage() {
     return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 모드별 source 분기
+  const sourceRows = mode === 'live' ? (adAnalysisLive?.rows ?? null) : rawAdCampaign
+  const sourcePeriod = mode === 'live' ? (adAnalysisLive?.period ?? null) : adPeriod
+
   const view = useMemo(
-    () => buildAdAnalysisView(rawAdCampaign, marginMaster as any),
-    [rawAdCampaign, marginMaster],
+    () => buildAdAnalysisView(sourceRows, marginMaster as any),
+    [sourceRows, marginMaster],
   )
 
+  // 라이브 광고 엑셀 업로드 핸들러 — store 의 rawAdCampaign 안 건드림.
+  async function handleLiveUpload(file: File) {
+    setUploadError(null)
+    try {
+      const buf = await file.arrayBuffer()
+      const r = parseAdCampaign(buf, file.name)
+      if (!r.rows.length) {
+        setUploadError('광고 캠페인 행을 찾지 못했습니다. 파일을 확인해주세요.')
+        return
+      }
+      const meta = { fileName: file.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length }
+      const period = r.startDate && r.endDate
+        ? { startDate: r.startDate, endDate: r.endDate, days: r.periodDays || 30 }
+        : null
+      setAdAnalysisLive(r.rows, meta, period)
+    } catch (err: any) {
+      setUploadError(`파싱 에러: ${err?.message || err}`)
+    }
+  }
+
+  // 셀렉터/공통 헤더 — 어떤 분기든 항상 노출
+  const headerNode = (
+    <Header
+      mode={mode}
+      onMode={setMode}
+      adPeriodLabel={sourcePeriod ? `${sourcePeriod.startDate} ~ ${sourcePeriod.endDate} (${sourcePeriod.days}일)` : undefined}
+    />
+  )
+
+  // ── 라이브 모드 ──
+  if (mode === 'live') {
+    if (!marginMaster) {
+      return (
+        <div style={pageWrap}>
+          <Style />
+          {headerNode}
+          <div style={noticeBoxOrange}>
+            마진마스터가 없습니다. 「수익 진단」 페이지에서 마진분석.xlsx 를 먼저 업로드해주세요.
+            <br />
+            <span style={{ fontSize: 12, color: '#B45309' }}>
+              (라이브 모드는 마진마스터의 옵션ID → 실판매가 룩업으로 매출을 산출합니다.)
+            </span>
+          </div>
+        </div>
+      )
+    }
+    if (!adAnalysisLive) {
+      return (
+        <div style={pageWrap}>
+          <Style />
+          {headerNode}
+          <LiveUploadBox onFile={handleLiveUpload} error={uploadError} />
+        </div>
+      )
+    }
+    // 라이브 데이터 있음 → 정상 view
+    const openCampaign = openCampId ? view.campaigns.find((c) => c.campaignId === openCampId) || null : null
+    return (
+      <div style={{
+        fontFamily: 'Pretendard, -apple-system, sans-serif',
+        color: '#1F2937', fontSize: 14, lineHeight: 1.5,
+      }}>
+        <Style />
+        {headerNode}
+        <LiveActiveBar
+          meta={adAnalysisLive.meta}
+          onReplace={handleLiveUpload}
+          onClear={() => { clearAdAnalysisLive(); setUploadError(null) }}
+        />
+        {uploadError && <div style={errorBox}>{uploadError}</div>}
+        <KpiSection view={view} />
+        <HintBanner />
+        <CampaignSection
+          view={view}
+          master={marginMaster as any}
+          openCampId={openCampId}
+          onOpen={(id) => setOpenCampId(id === openCampId ? null : id)}
+        />
+        {openCampaign && (
+          openCampaign.type === 'manual'
+            ? <ManualSection campaign={openCampaign} master={marginMaster as any} onClose={() => setOpenCampId(null)} />
+            : <AiSection campaign={openCampaign} master={marginMaster as any} onClose={() => setOpenCampId(null)} />
+        )}
+      </div>
+    )
+  }
+
+  // ── 저장 모드 ──
   if (autoLoading && !view.loaded) {
     return (
-      <div style={{ maxWidth: 1500, margin: '0 auto', padding: '32px 40px', fontFamily: 'Pretendard, sans-serif' }}>
-        <Header period={period} onPeriod={setPeriod} />
-        <div style={{
-          background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8,
-          padding: 24, fontSize: 14, color: '#64748B', textAlign: 'center',
-        }}>
-          저장된 광고 데이터를 불러오는 중…
-        </div>
+      <div style={pageWrap}>
+        <Style />
+        {headerNode}
+        <div style={loadingBox}>저장된 광고 데이터를 불러오는 중…</div>
       </div>
     )
   }
 
   if (!view.loaded) {
     return (
-      <div style={{ maxWidth: 1500, margin: '0 auto', padding: '32px 40px', fontFamily: 'Pretendard, sans-serif' }}>
-        <Header period={period} onPeriod={setPeriod} />
-        <div style={{
-          background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8,
-          padding: 24, fontSize: 14, color: '#92400E', textAlign: 'center',
-        }}>
-          광고 캠페인 엑셀이 로드되지 않았습니다. 「수익 진단」 페이지에서 광고 엑셀을 업로드해주세요.
+      <div style={pageWrap}>
+        <Style />
+        {headerNode}
+        <div style={noticeBoxOrange}>
+          저장된 광고 분석이 없습니다. 「수익 진단」 페이지에서 광고 엑셀을 업로드/저장하거나, 위 「라이브」 탭에서 직접 업로드하세요.
         </div>
       </div>
     )
@@ -201,7 +292,7 @@ export default function AdAnalysisPage() {
       color: '#1F2937', fontSize: 14, lineHeight: 1.5,
     }}>
       <Style />
-      <Header period={period} onPeriod={setPeriod} adPeriodLabel={adPeriod ? `${adPeriod.startDate} ~ ${adPeriod.endDate} (${adPeriod.days}일)` : undefined} />
+      {headerNode}
       <KpiSection view={view} />
       <HintBanner />
       <CampaignSection
@@ -219,12 +310,119 @@ export default function AdAnalysisPage() {
   )
 }
 
+const pageWrap: React.CSSProperties = { maxWidth: 1500, margin: '0 auto', padding: '32px 40px', fontFamily: 'Pretendard, sans-serif' }
+const loadingBox: React.CSSProperties = { background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: 24, fontSize: 14, color: '#64748B', textAlign: 'center' }
+const noticeBoxOrange: React.CSSProperties = { background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: 24, fontSize: 14, color: '#92400E', textAlign: 'center' }
+const errorBox: React.CSSProperties = { background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '8px 12px', margin: '8px 0', fontSize: 12, color: '#991B1B' }
+
+// ── 라이브 모드 업로드 박스 (드래그 + 클릭) ───────────────────
+function LiveUploadBox({ onFile, error }: { onFile: (f: File) => void; error: string | null }) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [dragOver, setDragOver] = useState(false)
+
+  const handleFiles = (files: FileList | null) => {
+    const f = files?.[0]
+    if (!f) return
+    onFile(f)
+  }
+
+  return (
+    <>
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragOver(false)
+          handleFiles(e.dataTransfer.files)
+        }}
+        style={{
+          border: `2px dashed ${dragOver ? '#FF6B35' : '#FED7AA'}`,
+          background: dragOver ? '#FFF7ED' : '#FFFBF5',
+          borderRadius: 8,
+          padding: '40px 24px',
+          textAlign: 'center',
+          cursor: 'pointer',
+          color: '#92400E',
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>광고 캠페인 엑셀 업로드</div>
+        <div style={{ fontSize: 13, color: '#B45309' }}>
+          쿠팡 광고센터 → pa_total_campaign 다운로드 파일 (.xlsx)
+        </div>
+        <div style={{ fontSize: 12, color: '#A16207', marginTop: 8 }}>
+          파일을 끌어다 놓거나 클릭해서 선택하세요. 기간은 파일명에서 자동 인식됩니다.
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          style={{ display: 'none' }}
+          onChange={(e) => { handleFiles(e.target.files); if (inputRef.current) inputRef.current.value = '' }}
+        />
+      </div>
+      {error && <div style={errorBox}>{error}</div>}
+    </>
+  )
+}
+
+// ── 라이브 활성 상태 표시줄 (파일명 + 다시 업로드 / 닫기) ────────
+function LiveActiveBar({ meta, onReplace, onClear }: {
+  meta: { fileName: string; uploadedAt: string; rowCount: number } | null
+  onReplace: (f: File) => void
+  onClear: () => void
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6,
+      padding: '8px 12px', margin: '8px 0 16px', fontSize: 12, color: '#92400E',
+    }}>
+      <div>
+        📂 <strong>라이브:</strong> {meta?.fileName || '—'}
+        {meta?.rowCount != null && <span style={{ marginLeft: 8, color: '#B45309' }}>· {meta.rowCount.toLocaleString()} rows</span>}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          onClick={() => inputRef.current?.click()}
+          style={{ padding: '4px 10px', border: '1px solid #FED7AA', background: '#FFFBF5', borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#92400E' }}
+        >
+          다시 업로드
+        </button>
+        <button
+          onClick={onClear}
+          style={{ padding: '4px 10px', border: '1px solid #FECACA', background: '#FEF2F2', borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#991B1B' }}
+        >
+          닫기
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".xlsx,.xls"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) onReplace(f)
+            if (inputRef.current) inputRef.current.value = ''
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ── Header ────────────────────────────────────────────────────
-function Header({ period, onPeriod, adPeriodLabel }: {
-  period: Period
-  onPeriod: (p: Period) => void
+function Header({ mode, onMode, adPeriodLabel }: {
+  mode: Mode
+  onMode: (m: Mode) => void
   adPeriodLabel?: string
 }) {
+  const tabs: { id: Mode; label: string; sub: string }[] = [
+    { id: 'saved', label: '저장 (7일)', sub: '진단 페이지 자동 저장' },
+    { id: 'live', label: '라이브', sub: '광고 엑셀 직접 업로드' },
+  ]
   return (
     <div className="aa-page-header">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
@@ -232,14 +430,15 @@ function Header({ period, onPeriod, adPeriodLabel }: {
           <div className="aa-title">광고 분석</div>
           <div className="aa-desc">캠페인별 효율 진단 · 제외 키워드 추출 · 수동 캠페인 입찰가 가이드 {adPeriodLabel && <span style={{ marginLeft: 8, color: '#94A3B8' }}>· {adPeriodLabel}</span>}</div>
         </div>
-        <div className="aa-period-bar">
-          {[7, 30, 90].map((p) => (
+        <div className="aa-period-bar" title="14일 어트리뷰션 윈도우 중첩 회피 — 30/90일은 라이브 모드에서 직접 업로드">
+          {tabs.map((t) => (
             <button
-              key={p}
-              className={`aa-period-btn ${period === p ? 'active' : ''}`}
-              onClick={() => onPeriod(p as Period)}
+              key={t.id}
+              className={`aa-period-btn ${mode === t.id ? 'active' : ''}`}
+              onClick={() => onMode(t.id)}
+              title={t.sub}
             >
-              {p}일
+              {t.label}
             </button>
           ))}
         </div>

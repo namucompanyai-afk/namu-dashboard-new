@@ -71,6 +71,14 @@ interface MarginStore {
   /** SELLER_INSIGHTS 기간 (일수) — 기본 30일, 사용자가 조정 가능 */
   sellerPeriodDays: number
 
+  /** 광고 분석 페이지 라이브 모드 — 진단 페이지와 분리된 별도 슬롯.
+   *  사용자가 ad-analysis 에서 직접 업로드한 광고 raw. 영구 저장 X (메모리만). */
+  adAnalysisLive: {
+    rows: AdCampaignRow[]
+    period: { startDate: string; endDate: string; days: number } | null
+    meta: UploadMeta | null
+  } | null
+
   // ─────────── 경고 ───────────
   warnings: {
     growthUnmatchedInSettlement: string[]
@@ -98,6 +106,14 @@ interface MarginStore {
     period: { startDate: string; endDate: string; days: number } | null,
   ) => void
   setPromotion: (rows: PromotionRow[], meta: UploadMeta) => void
+
+  /** 광고 분석 라이브 모드 업로드 — store 의 rawAdCampaign / adPeriod 안 건드림 */
+  setAdAnalysisLive: (
+    rows: AdCampaignRow[],
+    meta: UploadMeta,
+    period: { startDate: string; endDate: string; days: number } | null,
+  ) => void
+  clearAdAnalysisLive: () => void
 
   // ─────────── Actions — 사용자 입력 ───────────
   updateOptionCost: (optionId: string, costPrice: number | null) => void
@@ -203,6 +219,7 @@ export const useMarginStore = create<MarginStore>((set, get) => ({
   selectedOptionIds: new Set(),
   adPeriod: null,
   sellerPeriodDays: 30,
+  adAnalysisLive: null,
   warnings: emptyWarnings,
   marginMasterStats: emptyStats,
 
@@ -287,6 +304,11 @@ export const useMarginStore = create<MarginStore>((set, get) => ({
     })
   },
 
+  setAdAnalysisLive: (rows, meta, period) => {
+    set({ adAnalysisLive: { rows, period, meta } })
+  },
+  clearAdAnalysisLive: () => set({ adAnalysisLive: null }),
+
   updateOptionCost: (optionId, costPrice) =>
     set((s) => {
       const newOptions = s.options.map((o) =>
@@ -362,6 +384,7 @@ export const useMarginStore = create<MarginStore>((set, get) => ({
       selectedOptionIds: new Set(),
       adPeriod: null,
       sellerPeriodDays: 30,
+      adAnalysisLive: null,
       warnings: emptyWarnings,
       marginMasterStats: emptyStats,
     })
@@ -384,6 +407,7 @@ export const useMarginStore = create<MarginStore>((set, get) => ({
       selectedOptionIds: new Set(),
       adPeriod: null,
       sellerPeriodDays: 30,
+      adAnalysisLive: null,
       warnings: emptyWarnings,
     })),
 }))
