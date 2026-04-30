@@ -780,7 +780,7 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
           {cpcEntries.length > 0 && (
             <div style={{ fontSize: 11.5, color: '#64748B' }}>
               <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}— ROAS{' '}
-              <span className="mono">{bepRoasLabel}</span>{' '}/ CPC{' '}
+              <strong className="mono" style={{ color: '#1F2937' }}>{bepRoasLabel}</strong>{' '}/ CPC{' '}
               <span className="mono">{cpcLabel}</span>{' '}
               <span style={{ color: '#EF4444' }}>(VAT 별도)</span>
             </div>
