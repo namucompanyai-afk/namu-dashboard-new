@@ -119,23 +119,31 @@ export default function AdAnalysisPage() {
             .sort((a: any, b: any) => (b.weekKey || '').localeCompare(a.weekKey || ''))
           const meta = weeklies[0]
           if (meta?.id) {
-            const itemRes = await fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`)
+            // 메인 row 의 adRows/sellerStats 는 4.5MB Vercel limit 회피용 빈 배열 마커.
+            // 실데이터는 raw 키에 분리 저장되어 있어 별도 fetch 후 머지.
+            const [itemRes, rawRes] = await Promise.all([
+              fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`),
+              fetch(`/api/coupang-diagnoses?type=raw&id=${meta.id}`),
+            ])
             const target = await itemRes.json()
-            if (!cancelled && target?.adRows) {
-              setAdCampaign(target.adRows, {
-                fileName: target.adFileName || '저장된 분석',
-                uploadedAt: target.createdAt || new Date().toISOString(),
-                rowCount: target.adRows.length,
-              }, target.periodStartDate && target.periodEndDate ? {
+            const raw = rawRes.ok ? await rawRes.json().catch(() => null) : null
+            const adRows = raw?.adRows?.length ? raw.adRows : target?.adRows
+            const sellerStats = raw?.sellerStats?.length ? raw.sellerStats : target?.sellerStats
+            if (!cancelled && adRows?.length) {
+              setAdCampaign(adRows, {
+                fileName: target?.adFileName || '저장된 분석',
+                uploadedAt: target?.createdAt || new Date().toISOString(),
+                rowCount: adRows.length,
+              }, target?.periodStartDate && target?.periodEndDate ? {
                 startDate: target.periodStartDate,
                 endDate: target.periodEndDate,
                 days: target.periodDays || 30,
               } : null)
-              if (target.sellerStats) {
-                setSalesInsight(target.sellerStats, {
-                  fileName: target.sellerFileName || '저장된 분석',
-                  uploadedAt: target.createdAt || new Date().toISOString(),
-                  rowCount: target.sellerStats.length,
+              if (sellerStats?.length) {
+                setSalesInsight(sellerStats, {
+                  fileName: target?.sellerFileName || '저장된 분석',
+                  uploadedAt: target?.createdAt || new Date().toISOString(),
+                  rowCount: sellerStats.length,
                 })
               }
             }

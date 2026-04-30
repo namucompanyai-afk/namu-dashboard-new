@@ -97,7 +97,8 @@ export async function GET(request: Request) {
       return NextResponse.json(data || null);
     }
 
-    // raw 데이터 (adRows/sellerStats) 별도 조회. 디버깅/재계산용 — frozen view 에서는 호출 안 함.
+    // raw 데이터 (adRows/sellerStats) 별도 조회. 디버깅/재계산 + ad-analysis 자동 로드용.
+    //  (메인 row 는 4.5MB Vercel limit 회피로 빈 배열 마커만 보유 → 실데이터 필요한 페이지가 별도 호출)
     if (type === 'raw') {
       const id = searchParams.get('id');
       if (!id) return NextResponse.json({ error: 'id 필요' }, { status: 400 });
