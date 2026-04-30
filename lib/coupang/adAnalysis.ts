@@ -416,7 +416,7 @@ export function buildKeywordRows(
       bepPct: bep,
       currentCpcVatIncl: clicks > 0 ? adCostVat / clicks : null,
       action,
-      recommendedBidVatExcl: action === 'move' ? bid : null,
+      recommendedBidVatExcl: bid,
     }
   }
 
