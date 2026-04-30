@@ -25,6 +25,7 @@ import {
   type ManualKeywordRow,
 } from '@/lib/coupang/adAnalysis'
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
+import { ChannelBadge } from '../_lib/channel'
 
 type Mode = 'saved' | 'live'
 
@@ -86,8 +87,20 @@ export default function AdAnalysisPage() {
   const clearAdAnalysisLive = useMarginStore((s) => s.clearAdAnalysisLive)
   const [mode, setMode] = useState<Mode>('saved')
   const [openCampId, setOpenCampId] = useState<string | null>(null)
+  // 캠페인 진단 표 인라인 옵션 드릴다운: 옵션 클릭 시 상세 영역 키워드도 옵션 단위로 필터링.
+  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const [autoLoading, setAutoLoading] = useState(true)
   const [uploadError, setUploadError] = useState<string | null>(null)
+
+  function openCampaignAndOption(campaignId: string, optionId: string | null) {
+    setOpenCampId(campaignId)
+    setSelectedOptionId((prev) => (prev === optionId ? null : optionId))
+  }
+  function toggleCampaign(id: string) {
+    setOpenCampId((prev) => (prev === id ? null : id))
+    // 다른 캠페인 펼치면 옵션 필터 해제
+    if (openCampId !== id) setSelectedOptionId(null)
+  }
 
   // 마운트 시점 자동 로드 — 수익 진단 페이지를 거치지 않고 직접 진입해도 동작.
   // 진단 페이지의 자동 로드 로직 중 광고 분석에 필요한 것만 발췌:
@@ -256,12 +269,14 @@ export default function AdAnalysisPage() {
           view={view}
           master={marginMaster as any}
           openCampId={openCampId}
-          onOpen={(id) => setOpenCampId(id === openCampId ? null : id)}
+          onOpen={toggleCampaign}
+          selectedOptionId={selectedOptionId}
+          onSelectOption={openCampaignAndOption}
         />
         {openCampaign && (
           openCampaign.type === 'manual'
-            ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
-            : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
+            ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
         )}
       </div>
     )
@@ -305,12 +320,14 @@ export default function AdAnalysisPage() {
         view={view}
         master={marginMaster as any}
         openCampId={openCampId}
-        onOpen={(id) => setOpenCampId(id === openCampId ? null : id)}
+        onOpen={toggleCampaign}
+        selectedOptionId={selectedOptionId}
+        onSelectOption={openCampaignAndOption}
       />
       {openCampaign && (
         openCampaign.type === 'manual'
-          ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
-          : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} onClose={() => setOpenCampId(null)} />
+          ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+          : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
       )}
     </div>
   )
@@ -508,13 +525,28 @@ function HintBanner() {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, openCampId, onOpen }: {
+function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, onSelectOption }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
   openCampId: string | null
   onOpen: (id: string) => void
+  selectedOptionId: string | null
+  onSelectOption: (campaignId: string, optionId: string | null) => void
 }) {
   const { sorted, key, dir, toggle } = useSort(view.campaigns, 'adCostVat' as keyof CampaignDiag, 'desc')
+  const [expandedCampIds, setExpandedCampIds] = useState<Set<string>>(new Set())
+
+  function toggleExpand(id: string) {
+    setExpandedCampIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const bepMap = useMemo(() => buildBepMap(master), [master])
+  const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
+  const rowMap = useMemo(() => buildMarginRowMap(master), [master])
 
   const TH = ({ label, k, num, minWidth, sticky }: { label: React.ReactNode; k: keyof CampaignDiag; num?: boolean; minWidth?: number; sticky?: boolean }) => (
     <th
@@ -536,14 +568,14 @@ function CampaignSection({ view, master, openCampId, onOpen }: {
       <div className="aa-section-header">
         <div>
           <div className="aa-section-title">캠페인 진단</div>
-          <div className="aa-section-desc">AI / 수동 자동 분류 · 광고비는 (+VAT)</div>
+          <div className="aa-section-desc">▸ 클릭 → 옵션 펼침 · 캠페인명 클릭 → 키워드 분석 · 옵션 클릭 → 키워드 옵션 필터</div>
         </div>
       </div>
       <div className="aa-table-wrap">
         <table>
           <thead>
             <tr>
-              <TH label="캠페인" k={'campaignName'} sticky minWidth={240} />
+              <TH label="캠페인" k={'campaignName'} sticky minWidth={260} />
               <TH label="타입" k={'type'} />
               <TH label="광고비 (+VAT)" k={'adCostVat'} num />
               <TH label="광고 매출" k={'revenue'} num />
@@ -557,13 +589,21 @@ function CampaignSection({ view, master, openCampId, onOpen }: {
           <tbody>
             {sorted.map((c) => {
               const isOpen = c.campaignId === openCampId
+              const isExpanded = expandedCampIds.has(c.campaignId)
+              const opts = isExpanded
+                ? computeOptions(c.rows, bepMap, priceMap, rowMap)
+                : []
               return (
                 <CampaignRowGroup
                   key={c.campaignId}
                   c={c}
                   isOpen={isOpen}
+                  isExpanded={isExpanded}
                   onToggle={() => onOpen(c.campaignId)}
-                  master={master}
+                  onToggleExpand={() => toggleExpand(c.campaignId)}
+                  options={opts}
+                  selectedOptionId={isOpen ? selectedOptionId : null}
+                  onSelectOption={(optId) => onSelectOption(c.campaignId, optId)}
                 />
               )
             })}
@@ -574,11 +614,15 @@ function CampaignSection({ view, master, openCampId, onOpen }: {
   )
 }
 
-function CampaignRowGroup({ c, isOpen, onToggle, master: _master }: {
+function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption }: {
   c: CampaignDiag
   isOpen: boolean
+  isExpanded: boolean
   onToggle: () => void
-  master: any
+  onToggleExpand: () => void
+  options: OptionDiag[]
+  selectedOptionId: string | null
+  onSelectOption: (optionId: string) => void
 }) {
   const roasUnder = c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct
   const roasClass = roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : '')
@@ -599,36 +643,104 @@ function CampaignRowGroup({ c, isOpen, onToggle, master: _master }: {
   const isManual = c.type === 'manual'
 
   return (
-    <tr className={`clickable ${isOpen ? 'selected' : ''}`} onClick={onToggle}>
-      <td className="sticky-left"><strong>{c.campaignName}</strong></td>
-      <td>{typeBadge}</td>
-      <td className="num">{fmtMan(c.adCostVat)}</td>
-      <td className="num">{fmtMan(c.revenue)}</td>
-      <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
-      <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
-      <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>
-      <td>
-        {c.adCostRaw > 0 ? (
-          <div className="aa-search-bar">
-            <span style={{ width: 32, color: '#3B82F6' }}>{searchPct}%</span>
-            <div className="aa-search-bar-bg"><div className="aa-search-bar-fill" style={{ width: `${searchPct}%` }} /></div>
-            <span style={{ width: 32, color: '#A855F7' }}>{100 - searchPct}%</span>
-          </div>
-        ) : <span className="text-muted">—</span>}
+    <>
+      <tr className={`clickable ${isOpen ? 'selected' : ''}`} onClick={onToggle}>
+        <td className="sticky-left">
+          <span
+            className="aa-expand-toggle"
+            onClick={(e) => { e.stopPropagation(); onToggleExpand() }}
+            title={isExpanded ? '옵션 접기' : '옵션 펼치기'}
+          >
+            {isExpanded ? '▾' : '▸'}
+          </span>
+          <strong>{c.campaignName}</strong>
+        </td>
+        <td>{typeBadge}</td>
+        <td className="num">{fmtMan(c.adCostVat)}</td>
+        <td className="num">{fmtMan(c.revenue)}</td>
+        <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
+        <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
+        <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>
+        <td>
+          {c.adCostRaw > 0 ? (
+            <div className="aa-search-bar">
+              <span style={{ width: 32, color: '#3B82F6' }}>{searchPct}%</span>
+              <div className="aa-search-bar-bg"><div className="aa-search-bar-fill" style={{ width: `${searchPct}%` }} /></div>
+              <span style={{ width: 32, color: '#A855F7' }}>{100 - searchPct}%</span>
+            </div>
+          ) : <span className="text-muted">—</span>}
+        </td>
+        <td>{statusBadge}</td>
+      </tr>
+      {isExpanded && options.map((o) => (
+        <OptionInlineRow
+          key={`${c.campaignId}::${o.optionId}`}
+          o={o}
+          isSelected={selectedOptionId === o.optionId}
+          onClick={() => onSelectOption(o.optionId)}
+        />
+      ))}
+      {isExpanded && options.length === 0 && (
+        <tr className="aa-option-row">
+          <td className="sticky-left aa-option-cell" colSpan={9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected: boolean; onClick: () => void }) {
+  const roasUnder = o.roasPct != null && o.bepPct != null && o.roasPct < o.bepPct
+  const roasClass = o.roasPct == null || o.bepPct == null ? '' : (roasUnder ? 'text-bad' : 'text-good')
+  const gapClass = o.gapPct == null ? '' : (o.gapPct < 0 ? 'text-bad' : 'text-good')
+  const status = o.adCostVat <= 0
+    ? <span className="text-muted">—</span>
+    : o.roasPct == null || o.bepPct == null
+      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94A3B8' }} /><span style={{ fontSize: 11, color: '#64748B' }}>BEP 없음</span></span>
+      : roasUnder
+        ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#EF4444' }} /><span style={{ fontSize: 11, color: '#991B1B' }}>BEP 미달</span></span>
+        : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981' }} /><span style={{ fontSize: 11, color: '#065F46' }}>BEP 도달</span></span>
+
+  return (
+    <tr
+      className={`aa-option-row clickable ${isSelected ? 'option-selected' : ''}`}
+      onClick={onClick}
+    >
+      <td className="sticky-left aa-option-cell">
+        <span className="aa-option-prefix">└─</span>
+        <span className="aa-option-text">
+          {o.alias && <span className="aa-option-alias">{o.alias}</span>}
+          <span className="aa-option-name">{o.optionName}</span>
+          {!o.matched && <span style={{ marginLeft: 4, fontSize: 10, color: '#92400E' }}>⚠</span>}
+          <ChannelBadge raw={o.channel} />
+        </span>
       </td>
-      <td>{statusBadge}</td>
+      <td><span className="text-muted">—</span></td>
+      <td className="num">{fmtMan(o.adCostVat)}</td>
+      <td className="num">{fmtMan(o.revenue)}</td>
+      <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
+      <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
+      <td className={`num ${gapClass}`}>{o.gapPct != null ? `${o.gapPct > 0 ? '+' : ''}${Math.round(o.gapPct)}%p` : '—'}</td>
+      <td><span className="text-muted">—</span></td>
+      <td>{status}</td>
     </tr>
   )
 }
 
 // ── AI Section ────────────────────────────────────────────────
-function AiSection({ campaign, master, periodLabel, onClose }: { campaign: CampaignDiag; master: any; periodLabel: string; onClose: () => void }) {
+function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOption, onClose }: {
+  campaign: CampaignDiag
+  master: any
+  periodLabel: string
+  selectedOptionId: string | null
+  onClearOption: () => void
+  onClose: () => void
+}) {
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
   const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap), [campaign.rows, bepMap, priceMap, rowMap])
 
-  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const filteredCampaign = useMemo(() => {
     if (!selectedOptionId) return campaign
     return { ...campaign, rows: campaign.rows.filter((r) => String(r.adOptionId || '').trim() === selectedOptionId) }
@@ -691,14 +803,7 @@ function AiSection({ campaign, master, periodLabel, onClose }: { campaign: Campa
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
-        <OptionTable
-          rows={options}
-          selectedId={selectedOptionId}
-          onSelect={setSelectedOptionId}
-          campaignName={campaign.campaignName || campaign.campaignId}
-          periodLabel={periodLabel}
-        />
-        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={() => setSelectedOptionId(null)} />}
+        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={onClearOption} />}
         <KeywordTable
           rows={search}
           campaignBep={campaign.bepPct}
@@ -732,6 +837,8 @@ function Row({ label, value, sub, valueClass }: { label: React.ReactNode; value:
 interface OptionDiag {
   optionId: string
   optionName: string
+  alias: string
+  channel: string
   adCostVat: number
   revenue: number
   sold: number
@@ -745,7 +852,7 @@ function computeOptions(
   rows: AdCampaignRow[],
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
-  rowMap: Map<string, { optionName?: string }>,
+  rowMap: Map<string, { optionName?: string; alias?: string; channel?: string }>,
 ): OptionDiag[] {
   const grp = new Map<string, AdCampaignRow[]>()
   for (const r of rows) {
@@ -771,111 +878,16 @@ function computeOptions(
     const mr = rowMap.get(optId)
     const matched = !!mr
     const optionName = mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`
-    out.push({ optionId: optId, optionName, adCostVat, revenue, sold, roasPct, bepPct, gapPct, matched })
+    out.push({
+      optionId: optId,
+      optionName,
+      alias: mr?.alias || '',
+      channel: mr?.channel || '',
+      adCostVat, revenue, sold, roasPct, bepPct, gapPct, matched,
+    })
   }
   out.sort((a, b) => b.adCostVat - a.adCostVat)
   return out
-}
-
-function OptionTable({ rows, selectedId, onSelect, campaignName, periodLabel }: {
-  rows: OptionDiag[]
-  selectedId: string | null
-  onSelect: (id: string | null) => void
-  campaignName: string
-  periodLabel: string
-}) {
-  const { sorted, key, dir, toggle } = useSort(rows, 'adCostVat' as keyof OptionDiag, 'desc')
-
-  const TH = ({ label, k, num, minWidth }: any) => (
-    <th
-      className={['sortable', num ? 'num' : '', key === k ? (dir === 'asc' ? 'sorted-asc' : 'sorted-desc') : ''].filter(Boolean).join(' ')}
-      style={minWidth ? { minWidth } : undefined}
-      onClick={() => toggle(k)}
-    >{label}</th>
-  )
-
-  function exportAll() {
-    if (sorted.length === 0) { alert('내보낼 옵션이 없습니다.'); return }
-    const data = sorted.map((r) => ({
-      '옵션명': r.optionName,
-      '옵션ID': r.optionId,
-      '광고비 (+VAT)': r.adCostVat,
-      '광고 매출': r.revenue,
-      '광고 판매수': r.sold,
-      'ROAS(%)': r.roasPct,
-      'BEP(%)': r.bepPct,
-      '갭(%p)': r.gapPct,
-    }))
-    const filename = `광고분석_옵션별_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
-    exportXlsx(data, filename, '옵션별')
-  }
-
-  return (
-    <div className="aa-sub-section" style={{ marginTop: 12 }}>
-      <div className="aa-sub-section-title">
-        <span>⭐ 옵션별 ({sorted.length}개) <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400 }}>· 행 클릭 시 아래 키워드 표가 옵션 단위로 필터링됩니다</span></span>
-        <button
-          className="aa-btn btn-sm"
-          onClick={exportAll}
-          style={{ fontSize: 11, padding: '4px 10px' }}
-        >⬇ 전체 다운로드</button>
-      </div>
-      <div className="aa-table-wrap shorter">
-        <table>
-          <thead>
-            <tr>
-              <TH label="옵션명" k="optionName" minWidth={200} />
-              <TH label="광고비 (+VAT)" k="adCostVat" num />
-              <TH label="광고 매출" k="revenue" num />
-              <TH label="광고 판매수" k="sold" num />
-              <TH label="ROAS" k="roasPct" num />
-              <TH label="BEP" k="bepPct" num />
-              <TH label="갭" k="gapPct" num />
-              <th>상태</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((o) => {
-              const isSelected = selectedId === o.optionId
-              const roasUnder = o.roasPct != null && o.bepPct != null && o.roasPct < o.bepPct
-              const roasClass = o.roasPct == null || o.bepPct == null ? '' : (roasUnder ? 'text-bad' : 'text-good')
-              const gapClass = o.gapPct == null ? '' : (o.gapPct < 0 ? 'text-bad' : 'text-good')
-              const status = o.adCostVat <= 0
-                ? <span className="text-muted">—</span>
-                : o.roasPct == null || o.bepPct == null
-                  ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#94A3B8' }} /><span style={{ fontSize: 11, color: '#64748B' }}>BEP 없음</span></span>
-                  : roasUnder
-                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#EF4444' }} /><span style={{ fontSize: 11, color: '#991B1B' }}>BEP 미달</span></span>
-                    : <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981' }} /><span style={{ fontSize: 11, color: '#065F46' }}>BEP 도달</span></span>
-              return (
-                <tr
-                  key={o.optionId}
-                  onClick={() => onSelect(isSelected ? null : o.optionId)}
-                  style={{
-                    cursor: 'pointer',
-                    background: isSelected ? '#EFF6FF' : undefined,
-                    borderLeft: isSelected ? '3px solid #3B82F6' : undefined,
-                  }}
-                >
-                  <td><strong>{o.optionName}</strong>{!o.matched && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400E' }}>⚠</span>}</td>
-                  <td className="num">{fmtMan(o.adCostVat)}</td>
-                  <td className="num">{fmtMan(o.revenue)}</td>
-                  <td className="num">{fmtNum(o.sold)}</td>
-                  <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
-                  <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
-                  <td className={`num ${gapClass}`}>{o.gapPct != null ? `${o.gapPct > 0 ? '+' : ''}${Math.round(o.gapPct)}%p` : '—'}</td>
-                  <td>{status}</td>
-                </tr>
-              )
-            })}
-            {sorted.length === 0 && (
-              <tr><td colSpan={8} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>옵션 없음</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
 }
 
 function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
@@ -1214,13 +1226,19 @@ function ActionLegend() {
 }
 
 // ── Manual Section ────────────────────────────────────────────
-function ManualSection({ campaign, master, periodLabel, onClose }: { campaign: CampaignDiag; master: any; periodLabel: string; onClose: () => void }) {
+function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClearOption, onClose }: {
+  campaign: CampaignDiag
+  master: any
+  periodLabel: string
+  selectedOptionId: string | null
+  onClearOption: () => void
+  onClose: () => void
+}) {
   const bepMap = useMemo(() => buildBepMap(master), [master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
   const options = useMemo(() => computeOptions(campaign.rows, bepMap, priceMap, rowMap), [campaign.rows, bepMap, priceMap, rowMap])
 
-  const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const filteredCampaign = useMemo(() => {
     if (!selectedOptionId) return campaign
     return { ...campaign, rows: campaign.rows.filter((r) => String(r.adOptionId || '').trim() === selectedOptionId) }
@@ -1265,14 +1283,7 @@ function ManualSection({ campaign, master, periodLabel, onClose }: { campaign: C
         <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
       </div>
       <div className="aa-section-body">
-        <OptionTable
-          rows={options}
-          selectedId={selectedOptionId}
-          onSelect={setSelectedOptionId}
-          campaignName={campaign.campaignName || campaign.campaignId}
-          periodLabel={periodLabel}
-        />
-        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={() => setSelectedOptionId(null)} />}
+        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={onClearOption} />}
         <div className="aa-table-wrap shorter">
           <table>
             <thead>
@@ -1440,6 +1451,17 @@ function Style() {
       .aa-stars.mid { color: #FCD34D; }
       .aa-stars.low { color: #94A3B8; }
       .aa-kpi-value.text-bad { color: #EF4444; }
+      .aa-expand-toggle { display: inline-block; width: 18px; color: #94A3B8; font-size: 12px; cursor: pointer; user-select: none; margin-right: 4px; }
+      .aa-expand-toggle:hover { color: #FF6B35; }
+      .aa-table-wrap tr.aa-option-row td { background: #F8FAFC; font-size: 12.5px; padding: 8px 14px; }
+      .aa-table-wrap tr.aa-option-row.clickable:hover td { background: #FEF3C7; }
+      .aa-table-wrap tr.aa-option-row.option-selected td { background: #DBEAFE; }
+      .aa-table-wrap tr.aa-option-row.option-selected td.sticky-left { background: #DBEAFE; border-left: 3px solid #3B82F6; }
+      .aa-option-cell { padding-left: 36px !important; }
+      .aa-option-prefix { color: #CBD5E1; margin-right: 6px; font-size: 11px; }
+      .aa-option-text { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .aa-option-alias { color: #1E40AF; font-weight: 600; font-size: 12.5px; }
+      .aa-option-name { color: #475569; font-size: 12px; }
     `}</style>
   )
 }

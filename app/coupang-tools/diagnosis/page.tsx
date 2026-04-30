@@ -20,6 +20,7 @@ import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import MasterDiagnosisView from '@/components/coupang/MasterDiagnosisView'
+import { ChannelBadge, ChannelDistribution } from '../_lib/channel'
 
 // ─────────────────────────────────────────────────────────────
 // 색상/스타일
@@ -1571,63 +1572,6 @@ function formatMonthLabel(monthKey: string): string {
 // 함정 스캐너 테이블
 // ─────────────────────────────────────────────────────────────
 
-// 채널 정규화 (영어 코드/한국어 라벨 혼재 → 표시용)
-function channelLabel(raw?: string): { label: string; emoji: string; key: 'growth' | 'wing' | 'other' } | null {
-  if (!raw) return null
-  const v = raw.toString().trim().toLowerCase()
-  if (v === 'growth' || v === '그로스') return { label: '그로스', emoji: '🚀', key: 'growth' }
-  if (v === 'wing' || v === '윙')       return { label: '윙', emoji: '📦', key: 'wing' }
-  return { label: raw, emoji: '', key: 'other' }
-}
-
-// 채널 배지 (옵션 드릴다운용 단일)
-function ChannelBadge({ channel }: { channel?: string }) {
-  const c = channelLabel(channel)
-  if (!c) return <span className="text-gray-400">—</span>
-  const cls = c.key === 'growth'
-    ? 'bg-orange-100 text-orange-700'
-    : c.key === 'wing'
-    ? 'bg-emerald-100 text-emerald-700'
-    : 'bg-gray-100 text-gray-700'
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${cls}`}>
-      {c.emoji && <span>{c.emoji}</span>}
-      <span>{c.label}</span>
-    </span>
-  )
-}
-
-// 별칭 행용: optionDetails 의 채널 분포 집계
-function ChannelDistribution({ options }: { options?: { channel?: string }[] }) {
-  if (!options || options.length === 0) return <span className="text-gray-400">—</span>
-  const counts: Record<string, number> = {}
-  for (const o of options) {
-    const c = channelLabel(o.channel)
-    const key = c ? c.key : 'unknown'
-    counts[key] = (counts[key] || 0) + 1
-  }
-  const keys = Object.keys(counts)
-  if (keys.every((k) => k === 'unknown')) return <span className="text-gray-400">—</span>
-  // 정렬: growth, wing, other, unknown
-  const order = ['growth', 'wing', 'other', 'unknown']
-  const sorted = keys.sort((a, b) => order.indexOf(a) - order.indexOf(b))
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-      {sorted.map((k) => {
-        const meta =
-          k === 'growth' ? { label: '그로스', emoji: '🚀', cls: 'text-orange-700' } :
-          k === 'wing'   ? { label: '윙',     emoji: '📦', cls: 'text-emerald-700' } :
-                           { label: k === 'unknown' ? '미상' : k, emoji: '', cls: 'text-gray-500' }
-        return (
-          <span key={k} className={`whitespace-nowrap ${meta.cls}`}>
-            {meta.emoji && <span className="mr-0.5">{meta.emoji}</span>}{meta.label} {counts[k]}
-          </span>
-        )
-      })}
-    </div>
-  )
-}
-
 type SortKey = 'alias' | 'revenue' | 'adCost' | 'adRevenue' | 'organicRevenue' | 'adNetProfit' | 'totalNetProfit' | 'marginRate' | 'bepRoas' | 'adRoasAttr' | 'gap' | 'verdict'
 type SortDir = 'asc' | 'desc'
 
@@ -1774,7 +1718,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                       </div>
                     </td>
                     <td className="px-3 py-3 whitespace-nowrap min-w-[120px]">
-                      <ChannelDistribution options={p.optionDetails} />
+                      <ChannelDistribution channels={(p.optionDetails ?? []).map((o) => o.channel ?? '')} />
                     </td>
                     <td className="px-3 py-3 text-right font-mono whitespace-nowrap min-w-[90px]">
                       {formatMan(p.revenue)}
@@ -1825,7 +1769,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                           <div className="text-[10px] text-gray-400">옵션ID {opt.optionId}</div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap min-w-[120px]">
-                          <ChannelBadge channel={opt.channel} />
+                          <ChannelBadge raw={opt.channel} />
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-xs whitespace-nowrap min-w-[90px]">
                           {formatMan(opt.revenue)}
