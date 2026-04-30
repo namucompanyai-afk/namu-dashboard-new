@@ -45,30 +45,30 @@ export function isSearchPlacement(placement: string): boolean {
   return SEARCH_PLACEMENT_HINTS.some((h) => placement.includes(h))
 }
 
-/** row 매출 분리: 자기 매출(self) vs 교차판매 매출(cross).
- *  교차판매 정의: ad/conv 옵션의 노출ID가 다름 (다른 상품으로 전환).
+/** row 매출 분리: 자기 매출(self) vs 타상품 매출(other).
+ *  타상품 전환 정의: ad/conv 옵션의 노출ID가 다름 (다른 상품으로 전환).
  *  같은 노출ID 내 옵션 변경(봉수/규격 등)은 self 로 인정.
  *  노출ID 매핑이 없으면 self 로 fallback (기존 동작 유지). */
 export function splitRowRevenue(
   r: AdCampaignRow,
   priceMap: Map<string, number>,
   exposureByOptionId: Map<string, string>,
-): { self: number; cross: number } {
+): { self: number; other: number } {
   const convId = String(r.convOptionId || '').trim()
-  if (!convId) return { self: 0, cross: 0 }
+  if (!convId) return { self: 0, other: 0 }
   const price = priceMap.get(convId)
-  if (!price || price <= 0) return { self: 0, cross: 0 }
+  if (!price || price <= 0) return { self: 0, other: 0 }
   const fullRev = (r.sold14d || 0) * price
   const adId = String(r.adOptionId || '').trim()
-  if (!adId || convId === adId) return { self: fullRev, cross: 0 }
+  if (!adId || convId === adId) return { self: fullRev, other: 0 }
   const adExp = exposureByOptionId.get(adId)
   const convExp = exposureByOptionId.get(convId)
-  if (!adExp || !convExp) return { self: fullRev, cross: 0 }
-  if (adExp === convExp) return { self: fullRev, cross: 0 }
-  return { self: 0, cross: fullRev }
+  if (!adExp || !convExp) return { self: fullRev, other: 0 }
+  if (adExp === convExp) return { self: fullRev, other: 0 }
+  return { self: 0, other: fullRev }
 }
 
-/** row 매출 (자기 매출만). ROAS/BEP 산출에 사용. 교차판매 분량은 별도 crossRevenue 로 집계. */
+/** row 매출 (자기 매출만). ROAS/BEP 산출에 사용. 타상품 전환 분량은 별도 otherProductRevenue 로 집계. */
 function rowRevenue(
   r: AdCampaignRow,
   priceMap: Map<string, number>,
@@ -77,7 +77,7 @@ function rowRevenue(
   return splitRowRevenue(r, priceMap, exposureByOptionId).self
 }
 
-/** 가중평균 BEP — 옵션 매출 × 옵션 BEP / Σ 매출. 매출 = self 매출만 (교차판매 제외). */
+/** 가중평균 BEP — 옵션 매출 × 옵션 BEP / Σ 매출. 매출 = self 매출만 (타상품 전환 제외). */
 function weightedBep(
   rows: AdCampaignRow[],
   bepByOptionId: Map<string, number>,
@@ -134,8 +134,8 @@ export interface CampaignDiag {
   /** 광고비 (VAT 포함, ×1.1) */
   adCostVat: number
   revenue: number
-  /** 교차판매 매출 — 다른 노출ID 로 전환된 분량 (참고용, ROAS 산출 제외) */
-  crossRevenue: number
+  /** 타상품 매출 — 다른 노출ID 로 전환된 분량 (참고용, ROAS 산출 제외) */
+  otherProductRevenue: number
   /** ROAS = revenue / adCostVat × 100 (%) */
   roasPct: number | null
   /** 가중 BEP (%) */
@@ -248,7 +248,7 @@ export function buildMarginRowMap(master: CostMaster | null): Map<string, Margin
   return m
 }
 
-/** 마진 마스터 → optionId 별 exposureId 맵. 교차판매(다른 노출ID 전환) 판단용. */
+/** 마진 마스터 → optionId 별 exposureId 맵. 타상품 전환(다른 노출ID) 판단용. */
 export function buildExposureMapByOptionId(master: CostMaster | null): Map<string, string> {
   const m = new Map<string, string>()
   if (!master) return m
@@ -323,13 +323,13 @@ export function buildAdAnalysisView(
     const first = rows[0]
     const adCostRaw = rows.reduce((s, r) => s + (r.adCost || 0), 0)
     const adCostVat = adCostRaw * 1.1
-    // 매출 = Σ (sold14d × 마진M 실판매가) — self 만. 교차판매(다른 노출ID 전환)는 cross 로 별도.
+    // 매출 = Σ (sold14d × 마진M 실판매가) — self 만. 타상품 전환(다른 노출ID)은 other 로 별도.
     let revenue = 0
-    let crossRevenue = 0
+    let otherProductRevenue = 0
     for (const r of rows) {
       const split = splitRowRevenue(r, priceMap, exposureMap)
       revenue += split.self
-      crossRevenue += split.cross
+      otherProductRevenue += split.other
     }
     // 주문 라벨이지만 실제 컬럼은 sold14d (수량) — 진단의 adSold 와 일관.
     const orders = rows.reduce((s, r) => s + (r.sold14d || 0), 0)
@@ -366,7 +366,7 @@ export function buildAdAnalysisView(
       adCostRaw,
       adCostVat,
       revenue,
-      crossRevenue,
+      otherProductRevenue,
       roasPct: roasPct != null ? roasPct * 100 : null,
       bepPct,
       gapPct,

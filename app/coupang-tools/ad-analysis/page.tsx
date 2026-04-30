@@ -583,7 +583,7 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
               <TH label="타입" k={'type'} />
               <TH label="광고비 (+VAT)" k={'adCostVat'} num />
               <TH label="광고 매출" k={'revenue'} num />
-              <TH label={<>교차 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'crossRevenue'} num minWidth={110} />
+              <TH label={<>타상품 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'otherProductRevenue'} num minWidth={110} />
               <TH label="광고 판매수" k={'orders'} num />
               <TH label="ROAS" k={'roasPct'} num />
               <TH label="BEP" k={'bepPct'} num />
@@ -659,7 +659,7 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>
         <td className="num">{fmtMan(c.revenue)}</td>
-        <td className="num text-muted">{c.crossRevenue > 0 ? fmtMan(c.crossRevenue) : '—'}</td>
+        <td className="num text-muted">{c.otherProductRevenue > 0 ? fmtMan(c.otherProductRevenue) : '—'}</td>
         <td className="num">{fmtNum(c.orders)}</td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
         <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
@@ -716,7 +716,7 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
       <td><span className="text-muted">—</span></td>
       <td className="num">{fmtMan(o.adCostVat)}</td>
       <td className="num">{fmtMan(o.revenue)}</td>
-      <td className="num text-muted">{o.crossRevenue > 0 ? fmtMan(o.crossRevenue) : '—'}</td>
+      <td className="num text-muted">{o.otherProductRevenue > 0 ? fmtMan(o.otherProductRevenue) : '—'}</td>
       <td className="num">{fmtNum(o.sold)}</td>
       <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
       <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
@@ -858,7 +858,7 @@ interface OptionDiag {
   channel: string
   adCostVat: number
   revenue: number
-  crossRevenue: number
+  otherProductRevenue: number
   sold: number
   clicks: number
   cvrPct: number | null
@@ -892,11 +892,11 @@ function computeOptions(
     const sold = rs.reduce((s, r) => s + (r.sold14d || 0), 0)
     const clicks = rs.reduce((s, r) => s + (r.clicks || 0), 0)
     let revenue = 0
-    let crossRevenue = 0
+    let otherProductRevenue = 0
     for (const r of rs) {
       const split = splitRowRevenue(r, priceMap, exposureByOptionId)
       revenue += split.self
-      crossRevenue += split.cross
+      otherProductRevenue += split.other
     }
     let searchRaw = 0
     let nonSearchRaw = 0
@@ -916,7 +916,7 @@ function computeOptions(
       optionName,
       alias: mr?.alias || '',
       channel: mr?.channel || '',
-      adCostVat, revenue, crossRevenue, sold, clicks, cvrPct,
+      adCostVat, revenue, otherProductRevenue, sold, clicks, cvrPct,
       searchAdCostRaw: searchRaw,
       nonSearchAdCostRaw: nonSearchRaw,
       searchShare: adCostRaw > 0 ? searchRaw / adCostRaw : 0,
