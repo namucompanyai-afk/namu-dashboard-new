@@ -765,8 +765,9 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
     })
 
   const cpcLabel = cpcEntries.length > 0
-    ? cpcEntries.map((e) => `${e.label} ${Math.round(e.cpc)}원`).join(' / ')
+    ? cpcEntries.map((e) => `${e.label} ${Math.round(e.cpc).toLocaleString('ko-KR')}원`).join(', ')
     : '—'
+  const bepRoasLabel = campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'
 
   return (
     <div className="aa-section" style={{ border: '2px solid #FF6B35' }}>
@@ -778,9 +779,10 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {cpcEntries.length > 0 && (
             <div style={{ fontSize: 11.5, color: '#64748B' }}>
-              <strong style={{ color: '#1F2937' }}>BEP CPC:</strong>{' '}
+              <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}— ROAS{' '}
+              <span className="mono">{bepRoasLabel}</span>{' '}/ CPC{' '}
               <span className="mono">{cpcLabel}</span>{' '}
-              <span style={{ color: '#94A3B8' }}>(VAT 별도)</span>
+              <span style={{ color: '#EF4444' }}>(VAT 별도)</span>
             </div>
           )}
           <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
@@ -1104,7 +1106,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
       '광고 판매수': r.orders,
       '전환율(%)': r.cvrPct,
       'ROAS(%)': r.roasPct,
-      'BEP(%)': r.bepPct,
+      '현재 CPC (+VAT)': r.currentCpcVatIncl,
       '광고비 (+VAT)': r.adCostVat,
       '광고 매출': r.revenue,
       '추천 액션': r.action === 'keep' ? '유지' : r.action === 'move' ? '수동 이동' : '제외',
@@ -1149,7 +1151,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
               <TH label="광고 판매수" k="orders" num />
               <TH label="전환율" k="cvrPct" num />
               <TH label="ROAS" k="roasPct" num />
-              <TH label="BEP" k="bepPct" num />
+              <TH label={<>현재 CPC<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(+VAT)</span></>} k="currentCpcVatIncl" num minWidth={100} />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
               <TH label="광고 매출" k="revenue" num />
               <th>추천 액션</th>
@@ -1200,6 +1202,19 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
   )
 }
 
+// 현재 CPC (+VAT) 색상: 추천(+VAT) 이하=녹 / BEP CPC(+VAT) 이하=노랑 / 초과=빨강 / 산정 불가=회색.
+// BEP CPC (+VAT) = revenue / (clicks × bep/100). 추천(+VAT) = BEP CPC(+VAT) × 0.95.
+function currentCpcColorClass(r: KeywordRow): string {
+  if (r.currentCpcVatIncl == null) return 'text-muted'
+  if (r.bepPct == null || r.bepPct <= 0 || r.clicks <= 0 || r.revenue <= 0) return ''
+  const bepCpcVatIncl = r.revenue / (r.clicks * (r.bepPct / 100))
+  if (!Number.isFinite(bepCpcVatIncl) || bepCpcVatIncl <= 0) return ''
+  const recVatIncl = bepCpcVatIncl * 0.95
+  if (r.currentCpcVatIncl <= recVatIncl) return 'text-good'
+  if (r.currentCpcVatIncl <= bepCpcVatIncl) return 'text-warn'
+  return 'text-bad'
+}
+
 function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { r: KeywordRow; checked: boolean; onToggle: () => void; isExpanded: boolean; onToggleExpand: () => void }) {
   const action =
     r.action === 'keep' ? <span className="aa-action-chip action-keep">유지</span> :
@@ -1234,7 +1249,7 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
       <td className="num">{fmtNum(r.orders)}</td>
       <td className={`num ${cvrClass}`}>{fmtPctVal(r.cvrPct, 2)}</td>
       <td className={`num ${roasClass}`}>{fmtRoas(r.roasPct)}</td>
-      <td className="num">{r.bepPct != null ? `${Math.round(r.bepPct)}%` : '—'}</td>
+      <td className={`num ${currentCpcColorClass(r)}`}>{r.currentCpcVatIncl != null ? `${Math.round(r.currentCpcVatIncl).toLocaleString('ko-KR')}원` : '—'}</td>
       <td className="num">{fmtNum(r.adCostVat)}</td>
       <td className="num">{fmtNum(r.revenue)}</td>
       <td>{action}</td>
@@ -1291,7 +1306,7 @@ function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }:
       '광고 판매수': r.orders,
       '전환율(%)': r.cvrPct,
       'ROAS(%)': r.roasPct,
-      'BEP(%)': r.bepPct,
+      '현재 CPC (+VAT)': r.currentCpcVatIncl,
       '광고비 (+VAT)': r.adCostVat,
       '광고 매출': r.revenue,
     }))
@@ -1330,7 +1345,7 @@ function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }:
               <TH label="광고 판매수" k="orders" num />
               <TH label="전환율" k="cvrPct" num />
               <TH label="ROAS" k="roasPct" num />
-              <TH label="BEP" k="bepPct" num />
+              <TH label={<>현재 CPC<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(+VAT)</span></>} k="currentCpcVatIncl" num minWidth={100} />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
               <TH label="광고 매출" k="revenue" num />
             </tr>
@@ -1351,7 +1366,7 @@ function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }:
                   <td className="num">{fmtNum(r.orders)}</td>
                   <td className="num">{fmtPctVal(r.cvrPct, 2)}</td>
                   <td className={`num ${roasClass}`}>{fmtRoas(r.roasPct)}</td>
-                  <td className="num">{r.bepPct != null ? `${Math.round(r.bepPct)}%` : '—'}</td>
+                  <td className={`num ${currentCpcColorClass(r)}`}>{r.currentCpcVatIncl != null ? `${Math.round(r.currentCpcVatIncl).toLocaleString('ko-KR')}원` : '—'}</td>
                   <td className="num">{fmtNum(r.adCostVat)}</td>
                   <td className="num">{fmtNum(r.revenue)}</td>
                 </tr>

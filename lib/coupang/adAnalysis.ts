@@ -143,6 +143,8 @@ export interface KeywordRow {
   revenue: number
   roasPct: number | null
   bepPct: number | null
+  /** 평균 현재 CPC (+VAT) = adCostVat / clicks */
+  currentCpcVatIncl: number | null
   /** 추천 액션 — 검색 키워드만 의미 있음 */
   action: KeywordAction
   /** 추천 입찰가 (VAT 별도). null = 데이터 부족 */
@@ -412,6 +414,7 @@ export function buildKeywordRows(
       revenue,
       roasPct,
       bepPct: bep,
+      currentCpcVatIncl: clicks > 0 ? adCostVat / clicks : null,
       action,
       recommendedBidVatExcl: action === 'move' ? bid : null,
     }
