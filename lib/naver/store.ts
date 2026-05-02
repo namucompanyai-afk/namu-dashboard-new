@@ -92,12 +92,45 @@ interface NaverStore {
   saveLast: () => Promise<void>
   /** 명시 저장 — id 반환 */
   saveExplicit: (label: string) => Promise<string | null>
+  /** 자동 explicit 저장 — trendType/monthKey/weekKey 자동 부착, 같은 키 있으면 덮어쓰기 */
+  saveAuto: () => Promise<string | null>
   /** 저장된 분석 목록 로드 */
   loadList: () => Promise<void>
   /** 명시 저장 삭제 */
   deleteSnapshot: (id: string) => Promise<void>
+  /** 전체 초기화 — purgeAll API + localStorage 정리 + reset */
+  purgeAll: () => Promise<void>
 
   reset: () => void
+}
+
+/** 진단 기간으로부터 trendType 자동 판별 */
+export function detectTrendType(start: string, end: string): 'weekly' | 'monthly' | 'custom' {
+  if (!start || !end) return 'custom'
+  const days = Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1
+  if (days <= 7) return 'weekly'
+  if (days <= 31) return 'monthly'
+  return 'custom'
+}
+
+export function buildAutoKey(
+  start: string,
+  end: string,
+  type: 'weekly' | 'monthly' | 'custom',
+): string {
+  if (type === 'monthly') return start.slice(0, 7)
+  if (type === 'weekly') return `W-${start}`
+  return `C-${start}-${end}`
+}
+
+export function buildAutoLabel(
+  start: string,
+  end: string,
+  type: 'weekly' | 'monthly' | 'custom',
+): string {
+  if (type === 'monthly') return `${start.slice(0, 7)} 월별`
+  if (type === 'weekly') return `${start.slice(5)} ~ ${end.slice(5)} 주별`
+  return `${start} ~ ${end}`
 }
 
 export const useNaverStore = create<NaverStore>((set, get) => ({
@@ -170,6 +203,69 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
       console.warn('네이버 마진마스터 자동 로드 실패:', e)
       set({ marginLoading: false, marginMissing: true })
     }
+  },
+
+  saveAuto: async () => {
+    const { diagnosis, settlement, snapshots } = get()
+    if (!diagnosis) return null
+    const { start, end } = diagnosis.period
+    if (!start || !end) return null
+
+    const trendType = detectTrendType(start, end)
+    const key = buildAutoKey(start, end, trendType)
+    const label = buildAutoLabel(start, end, trendType)
+
+    const existing = snapshots.find(
+      (s) =>
+        (trendType === 'monthly' && s.monthKey === key) ||
+        (trendType === 'weekly' && s.weekKey === key),
+    )
+
+    const snapshot = {
+      ...buildSnapshot(diagnosis, settlement),
+      label,
+      monthKey: trendType === 'monthly' ? key : null,
+      weekKey: trendType === 'weekly' ? key : null,
+      trendType,
+      includeInTrend: true,
+      id: existing?.id,
+    }
+
+    try {
+      const res = await fetch('/api/naver-diagnoses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'explicit', snapshot }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const json = await res.json()
+      await get().loadList()
+      return (json?.id as string | undefined) ?? null
+    } catch (e) {
+      console.warn('스스 자동 explicit 저장 실패:', e)
+      return null
+    }
+  },
+
+  purgeAll: async () => {
+    try {
+      await fetch('/api/naver-diagnoses?purgeAll=1', { method: 'DELETE' })
+    } catch (e) {
+      console.warn('스스 전체 삭제 실패:', e)
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const keys: string[] = []
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i)
+          if (k && k.startsWith('naver-manual-')) keys.push(k)
+        }
+        for (const k of keys) window.localStorage.removeItem(k)
+      } catch {
+        /* ignore */
+      }
+    }
+    get().reset()
   },
 
   saveLast: async () => {

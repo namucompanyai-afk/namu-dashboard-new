@@ -108,10 +108,12 @@ export async function POST(request: Request) {
       const { snapshot } = body as { snapshot: NaverSnapshot }
       if (!snapshot) return NextResponse.json({ error: 'snapshot 필요' }, { status: 400 })
 
+      // id 있으면 그대로 (덮어쓰기), 없으면 새로 생성
       const newId = snapshot.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const newSnapshot: NaverSnapshot = {
         ...snapshot,
         id: newId,
+        // 신규는 createdAt 부착, 덮어쓰기는 기존 값 유지
         createdAt: snapshot.createdAt || new Date().toISOString(),
       }
       await saveData(`${KEY_ITEM_PREFIX}${newId}`, newSnapshot)
