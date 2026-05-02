@@ -1,31 +1,36 @@
 import * as XLSX from 'xlsx'
 
 /**
- * 마진마스터.xlsx 파서 (v2 — 2026-04 신규 구조)
+ * 마진마스터.xlsx 파서 (v3 — 2026-05 분리 구조 + X 포장비 신설)
  *
- * 새 엑셀 구조 (4시트, "비용테이블_옛"은 무시):
+ * 새 엑셀 구조 (5시트, "비용테이블_옛"은 무시):
  *   1) 원가표 (헤더 R3, 데이터 R4~)
  *      A 노출ID  B 쿠팡원본명  C 별칭  D 채널  E 옵션수  F 옵션샘플
  *      G 기준용량(텍스트)  H 원곡가  I 윙작업비  J 그로스작업비  K 혼합비
  *      L 제조사  M 과세구분  N 봉투비여부  O 메모
  *      P 윙원가(자동)  Q 그로스원가(자동)  R 수수료율  S 기준kg(자동)
+ *      T 별칭+kg키(자동, 네이버 매칭용 보조)
  *
  *   2) 비용테이블
  *      B2 = 봉투비 150
  *      A8:D14 = 가격대 × (0.8kg/1kg/2kg) 봉당 입출고비
  *      A23:E30 = 가격대 × (극소/소/중/대형1) 그로스 배송비
- *      A35:E37 = 윙 박스/택배 (소/중/대 → minKg/maxKg/박스/택배)
+ *      A35:E37 = 윙/네이버A 공통 박스/택배 (소/중/대)
  *      A41:E44 = 창고 입고비 (제조사|단위 → 봉당 합계)
+ *      A57:D63 = 위킵 즉석밥 단가표 (참고용, 마진계산_네이버 수기 입력)
  *
- *   3) 마진계산 (헤더 R4, 데이터 R5~)
- *      A 노출ID  B 옵션ID  C 별칭  D 옵션명  E 총kg
- *      F 봉투수  G 1봉kg  H 정가(VAT)  I 실판매가  J 개당가(VAT)
- *      K 가격대(텍스트, "9,900" 등)  L 자동채널  M 수동지정  N 최종채널
- *      O 규격  P 원가  Q 봉투  R 박스  S 택배  T 창고입고비
- *      U 그로스배송  V 입출고  W 수수료율  X 수수료
- *      Y 총비용  Z 순이익  AA 마진율  AB BEP ROAS
+ *   3) 마진계산_쿠팡 (윙+그로스, 339행) — 본 파서가 사용
+ *      마진계산_네이버 (네이버A, 77행) — 별칭+kg키 매칭/수기 위킵, 현 파서 미사용
+ *      공통 헤더 (R4, 데이터 R5~):
+ *        A 노출ID  B 옵션ID  C 별칭  D 옵션명  E 총kg
+ *        F 봉투수  G 1봉kg  H 정가(VAT)  I 실판매가  J 개당가(VAT)
+ *        K 가격대  L 자동채널  M 수동지정  N 최종채널
+ *        O 규격  P 원가  Q 봉투  R 박스  S 택배  T 창고입고비
+ *        U 그로스배송  V 입출고  W 수수료율  X 포장비(신설)  Y 수수료
+ *        Z 총비용  AA 순이익  AB 마진율  AC BEP ROAS
+ *        AD 별칭+kg키(자동, 네이버 시트만)
  *
- * 자동 수식 셀(P~AB): SheetJS 캐시값(.v) 우선, 비어있으면 NaN/null.
+ * 자동 수식 셀(P~AC): SheetJS 캐시값(.v) 우선, 비어있으면 NaN/null.
  * 가격대 라벨(K)은 "9,900"/"10,900"/.../"19,900" 텍스트 그대로 사용.
  * 노출ID/옵션ID 모두 string 으로 통일.
  */
@@ -101,7 +106,7 @@ export interface MarginCalcRow {
   channel: string
   /** O 규격 ("극소"/"소"/"중"/"대형1"/"") */
   size: string
-  // 비용 분해 (P~X) — 모두 자동 수식 결과
+  // 비용 분해 (P~Y) — 모두 자동 수식 결과
   costPrice: number       // P 원가
   bagFee: number          // Q 봉투
   boxFee: number          // R 박스
@@ -110,12 +115,14 @@ export interface MarginCalcRow {
   grossShipFee: number    // U 그로스배송
   inoutFee: number        // V 입출고
   feeRate: number         // W 수수료율
-  coupangFee: number      // X 수수료
-  // 결과 (Y~AB)
-  totalCost: number       // Y 총비용
-  netProfit: number | null  // Z 순이익
-  marginRate: number | null  // AA 마진율
-  bepRoas: number | null     // AB BEP ROAS
+  /** X 포장비(VAT) — 위킵 즉석밥 등 수기 입력 (옛 엑셀엔 없음, optional) */
+  packagingFee?: number
+  coupangFee: number      // Y 수수료 (옛 X)
+  // 결과 (Z~AC)
+  totalCost: number       // Z 총비용 (옛 Y)
+  netProfit: number | null  // AA 순이익 (옛 Z)
+  marginRate: number | null  // AB 마진율 (옛 AA)
+  bepRoas: number | null     // AC BEP ROAS (옛 AB)
 }
 
 /** 윙 박스/택배 분류 */
@@ -339,6 +346,7 @@ const MARGIN_ROW_ALIASES = {
   grossShipFee:  ['그로스배송vat', '그로스배송'],
   inoutFee:      ['입출고vat', '입출고'],
   feeRate:       ['수수료율'],
+  packagingFee:  ['포장비vat', '포장비'],
   coupangFee:    ['수수료vat', '수수료'],
   totalCost:     ['총비용vat', '총비용'],
   netProfit:     ['순이익vat', '순이익'],
@@ -400,6 +408,7 @@ function parseMarginRows(aoa: unknown[][]): { rows: MarginCalcRow[]; error?: str
       grossShipFee: num('grossShipFee') || 0,
       inoutFee: num('inoutFee') || 0,
       feeRate: num('feeRate') || 0,
+      packagingFee: num('packagingFee') || 0,
       coupangFee: num('coupangFee') || 0,
       totalCost: num('totalCost') || 0,
       netProfit: Number.isFinite(netProfit) ? netProfit : null,
@@ -592,7 +601,8 @@ export function parseMarginMaster(buffer: ArrayBuffer): MarginMasterParseResult 
     }
   }
 
-  const marginSheet = findSheet(['마진계산', '마진 계산'])
+  // 새 구조('마진계산_쿠팡' 우선, 신규 분리 시트) → 옛 단일 '마진계산' 폴백
+  const marginSheet = findSheet(['마진계산_쿠팡', '마진계산', '마진 계산'])
   if (!marginSheet) {
     return {
       master: null, error: '마진계산 시트를 찾지 못했습니다',
