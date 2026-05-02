@@ -136,6 +136,7 @@ export default function NaverDiagnosisPage() {
       const products =
         ((loadedSnapshot as unknown as { products?: Array<{
           productName: string
+          alias?: string
           count: number
           revenue: number
           cost: number

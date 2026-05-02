@@ -46,6 +46,7 @@ interface NaverSnapshot {
   // 상품별 분해 (옵션)
   products?: Array<{
     productName: string
+    alias?: string
     count: number
     revenue: number
     cost: number

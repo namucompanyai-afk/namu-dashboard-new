@@ -386,6 +386,15 @@ function buildSnapshot(
       matched: diagnosis.matched,
       unmatched: diagnosis.unmatched,
     },
-    products: diagnosis.products,
+    // 명시적으로 alias 포함해서 저장 (frozen view 시 별칭 그룹화에 사용)
+    products: diagnosis.products.map((p) => ({
+      productName: p.productName,
+      alias: p.alias ?? '',
+      count: p.count,
+      revenue: p.revenue,
+      cost: p.cost,
+      profit: p.profit,
+      matched: p.matched,
+    })),
   }
 }
