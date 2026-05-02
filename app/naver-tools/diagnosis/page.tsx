@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { useNaverStore, type NaverSnapshotMeta } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
+import { computeAliasTrend, type NaverAliasTrendPoint } from '@/lib/naver/diagnosis'
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
 
@@ -769,66 +770,13 @@ export default function NaverDiagnosisPage() {
             {displayDiagnosis.matched + displayDiagnosis.unmatched}건)
           </div>
 
-          {/* 상품별 손익 표 */}
-          <div className="bg-white border rounded-lg overflow-hidden">
-            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 sticky top-0">
-                  <tr className="text-xs text-gray-600">
-                    <th className="px-3 py-2 text-left">상품명</th>
-                    <th className="px-3 py-2 text-right">건수</th>
-                    <th className="px-3 py-2 text-right">매출</th>
-                    <th className="px-3 py-2 text-right">평균단가</th>
-                    <th className="px-3 py-2 text-right">원가합계</th>
-                    <th className="px-3 py-2 text-right">마진</th>
-                    <th className="px-3 py-2 text-right">마진율</th>
-                    <th className="px-3 py-2 text-center">매칭</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayDiagnosis.products.map((p) => {
-                    const avg = p.count > 0 ? p.revenue / p.count : 0
-                    const rate = p.revenue > 0 ? p.profit / p.revenue : 0
-                    return (
-                      <tr
-                        key={p.productName}
-                        className={'border-t ' + (p.matched ? '' : 'bg-gray-50 text-gray-500')}
-                      >
-                        <td className="px-3 py-2 max-w-md truncate" title={p.productName}>
-                          {p.productName}
-                        </td>
-                        <td className="px-3 py-2 text-right">{p.count}</td>
-                        <td className="px-3 py-2 text-right">{fmtKRW(p.revenue)}</td>
-                        <td className="px-3 py-2 text-right text-gray-500">{fmtKRW(avg)}</td>
-                        <td className="px-3 py-2 text-right">{fmtKRW(p.cost)}</td>
-                        <td
-                          className={
-                            'px-3 py-2 text-right ' +
-                            (p.profit >= 0 ? 'text-emerald-700' : 'text-red-600')
-                          }
-                        >
-                          {fmtKRW(p.profit)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-xs text-gray-600">
-                          {p.revenue > 0 ? fmtPct(rate) : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-center text-xs">
-                          {p.matched ? '✅' : <span className="text-gray-400">❌ 미매칭</span>}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                  {displayDiagnosis.products.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className="px-3 py-8 text-center text-gray-400">
-                        데이터 없음
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {/* 별칭별 손익 표 */}
+          <NaverAliasTable
+            products={displayDiagnosis.products}
+            settlement={settlement}
+            productMatch={productMatch}
+            marginMap={marginMap}
+          />
         </>
       )}
 
@@ -1233,6 +1181,265 @@ function AnalysisItem({
           🗑
         </button>
       </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// 별칭별 손익 표 + 클릭 시 판매 추이 펼침
+// ─────────────────────────────────────────────────────────────
+
+interface NaverAliasTableProps {
+  products: Array<{
+    productName: string
+    alias?: string
+    count: number
+    revenue: number
+    cost: number
+    profit: number
+    matched: boolean
+  }>
+  settlement: import('@/lib/naver/parsers/settlement').NaverSettlementData | null
+  productMatch: Map<string, import('@/lib/naver/parsers/productMatch').NaverProductMatch> | null
+  marginMap: Map<string, import('@/lib/naver/marginNaver').NaverMarginOption[]> | null
+}
+
+const UNMATCHED_KEY = '__UNMATCHED__'
+
+function NaverAliasTable({ products, settlement, productMatch, marginMap }: NaverAliasTableProps) {
+  // 별칭 단위 그룹화 (미매칭은 별도 그룹)
+  const aliasRows = useMemo(() => {
+    const map = new Map<string, { alias: string; count: number; revenue: number; matched: boolean }>()
+    for (const p of products) {
+      const key = p.matched && p.alias ? p.alias : UNMATCHED_KEY
+      const acc = map.get(key) ?? {
+        alias: key === UNMATCHED_KEY ? '미매칭' : p.alias || '',
+        count: 0,
+        revenue: 0,
+        matched: key !== UNMATCHED_KEY,
+      }
+      acc.count += p.count
+      acc.revenue += p.revenue
+      map.set(key, acc)
+    }
+    return Array.from(map.entries())
+      .map(([key, v]) => ({ key, ...v }))
+      .sort((a, b) => b.revenue - a.revenue)
+  }, [products])
+
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+
+  return (
+    <div className="bg-white border rounded-lg overflow-hidden">
+      <div className="overflow-x-auto max-h-[700px] overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr className="text-xs text-gray-600">
+              <th className="px-3 py-2 text-left">별칭</th>
+              <th className="px-3 py-2 text-right">건수</th>
+              <th className="px-3 py-2 text-right">매출</th>
+              <th className="px-3 py-2 text-center w-10"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {aliasRows.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-3 py-8 text-center text-gray-400">
+                  데이터 없음
+                </td>
+              </tr>
+            )}
+            {aliasRows.map((r) => {
+              const isExpanded = expandedKey === r.key
+              const canExpand = r.matched && r.alias && r.alias !== '미매칭'
+              return (
+                <React.Fragment key={r.key}>
+                  <tr
+                    className={
+                      'border-t ' +
+                      (r.matched ? '' : 'bg-gray-50 text-gray-500') +
+                      (canExpand ? ' cursor-pointer hover:bg-gray-50' : '')
+                    }
+                    onClick={() => {
+                      if (!canExpand) return
+                      setExpandedKey(isExpanded ? null : r.key)
+                    }}
+                  >
+                    <td className="px-3 py-2">
+                      <span className={canExpand ? 'text-blue-700 hover:underline' : ''}>
+                        {r.alias}
+                      </span>
+                      {!r.matched && <span className="ml-2 text-xs text-gray-400">❌ 미매칭</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right">{r.count}</td>
+                    <td className="px-3 py-2 text-right">{fmtKRW(r.revenue)}</td>
+                    <td className="px-3 py-2 text-center text-xs text-gray-400">
+                      {canExpand ? (isExpanded ? '▼' : '▶') : ''}
+                    </td>
+                  </tr>
+                  {isExpanded && canExpand && (
+                    <tr className="bg-gray-50">
+                      <td colSpan={4} className="px-3 py-3">
+                        <NaverAliasTrendChart
+                          alias={r.alias}
+                          settlement={settlement}
+                          productMatch={productMatch}
+                          marginMap={marginMap}
+                          onClose={() => setExpandedKey(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// 별칭별 판매 추이 차트 (매출 + 총 kg, 주별/월별)
+// ─────────────────────────────────────────────────────────────
+
+function NaverAliasTrendChart({
+  alias,
+  settlement,
+  productMatch,
+  marginMap,
+  onClose,
+}: {
+  alias: string
+  settlement: NaverAliasTableProps['settlement']
+  productMatch: NaverAliasTableProps['productMatch']
+  marginMap: NaverAliasTableProps['marginMap']
+  onClose: () => void
+}) {
+  const [granularity, setGranularity] = useState<'weekly' | 'monthly'>('weekly')
+
+  const data: NaverAliasTrendPoint[] = useMemo(() => {
+    return computeAliasTrend(settlement, productMatch, marginMap, alias, granularity)
+  }, [settlement, productMatch, marginMap, alias, granularity])
+
+  const periodLabel = granularity === 'weekly' ? '주' : '월'
+
+  return (
+    <div className="rounded border border-gray-200 bg-white p-3">
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-sm font-semibold">📦 {alias} 판매 추이</h4>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded border border-gray-300 overflow-hidden">
+            <button
+              onClick={() => setGranularity('weekly')}
+              className={
+                'px-3 py-1 text-xs font-medium ' +
+                (granularity === 'weekly'
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-50')
+              }
+            >
+              주별
+            </button>
+            <button
+              onClick={() => setGranularity('monthly')}
+              className={
+                'px-3 py-1 text-xs font-medium ' +
+                (granularity === 'monthly'
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-white text-gray-700 hover:bg-gray-50')
+              }
+            >
+              월별
+            </button>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-xs text-gray-500 hover:text-gray-700"
+          >
+            ✕ 닫기
+          </button>
+        </div>
+      </div>
+
+      {data.length < 2 ? (
+        <div className="text-center text-xs text-gray-500 py-6">
+          📈 {periodLabel}별 추이는 2{periodLabel} 이상 데이터가 누적되면 표시됩니다. (현재{' '}
+          {data.length}{periodLabel} 데이터)
+        </div>
+      ) : (
+        <div
+          tabIndex={-1}
+          className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+          style={{ outline: 'none' }}
+        >
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={data} tabIndex={-1} style={{ outline: 'none' }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis
+                yAxisId="left"
+                tick={{ fontSize: 10 }}
+                tickFormatter={(v) => `${Math.round(v / 10000).toLocaleString()}만`}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                tick={{ fontSize: 10 }}
+                tickFormatter={(v) => `${v.toLocaleString()}kg`}
+              />
+              <Tooltip
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null
+                  const rev = payload.find((p) => p.dataKey === 'revenue')?.value ?? 0
+                  const kg = payload.find((p) => p.dataKey === 'totalKg')?.value ?? 0
+                  return (
+                    <div className="rounded border border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm px-2 py-1.5 text-[11px]">
+                      <div className="font-medium text-gray-700 mb-0.5">{label}</div>
+                      <div className="flex items-center gap-1.5 leading-tight">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-600" />
+                        <span className="text-gray-500 w-10">매출</span>
+                        <span className="font-mono text-gray-900">
+                          {Number(rev).toLocaleString()}원
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 leading-tight">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-600" />
+                        <span className="text-gray-500 w-10">총 kg</span>
+                        <span className="font-mono text-gray-900">
+                          {Number(kg).toLocaleString()}kg
+                        </span>
+                      </div>
+                    </div>
+                  )
+                }}
+                offset={20}
+                cursor={{ stroke: '#10b981', strokeWidth: 24, strokeOpacity: 0.1 }}
+              />
+              <Legend />
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey="revenue"
+                name="매출"
+                stroke="#2563eb"
+                strokeWidth={2}
+                dot={{ r: 3, fill: '#fff', stroke: '#2563eb', strokeWidth: 2 }}
+              />
+              <Line
+                yAxisId="right"
+                type="monotone"
+                dataKey="totalKg"
+                name="총 kg"
+                stroke="#10b981"
+                strokeWidth={2}
+                dot={{ r: 3, fill: '#fff', stroke: '#10b981', strokeWidth: 2 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   )
 }

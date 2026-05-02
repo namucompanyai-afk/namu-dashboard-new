@@ -26,6 +26,8 @@ export interface NaverManualInput {
 
 export interface NaverProductBreakdown {
   productName: string
+  /** 매칭된 마진계산_네이버 옵션의 alias. 미매칭이면 '' */
+  alias: string
   count: number
   revenue: number
   cost: number
@@ -74,6 +76,69 @@ function pickClosestOption(
   return best
 }
 
+/** YYYY-MM-DD → 그 주의 월요일(YYYY-MM-DD) — ISO week 기준 */
+function startOfWeek(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (!Number.isFinite(d.getTime())) return dateStr
+  const dow = d.getDay() // 0=일, 1=월, ..., 6=토
+  const diff = dow === 0 ? -6 : 1 - dow // 월요일까지 며칠 빼야 하는지
+  d.setDate(d.getDate() + diff)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+export interface NaverAliasTrendPoint {
+  key: string
+  label: string
+  revenue: number
+  totalKg: number
+}
+
+/** 별칭별 판매 추이 — 정산행을 일자(주/월) 단위로 그룹핑하여 매출 + 총kg 시계열 산출 */
+export function computeAliasTrend(
+  settlement: import('./parsers/settlement').NaverSettlementData | null,
+  productMatch: Map<string, NaverProductMatch> | null,
+  marginMap: Map<string, NaverMarginOption[]> | null,
+  alias: string,
+  granularity: 'weekly' | 'monthly',
+): NaverAliasTrendPoint[] {
+  if (!settlement || !productMatch || !marginMap || !alias) return []
+
+  const buckets = new Map<string, { revenue: number; totalKg: number }>()
+  for (const r of settlement.rows) {
+    if (r.kind !== '상품주문') continue
+    if (!r.settleDate) continue
+    const name = r.productName.trim()
+    if (!name) continue
+    const match = productMatch.get(name)
+    const opts = match?.exposureId ? marginMap.get(match.exposureId) : undefined
+    if (!opts || opts.length === 0) continue
+    const opt = pickClosestOption(opts, r.basePrice)
+    if (!opt) continue
+    if (opt.alias !== alias) continue
+
+    const key =
+      granularity === 'monthly' ? r.settleDate.slice(0, 7) : startOfWeek(r.settleDate)
+    const acc = buckets.get(key) ?? { revenue: 0, totalKg: 0 }
+    acc.revenue += r.basePrice
+    // 1주문 총kg = 1봉kg × 봉수 (마진계산_네이버 시트 G·F열)
+    acc.totalKg += (opt.kgPerBag || 0) * (opt.bagCount || 1)
+    buckets.set(key, acc)
+  }
+
+  const out: NaverAliasTrendPoint[] = Array.from(buckets.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, v]) => ({
+      key,
+      label: granularity === 'monthly' ? key : key.slice(5),
+      revenue: v.revenue,
+      totalKg: v.totalKg,
+    }))
+  return out
+}
+
 export function computeNaverDiagnosis(
   settlement: NaverSettlementData,
   productMatch: Map<string, NaverProductMatch>,
@@ -82,7 +147,7 @@ export function computeNaverDiagnosis(
 ): NaverDiagnosisResult {
   const products = new Map<
     string,
-    { count: number; revenue: number; cost: number; matched: boolean }
+    { count: number; revenue: number; cost: number; matched: boolean; alias: string }
   >()
 
   let cost = 0
@@ -96,7 +161,8 @@ export function computeNaverDiagnosis(
     if (r.kind !== '상품주문') continue
     const name = r.productName.trim()
     if (!name) continue
-    const acc = products.get(name) ?? { count: 0, revenue: 0, cost: 0, matched: false }
+    const acc =
+      products.get(name) ?? { count: 0, revenue: 0, cost: 0, matched: false, alias: '' }
     acc.count += 1
     acc.revenue += r.basePrice
 
@@ -111,6 +177,7 @@ export function computeNaverDiagnosis(
         pack += opt.pack
         acc.cost += opt.cost
         acc.matched = true
+        if (!acc.alias) acc.alias = opt.alias
         matched += 1
       } else {
         unmatched += 1
@@ -139,6 +206,7 @@ export function computeNaverDiagnosis(
   const productList: NaverProductBreakdown[] = Array.from(products.entries()).map(
     ([productName, v]) => ({
       productName,
+      alias: v.alias,
       count: v.count,
       revenue: v.revenue,
       cost: v.cost,
