@@ -122,19 +122,81 @@ export default function NaverDiagnosisPage() {
     await purgeAll()
   }
 
-  // 명시 저장 다이얼로그 (쿠팡 패턴)
+  // 명시 저장 다이얼로그 (쿠팡 패턴 미러링)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [saveLabel, setSaveLabel] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [includeInTrend, setIncludeInTrend] = useState(false)
+  const [trendType, setTrendType] = useState<'weekly' | 'monthly' | null>(null)
+  const [savingExplicit, setSavingExplicit] = useState(false)
 
-  const onSaveExplicit = async () => {
+  const periodDays = (() => {
+    const s = diagnosis?.period.start
+    const e = diagnosis?.period.end
+    if (!s || !e) return 0
+    return Math.round((Date.parse(e) - Date.parse(s)) / 86400000) + 1
+  })()
+
+  const handleOpenSaveDialog = () => {
     if (!diagnosis) return
-    setSaving(true)
-    const id = await saveExplicit(saveLabel)
-    setSaving(false)
-    if (id) {
-      setShowSaveDialog(false)
-      setSaveLabel('')
+    const start = diagnosis.period.start
+    const end = diagnosis.period.end
+    if (!start || !end) return
+    const endDate = new Date(end)
+    const yyyy = endDate.getFullYear()
+    const mm = endDate.getMonth() + 1
+    const days = periodDays
+
+    if (days >= 6 && days <= 8) {
+      setTrendType('weekly')
+      setIncludeInTrend(true)
+      setSaveLabel(`주별: ${start} ~ ${end} (${days}일)`)
+    } else if (days >= 28 && days <= 31) {
+      setTrendType('monthly')
+      setIncludeInTrend(true)
+      setSaveLabel(`${yyyy}년 ${mm}월 진단 (${start} ~ ${end})`)
+    } else {
+      setTrendType(null)
+      setIncludeInTrend(false)
+      setSaveLabel(`${days}일치 분석 (${start} ~ ${end})`)
+    }
+    setShowSaveDialog(true)
+  }
+
+  const handleSaveExplicit = async () => {
+    if (!diagnosis) return
+    const start = diagnosis.period.start
+    const end = diagnosis.period.end
+    if (!start || !end) return
+
+    setSavingExplicit(true)
+    try {
+      const endDate = new Date(end)
+      const monthKey =
+        includeInTrend && trendType === 'monthly'
+          ? `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}`
+          : null
+      const weekKey = includeInTrend && trendType === 'weekly' ? start : null
+
+      // 같은 키 있으면 id 재사용 (덮어쓰기)
+      const existing = snapshots.find(
+        (s) =>
+          (includeInTrend && trendType === 'monthly' && s.monthKey === monthKey) ||
+          (includeInTrend && trendType === 'weekly' && s.weekKey === weekKey),
+      )
+
+      const id = await saveExplicit(saveLabel, {
+        monthKey,
+        weekKey,
+        trendType: includeInTrend ? trendType : null,
+        includeInTrend,
+        id: existing?.id,
+      })
+      if (id) {
+        setShowSaveDialog(false)
+        setSaveLabel('')
+      }
+    } finally {
+      setSavingExplicit(false)
     }
   }
 
@@ -210,7 +272,7 @@ export default function NaverDiagnosisPage() {
           )}
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowSaveDialog(true)}
+              onClick={handleOpenSaveDialog}
               disabled={!diagnosis}
               className="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300"
             >
@@ -232,39 +294,88 @@ export default function NaverDiagnosisPage() {
         </div>
       </div>
 
-      {/* 명시 저장 다이얼로그 */}
+      {/* 분석 저장 다이얼로그 (쿠팡 미러링) */}
       {showSaveDialog && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-5 w-full max-w-md shadow-lg">
-            <h3 className="text-lg font-semibold mb-3">분석 저장</h3>
-            <p className="text-sm text-gray-600 mb-3">
-              이번 진단 결과를 저장합니다. 라벨을 입력하면 나중에 알아보기 쉬워요.
-            </p>
-            <input
-              type="text"
-              value={saveLabel}
-              onChange={(e) => setSaveLabel(e.target.value)}
-              placeholder="예: 4월 정산 마감"
-              className="w-full px-3 py-2 border rounded text-sm mb-4"
-              autoFocus
-            />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-bold mb-4">분석 저장</h2>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                라벨 (히스토리 표시용)
+              </label>
+              <input
+                type="text"
+                value={saveLabel}
+                onChange={(e) => setSaveLabel(e.target.value)}
+                className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
+                placeholder="예: 2026년 4월 진단"
+              />
+            </div>
+
+            <div className="mb-6">
+              <label className="flex items-start gap-2 cursor-pointer mb-2">
+                <input
+                  type="checkbox"
+                  checked={includeInTrend}
+                  onChange={(e) => setIncludeInTrend(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div className="text-sm">
+                  <div className="font-medium">추이 그래프에 포함</div>
+                  <div className="text-xs text-gray-500 mt-0.5">
+                    체크 시 같은 키(주/월) 데이터가 있으면 덮어쓰기됩니다.
+                  </div>
+                </div>
+              </label>
+
+              {includeInTrend && (
+                <div className="ml-6 mt-2 space-y-1">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={trendType === 'weekly'}
+                      onChange={() => setTrendType('weekly')}
+                    />
+                    <span>주별 추이 (6~8일치 권장)</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={trendType === 'monthly'}
+                      onChange={() => setTrendType('monthly')}
+                    />
+                    <span>월별 추이 (28~31일치 권장)</span>
+                  </label>
+
+                  {trendType === 'weekly' && (periodDays < 6 || periodDays > 8) && (
+                    <div className="text-xs text-orange-600 mt-1">
+                      ⚠ {periodDays}일치 — 주별은 6~8일치 권장
+                    </div>
+                  )}
+                  {trendType === 'monthly' && (periodDays < 28 || periodDays > 31) && (
+                    <div className="text-xs text-orange-600 mt-1">
+                      ⚠ {periodDays}일치 — 월별은 28~31일치 권장
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => {
-                  setShowSaveDialog(false)
-                  setSaveLabel('')
-                }}
-                className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
-                disabled={saving}
+                onClick={() => setShowSaveDialog(false)}
+                className="px-4 py-2 rounded border border-gray-300 text-sm hover:bg-gray-50"
+                disabled={savingExplicit}
               >
                 취소
               </button>
               <button
-                onClick={onSaveExplicit}
-                className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-300"
-                disabled={saving}
+                onClick={handleSaveExplicit}
+                className="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50"
+                disabled={savingExplicit || !saveLabel.trim()}
               >
-                {saving ? '저장 중…' : '저장'}
+                {savingExplicit ? '저장 중...' : '저장'}
               </button>
             </div>
           </div>

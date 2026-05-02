@@ -90,8 +90,17 @@ interface NaverStore {
 
   /** 자동 저장 (debounce 호출) — last 슬롯에 덮어쓰기 */
   saveLast: () => Promise<void>
-  /** 명시 저장 — id 반환 */
-  saveExplicit: (label: string) => Promise<string | null>
+  /** 명시 저장 — id 반환. extra 로 monthKey/weekKey/trendType/includeInTrend/id 등 메타 부착 가능 */
+  saveExplicit: (
+    label: string,
+    extra?: {
+      monthKey?: string | null
+      weekKey?: string | null
+      trendType?: 'weekly' | 'monthly' | null
+      includeInTrend?: boolean
+      id?: string
+    },
+  ) => Promise<string | null>
   /** 자동 explicit 저장 — trendType/monthKey/weekKey 자동 부착, 같은 키 있으면 덮어쓰기 */
   saveAuto: () => Promise<string | null>
   /** 저장된 분석 목록 로드 */
@@ -283,15 +292,17 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
     }
   },
 
-  saveExplicit: async (label: string) => {
+  saveExplicit: async (label, extra) => {
     const { diagnosis, settlement } = get()
     if (!diagnosis) return null
-    const period = diagnosis.period
-    const monthKey = period.start ? period.start.slice(0, 7) : null
     const snapshot = {
       ...buildSnapshot(diagnosis, settlement),
       label: label.trim() || undefined,
-      monthKey,
+      monthKey: extra?.monthKey ?? null,
+      weekKey: extra?.weekKey ?? null,
+      trendType: extra?.trendType ?? null,
+      includeInTrend: extra?.includeInTrend ?? false,
+      id: extra?.id,
     }
     try {
       const res = await fetch('/api/naver-diagnoses', {
