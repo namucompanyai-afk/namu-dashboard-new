@@ -1,7 +1,17 @@
 'use client'
 
-import React, { useEffect, useRef, useState } from 'react'
-import { useNaverStore } from '@/lib/naver/store'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import { useNaverStore, type NaverSnapshotMeta } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
@@ -96,7 +106,91 @@ export default function NaverDiagnosisPage() {
     saveExplicit,
     loadList,
     purgeAll,
+    deleteSnapshot,
   } = useNaverStore()
+
+  // ── frozen view (저장된 분석 보기) ──
+  const [loadedSnapshot, setLoadedSnapshot] = useState<NaverSnapshotMeta | null>(null)
+  const exitSnapshotView = () => setLoadedSnapshot(null)
+
+  // KPI/표 표시용 — loaded 우선, 없으면 라이브
+  const displayDiagnosis = useMemo(() => {
+    if (loadedSnapshot?.summary) {
+      const s = loadedSnapshot.summary as unknown as {
+        revenue: number
+        settleAmount: number
+        settleFee: number
+        cost: number
+        bag: number
+        box: number
+        pack: number
+        shipReal: number
+        shipRevenue: number
+        adCost: number
+        netProfit: number
+        productOrderCount: number
+        matched: number
+        unmatched: number
+      }
+      const products =
+        ((loadedSnapshot as unknown as { products?: Array<{
+          productName: string
+          count: number
+          revenue: number
+          cost: number
+          profit: number
+          matched: boolean
+        }> }).products) ?? []
+      return {
+        period: loadedSnapshot.period ?? { start: '', end: '' },
+        revenue: s.revenue ?? 0,
+        settleAmount: s.settleAmount ?? 0,
+        settleFee: s.settleFee ?? 0,
+        cost: s.cost ?? 0,
+        bag: s.bag ?? 0,
+        box: s.box ?? 0,
+        pack: s.pack ?? 0,
+        shipReal: s.shipReal ?? 0,
+        shipRevenue: s.shipRevenue ?? 0,
+        adCost: s.adCost ?? 0,
+        netProfit: s.netProfit ?? 0,
+        productCount: products.length,
+        matched: s.matched ?? 0,
+        unmatched: s.unmatched ?? 0,
+        products,
+        _productOrderCount: s.productOrderCount ?? 0,
+      }
+    }
+    if (!diagnosis) return null
+    return {
+      ...diagnosis,
+      _productOrderCount: settlement?.productOrderCount ?? 0,
+    }
+  }, [loadedSnapshot, diagnosis, settlement])
+
+  // 히스토리 패널
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false)
+
+  const handleLoadAnalysis = async (a: NaverSnapshotMeta) => {
+    if (!a.id) return
+    try {
+      const res = await fetch(`/api/naver-diagnoses?type=item&id=${encodeURIComponent(a.id)}`)
+      const full = await res.json()
+      if (full) {
+        setLoadedSnapshot(full)
+        setShowHistoryPanel(false)
+      }
+    } catch (e) {
+      console.warn('분석 불러오기 실패:', e)
+    }
+  }
+
+  const handleDeleteAnalysis = async (id?: string) => {
+    if (!id) return
+    if (!confirm('이 분석을 삭제하시겠습니까?')) return
+    await deleteSnapshot(id)
+    if (loadedSnapshot?.id === id) setLoadedSnapshot(null)
+  }
 
   const settleInputRef = useRef<HTMLInputElement>(null)
 
@@ -259,18 +353,31 @@ export default function NaverDiagnosisPage() {
           <p className="text-sm text-gray-500 mt-1">정산금 − 비용 − 광고비 (월별)</p>
         </div>
         <div className="flex items-end gap-3">
-          {diagnosis?.period.start && (
+          {displayDiagnosis?.period.start && (
             <div className="text-right">
               <div className="text-[10px] uppercase tracking-wide text-gray-500">
                 마지막 업데이트 데이터
               </div>
               <div className="text-sm font-mono font-medium text-gray-800 mt-0.5">
-                {fmtPeriodWithDays(diagnosis.period.start, diagnosis.period.end)}
+                {fmtPeriodWithDays(displayDiagnosis.period.start, displayDiagnosis.period.end)}
               </div>
-              <div className="text-[10px] text-gray-400">현재 보고 있는 분석</div>
+              <div className={'text-[10px] ' + (loadedSnapshot ? 'text-blue-600 font-medium' : 'text-gray-400')}>
+                {loadedSnapshot
+                  ? `📌 ${loadedSnapshot.label || '저장된 분석'} (frozen)`
+                  : '현재 보고 있는 분석'}
+              </div>
             </div>
           )}
           <div className="flex items-center gap-2">
+            {loadedSnapshot && (
+              <button
+                onClick={exitSnapshotView}
+                className="text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100"
+                title="저장된 분석 보기 종료 — 라이브 모드"
+              >
+                📌 라이브 모드
+              </button>
+            )}
             <button
               onClick={handleOpenSaveDialog}
               disabled={!diagnosis}
@@ -279,7 +386,7 @@ export default function NaverDiagnosisPage() {
               💾 분석 저장
             </button>
             <button
-              onClick={() => alert('히스토리 패널은 준비 중입니다 (PR3에서 추가)')}
+              onClick={() => setShowHistoryPanel(!showHistoryPanel)}
               className="text-sm px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
             >
               📊 저장된 분석 ({snapshots.length})
@@ -293,6 +400,84 @@ export default function NaverDiagnosisPage() {
           </div>
         </div>
       </div>
+
+      {/* 저장된 분석 히스토리 패널 */}
+      {showHistoryPanel && (
+        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold">저장된 분석 히스토리</h3>
+            <button
+              onClick={() => setShowHistoryPanel(false)}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              ✕ 닫기
+            </button>
+          </div>
+
+          {snapshots.length === 0 ? (
+            <div className="text-center text-xs text-gray-500 py-4">
+              저장된 분석이 없습니다. 「💾 분석 저장」 버튼으로 저장하세요.
+            </div>
+          ) : (
+            <>
+              {snapshots.filter((a) => a.includeInTrend && a.trendType === 'weekly').length > 0 && (
+                <div className="mb-3">
+                  <div className="text-xs font-medium text-blue-700 mb-1.5">📅 주별 추이 (그래프 누적)</div>
+                  <div className="space-y-1">
+                    {snapshots
+                      .filter((a) => a.includeInTrend && a.trendType === 'weekly')
+                      .sort((a, b) => (b.weekKey || '').localeCompare(a.weekKey || ''))
+                      .map((a) => (
+                        <AnalysisItem
+                          key={a.id}
+                          a={a}
+                          onLoad={handleLoadAnalysis}
+                          onDelete={handleDeleteAnalysis}
+                        />
+                      ))}
+                  </div>
+                </div>
+              )}
+              {snapshots.filter((a) => a.includeInTrend && a.trendType === 'monthly').length > 0 && (
+                <div className="mb-3">
+                  <div className="text-xs font-medium text-orange-700 mb-1.5">📅 월별 추이 (그래프 누적)</div>
+                  <div className="space-y-1">
+                    {snapshots
+                      .filter((a) => a.includeInTrend && a.trendType === 'monthly')
+                      .sort((a, b) => (b.monthKey || '').localeCompare(a.monthKey || ''))
+                      .map((a) => (
+                        <AnalysisItem
+                          key={a.id}
+                          a={a}
+                          onLoad={handleLoadAnalysis}
+                          onDelete={handleDeleteAnalysis}
+                        />
+                      ))}
+                  </div>
+                </div>
+              )}
+              {snapshots.filter((a) => !a.includeInTrend).length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-gray-600 mb-1.5">📁 일반 분석 (그래프 미포함)</div>
+                  <div className="space-y-1">
+                    {snapshots
+                      .filter((a) => !a.includeInTrend)
+                      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+                      .map((a) => (
+                        <AnalysisItem
+                          key={a.id}
+                          a={a}
+                          onLoad={handleLoadAnalysis}
+                          onDelete={handleDeleteAnalysis}
+                        />
+                      ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* 분석 저장 다이얼로그 (쿠팡 미러링) */}
       {showSaveDialog && (
@@ -493,46 +678,47 @@ export default function NaverDiagnosisPage() {
       </div>
 
       {/* KPI 카드 */}
-      {diagnosis && (
+      {displayDiagnosis && (
         <>
           {(() => {
-            const totalCost =
-              diagnosis.cost + diagnosis.bag + diagnosis.box + diagnosis.pack + diagnosis.shipReal
-            const feePct = diagnosis.revenue > 0
-              ? ((Math.abs(diagnosis.settleFee) / diagnosis.revenue) * 100).toFixed(1)
+            const d = displayDiagnosis
+            const totalCost = d.cost + d.bag + d.box + d.pack + d.shipReal
+            const feePct = d.revenue > 0
+              ? ((Math.abs(d.settleFee) / d.revenue) * 100).toFixed(1)
               : '0.0'
-            const marginPct = diagnosis.revenue > 0
-              ? fmtPct(diagnosis.netProfit / diagnosis.revenue)
-              : ''
+            const marginPct = d.revenue > 0 ? fmtPct(d.netProfit / d.revenue) : ''
+            const productCountSub = loadedSnapshot
+              ? `매칭 ${d.matched}/${d.matched + d.unmatched}`
+              : `${d.productCount}종`
             return (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  <KpiCard label="매출" value={fmtMan(diagnosis.revenue)} sub={`${diagnosis.productCount}종`} />
+                  <KpiCard label="매출" value={fmtMan(d.revenue)} sub={productCountSub} />
                   <KpiCard
                     label="정산금"
-                    value={fmtMan(diagnosis.settleAmount)}
-                    sub={`수수료 ${fmtMan(diagnosis.settleFee)} (${feePct}%)`}
+                    value={fmtMan(d.settleAmount)}
+                    sub={`수수료 ${fmtMan(d.settleFee)} (${feePct}%)`}
                   />
                   <KpiCard
                     label="매출 건수"
-                    value={(settlement?.productOrderCount ?? 0).toLocaleString()}
+                    value={(d._productOrderCount ?? 0).toLocaleString()}
                     sub="상품주문"
                   />
-                  <KpiCard label="기간" value={fmtPeriod(diagnosis.period.start, diagnosis.period.end)} />
+                  <KpiCard label="기간" value={fmtPeriod(d.period.start, d.period.end)} />
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard
                     label="총 비용"
                     value={fmtMan(-totalCost)}
                     formula="원가 + 봉투 + 박스 + 택배 + 포장비"
-                    sub={`원가 ${fmtMan(diagnosis.cost)}`}
+                    sub={`원가 ${fmtMan(d.cost)}`}
                   />
-                  <KpiCard label="배송비 매출" value={fmtMan(diagnosis.shipRevenue)} sub="구매자부담−수수료" />
-                  <KpiCard label="광고비" value={fmtMan(-diagnosis.adCost)} sub="수기 입력" />
+                  <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
+                  <KpiCard label="광고비" value={fmtMan(-d.adCost)} sub="수기 입력" />
                   <KpiCard
                     label="순이익"
-                    value={fmtMan(diagnosis.netProfit)}
-                    accent={diagnosis.netProfit >= 0 ? 'green' : 'red'}
+                    value={fmtMan(d.netProfit)}
+                    accent={d.netProfit >= 0 ? 'green' : 'red'}
                     sub={marginPct ? `마진율 ${marginPct}` : ''}
                   />
                 </div>
@@ -540,9 +726,16 @@ export default function NaverDiagnosisPage() {
             )
           })()}
 
+          {/* 추이 그래프 */}
+          <NaverTrendChart
+            snapshots={snapshots}
+            onPointClick={handleLoadAnalysis}
+          />
+
           {/* 매칭 통계 */}
-          <div className="text-xs text-gray-500 mb-3">
-            매칭 {diagnosis.matched} / 미매칭 {diagnosis.unmatched} (총 {diagnosis.matched + diagnosis.unmatched}건)
+          <div className="text-xs text-gray-500 mb-3 mt-6">
+            매칭 {displayDiagnosis.matched} / 미매칭 {displayDiagnosis.unmatched} (총{' '}
+            {displayDiagnosis.matched + displayDiagnosis.unmatched}건)
           </div>
 
           {/* 상품별 손익 표 */}
@@ -562,7 +755,7 @@ export default function NaverDiagnosisPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {diagnosis.products.map((p) => {
+                  {displayDiagnosis.products.map((p) => {
                     const avg = p.count > 0 ? p.revenue / p.count : 0
                     const rate = p.revenue > 0 ? p.profit / p.revenue : 0
                     return (
@@ -594,7 +787,7 @@ export default function NaverDiagnosisPage() {
                       </tr>
                     )
                   })}
-                  {diagnosis.products.length === 0 && (
+                  {displayDiagnosis.products.length === 0 && (
                     <tr>
                       <td colSpan={8} className="px-3 py-8 text-center text-gray-400">
                         데이터 없음
@@ -701,3 +894,296 @@ function ShipRow({
   )
 }
 
+
+// ─────────────────────────────────────────────────────────────
+// 추이 그래프 (매출 + 순이익)
+// ─────────────────────────────────────────────────────────────
+
+interface TrendDatum {
+  key: string
+  label: string
+  매출: number
+  순이익: number
+  _analysis: NaverSnapshotMeta
+}
+
+interface BigHitDotProps {
+  cx?: number
+  cy?: number
+  stroke?: string
+  payload?: TrendDatum
+  onPointClick?: (a: NaverSnapshotMeta) => void
+}
+
+const BigHitDot = (props: BigHitDotProps) => {
+  const { cx, cy, stroke, payload, onPointClick } = props
+  if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null
+  const color = stroke || '#666'
+  return (
+    <g tabIndex={-1} style={{ outline: 'none' }}>
+      <circle
+        cx={cx}
+        cy={cy}
+        r={14}
+        fill="transparent"
+        style={{ cursor: onPointClick ? 'pointer' : 'default', outline: 'none' }}
+        onClick={() => {
+          if (onPointClick && payload?._analysis) onPointClick(payload._analysis)
+        }}
+      />
+      <circle cx={cx} cy={cy} r={3} fill="#fff" stroke={color} strokeWidth={2} />
+    </g>
+  )
+}
+
+interface TooltipPayloadItem {
+  dataKey: string
+  value: number
+  color: string
+}
+
+const CompactTrendTooltip = ({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean
+  payload?: TooltipPayloadItem[]
+  label?: string
+}) => {
+  if (!active || !payload?.length) return null
+  const order: Record<string, number> = { 매출: 1, 순이익: 2 }
+  const items = [...payload]
+    .filter((p) => p.dataKey in order)
+    .sort((a, b) => (order[a.dataKey] ?? 9) - (order[b.dataKey] ?? 9))
+  return (
+    <div className="rounded border border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm px-2 py-1.5 text-[11px]">
+      <div className="font-medium text-gray-700 mb-0.5">{label}</div>
+      {items.map((p) => {
+        const v = p.value ?? 0
+        const isProfit = p.dataKey === '순이익'
+        const valueClass = isProfit
+          ? v < 0
+            ? 'font-mono font-bold text-red-600'
+            : 'font-mono font-bold text-green-600'
+          : 'font-mono text-gray-900'
+        return (
+          <div key={p.dataKey} className="flex items-center gap-1.5 leading-tight">
+            <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+            <span className="text-gray-500 w-10">{p.dataKey}</span>
+            <span className={valueClass}>{v.toLocaleString()}만원</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function formatWeekLabel(weekKey: string | null | undefined): string {
+  if (!weekKey) return '?'
+  return weekKey.slice(5)
+}
+
+function formatMonthLabel(monthKey: string | null | undefined): string {
+  if (!monthKey) return '?'
+  return monthKey
+}
+
+function NaverTrendChart({
+  snapshots,
+  onPointClick,
+}: {
+  snapshots: NaverSnapshotMeta[]
+  onPointClick?: (a: NaverSnapshotMeta) => void
+}) {
+  const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('monthly')
+
+  const weeklyData = useMemo<TrendDatum[]>(() => {
+    return snapshots
+      .filter((a) => a.includeInTrend && a.trendType === 'weekly' && a.weekKey)
+      .sort((a, b) => (a.weekKey || '').localeCompare(b.weekKey || ''))
+      .map((a) => {
+        const s = a.summary as unknown as { revenue?: number; netProfit?: number }
+        return {
+          key: a.weekKey ?? '',
+          label: formatWeekLabel(a.weekKey),
+          매출: Math.round((s.revenue ?? 0) / 10000),
+          순이익: Math.round((s.netProfit ?? 0) / 10000),
+          _analysis: a,
+        }
+      })
+  }, [snapshots])
+
+  const monthlyData = useMemo<TrendDatum[]>(() => {
+    return snapshots
+      .filter((a) => a.includeInTrend && a.trendType === 'monthly' && a.monthKey)
+      .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
+      .map((a) => {
+        const s = a.summary as unknown as { revenue?: number; netProfit?: number }
+        return {
+          key: a.monthKey ?? '',
+          label: formatMonthLabel(a.monthKey),
+          매출: Math.round((s.revenue ?? 0) / 10000),
+          순이익: Math.round((s.netProfit ?? 0) / 10000),
+          _analysis: a,
+        }
+      })
+  }, [snapshots])
+
+  const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
+  const periodLabel = chartMode === 'weekly' ? '주' : '월'
+
+  const ToggleHeader = () => (
+    <div className="flex items-center justify-between mb-3">
+      <h3 className="text-sm font-semibold">📈 추이 그래프</h3>
+      <div className="flex rounded border border-gray-300 overflow-hidden">
+        <button
+          onClick={() => setChartMode('weekly')}
+          className={
+            'px-3 py-1 text-xs font-medium ' +
+            (chartMode === 'weekly'
+              ? 'bg-gray-900 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-50')
+          }
+        >
+          주별 ({weeklyData.length})
+        </button>
+        <button
+          onClick={() => setChartMode('monthly')}
+          className={
+            'px-3 py-1 text-xs font-medium ' +
+            (chartMode === 'monthly'
+              ? 'bg-gray-900 text-white'
+              : 'bg-white text-gray-700 hover:bg-gray-50')
+          }
+        >
+          월별 ({monthlyData.length})
+        </button>
+      </div>
+    </div>
+  )
+
+  if (trendData.length < 2) {
+    return (
+      <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4">
+        <ToggleHeader />
+        <div className="text-center text-sm text-gray-500 py-6">
+          📈 {periodLabel}별 추이는 2{periodLabel} 이상 데이터가 누적되면 표시됩니다.
+          <div className="text-xs text-gray-400 mt-1">현재 {trendData.length}{periodLabel} 데이터</div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4">
+      <ToggleHeader />
+      <div className="text-xs text-gray-500 mb-2">
+        매출 / 순이익 ({periodLabel} 환산)
+        {onPointClick && (
+          <span className="ml-2 text-orange-600">· 점 클릭 시 해당 시점 데이터로 진단</span>
+        )}
+      </div>
+      <ResponsiveContainer width="100%" height={250}>
+        <LineChart data={trendData}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => (v < 0 ? '' : `${v.toLocaleString()}만`)} />
+          <Tooltip
+            content={<CompactTrendTooltip />}
+            offset={20}
+            cursor={{ stroke: '#10b981', strokeWidth: 24, strokeOpacity: 0.1 }}
+          />
+          <Legend />
+          <Line
+            type="monotone"
+            dataKey="매출"
+            stroke="#2563eb"
+            strokeWidth={2}
+            dot={<BigHitDot onPointClick={onPointClick} />}
+            activeDot={{
+              r: 10,
+              cursor: onPointClick ? 'pointer' : 'default',
+            }}
+          />
+          <Line
+            type="monotone"
+            dataKey="순이익"
+            stroke="#10b981"
+            strokeWidth={2}
+            dot={<BigHitDot onPointClick={onPointClick} />}
+            activeDot={{
+              r: 10,
+              cursor: onPointClick ? 'pointer' : 'default',
+            }}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// 히스토리 아이템 (저장된 분석 1개)
+// ─────────────────────────────────────────────────────────────
+
+function AnalysisItem({
+  a,
+  onLoad,
+  onDelete,
+}: {
+  a: NaverSnapshotMeta
+  onLoad: (a: NaverSnapshotMeta) => void
+  onDelete: (id?: string) => void
+}) {
+  const period = a.period
+  const periodText = period?.start && period?.end ? `${period.start} ~ ${period.end}` : ''
+  const created = a.createdAt ? new Date(a.createdAt) : null
+  const createdText = created
+    ? `${created.getFullYear()}-${String(created.getMonth() + 1).padStart(2, '0')}-${String(
+        created.getDate(),
+      ).padStart(2, '0')} ${String(created.getHours()).padStart(2, '0')}:${String(
+        created.getMinutes(),
+      ).padStart(2, '0')}`
+    : ''
+  const tag =
+    a.trendType === 'weekly'
+      ? '주별'
+      : a.trendType === 'monthly'
+        ? '월별'
+        : a.includeInTrend
+          ? '추이'
+          : '일반'
+
+  return (
+    <div className="flex items-center justify-between gap-2 px-2 py-1.5 rounded hover:bg-gray-50 border border-transparent hover:border-gray-200">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{tag}</span>
+          <span className="font-medium truncate" title={a.label}>
+            {a.label || '(라벨 없음)'}
+          </span>
+        </div>
+        <div className="text-xs text-gray-500 mt-0.5 truncate">
+          {periodText}
+          {createdText && <span className="ml-2 text-gray-400">· 저장 {createdText}</span>}
+        </div>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onLoad(a)}
+          className="text-xs px-2 py-1 rounded border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100"
+        >
+          보기
+        </button>
+        <button
+          onClick={() => onDelete(a.id)}
+          className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+          title="삭제"
+        >
+          🗑
+        </button>
+      </div>
+    </div>
+  )
+}
