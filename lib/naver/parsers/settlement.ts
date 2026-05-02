@@ -10,7 +10,7 @@ import * as XLSX from 'xlsx'
  *   O 매출연동수수료상세 / P 수수료상한액 / Q 수수료금액
  *
  * 동일 C(상품주문번호) 묶기 → 1행. L의 max = 그 주문 판매가, Q 합계 = 정산수수료(음수).
- * 날짜는 I(정산기준일) 사용, "YYYY.MM.DD" → "YYYY-MM-DD" 정규화.
+ * 날짜는 H(정산완료일) 사용, "YYYY.MM.DD" → "YYYY-MM-DD" 정규화.
  */
 
 export type SettlementKind = '상품주문' | '배송비'
@@ -89,7 +89,7 @@ export async function parseNaverSettlement(buffer: ArrayBuffer): Promise<NaverSe
     const row = aoa[i]
     if (!Array.isArray(row)) continue
     const normed = row.map((c) => normHeader(toStr(c)))
-    if (normed.includes('상품주문번호') && (normed.includes('정산기준일') || normed.includes('수수료기준금액'))) {
+    if (normed.includes('상품주문번호') && (normed.includes('정산완료일') || normed.includes('정산기준일') || normed.includes('수수료기준금액'))) {
       headerIdx = i
       break
     }
@@ -102,7 +102,13 @@ export async function parseNaverSettlement(buffer: ArrayBuffer): Promise<NaverSe
   const cProductOrderId = col('상품주문번호')
   const cKind = col('구분')
   const cName = col('상품명')
-  const cSettleDate = col('정산기준일') >= 0 ? col('정산기준일') : col('정산예정일')
+  // H 정산완료일 우선 → I 정산기준일 폴백 → G 정산예정일 폴백
+  const cSettleDate =
+    col('정산완료일') >= 0
+      ? col('정산완료일')
+      : col('정산기준일') >= 0
+        ? col('정산기준일')
+        : col('정산예정일')
   const cBase = col('수수료기준금액')
   const cFee = col('수수료금액')
   // 일부 양식에는 컬럼명이 다를 수 있음 — 폴백
