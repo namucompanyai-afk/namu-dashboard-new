@@ -13,6 +13,41 @@ function fmtPct(n: number): string {
   return (n * 100).toFixed(1) + '%'
 }
 
+/** 정수 → 한글 금액 표기 ("3,600,000" → "삼백육십만원"). 0/빈값은 ''. */
+function numToKorean(n: number): string {
+  if (!n || !Number.isFinite(n)) return ''
+  const abs = Math.floor(Math.abs(n))
+  if (abs === 0) return ''
+  const numStr = abs.toString()
+  if (numStr.length > 16) return ''
+  const units = ['', '만', '억', '조']
+  const digits = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구']
+  const positions = ['', '십', '백', '천']
+
+  const chunks: string[] = []
+  let s = numStr
+  while (s.length > 0) {
+    chunks.unshift(s.slice(-4))
+    s = s.slice(0, -4)
+  }
+
+  let result = ''
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci]
+    const unitIdx = chunks.length - 1 - ci
+    let chunkStr = ''
+    for (let i = 0; i < chunk.length; i++) {
+      const digit = parseInt(chunk[i], 10)
+      const pos = chunk.length - 1 - i
+      if (digit === 0) continue
+      if (digit === 1 && pos > 0) chunkStr += positions[pos]
+      else chunkStr += digits[digit] + positions[pos]
+    }
+    if (chunkStr) result += chunkStr + units[unitIdx]
+  }
+  return (n < 0 ? '-' : '') + result + '원'
+}
+
 export default function NaverDiagnosisPage() {
   const {
     settlement,
@@ -168,13 +203,21 @@ export default function NaverDiagnosisPage() {
           <div className="flex items-center gap-3">
             <label className="text-sm w-20 text-gray-700">광고비</label>
             <input
-              type="number"
-              value={adCostDraft}
-              onChange={(e) => setAdCostDraft(e.target.value)}
-              className="flex-1 max-w-xs px-3 py-1.5 border rounded text-sm"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9,]*"
+              value={adCostDraft === '' ? '' : Number(adCostDraft).toLocaleString('ko-KR')}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/[^0-9]/g, '')
+                setAdCostDraft(raw)
+              }}
+              className="flex-1 max-w-xs px-3 py-1.5 border rounded text-sm text-right"
               placeholder="0"
             />
             <span className="text-sm text-gray-500">원</span>
+            <span className="text-sm text-gray-500 min-w-[8rem]">
+              {adCostDraft === '' ? '' : numToKorean(Number(adCostDraft) || 0)}
+            </span>
           </div>
 
           <div className="border-t pt-4">
