@@ -4,26 +4,37 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useNaverStore } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
 import KpiCard from '@/components/pnl/KpiCard'
+import { formatKRW, formatMan } from '@/components/pnl/format'
 
+/** 원 단위 그대로 (음수 보존). 1만 미만 또는 정확한 값 표시 필요할 때 사용. */
 function fmtKRW(n: number): string {
   const sign = n < 0 ? '-' : ''
-  return sign + Math.abs(Math.round(n)).toLocaleString('ko-KR') + '원'
+  return sign + formatKRW(Math.abs(n))
+}
+
+/** KPI 카드용 만 단위 표기 (음수 부호 보존). 0원 → '0만'. */
+function fmtMan(n: number): string {
+  if (n === 0) return '0만'
+  return n < 0 ? '-' + formatMan(-n) : formatMan(n)
 }
 
 function fmtPct(n: number): string {
   return (n * 100).toFixed(1) + '%'
 }
 
-/** "2026-04-01" / "2026-04-30" → "2026-04-01 ~ 30" (같은 월) */
+/** 짧은 기간 표기 (KPI 카드 1줄 유지)
+ *   같은 월: "MM-DD ~ DD"  (연도 생략)
+ *   같은 연도 다른 월: "MM-DD ~ MM-DD"
+ *   다른 연도: "YYYY-MM-DD ~ YYYY-MM-DD"
+ */
 function fmtPeriod(start: string, end: string): string {
   if (!start || !end) return start || end || '—'
-  if (start === end) return start
+  if (start === end) return start.slice(5)
   const [sy, sm, sd] = start.split('-')
   const [ey, em, ed] = end.split('-')
-  if (sy === ey && sm === em) return `${start} ~ ${ed}`
-  if (sy === ey) return `${start} ~ ${em}-${ed}`
+  if (sy === ey && sm === em) return `${sm}-${sd} ~ ${ed}`
+  if (sy === ey) return `${sm}-${sd} ~ ${em}-${ed}`
   return `${start} ~ ${end}`
-  void sd
 }
 
 /** 정수 → 한글 금액 표기 ("3,600,000" → "삼백육십만원"). 0/빈값은 ''. */
@@ -274,11 +285,11 @@ export default function NaverDiagnosisPage() {
             return (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  <KpiCard label="매출" value={fmtKRW(diagnosis.revenue)} sub={`${diagnosis.productCount}종`} />
+                  <KpiCard label="매출" value={fmtMan(diagnosis.revenue)} sub={`${diagnosis.productCount}종`} />
                   <KpiCard
                     label="정산금"
-                    value={fmtKRW(diagnosis.settleAmount)}
-                    sub={`수수료 ${fmtKRW(diagnosis.settleFee)} (${feePct}%)`}
+                    value={fmtMan(diagnosis.settleAmount)}
+                    sub={`수수료 ${fmtMan(diagnosis.settleFee)} (${feePct}%)`}
                   />
                   <KpiCard
                     label="매출 건수"
@@ -290,15 +301,15 @@ export default function NaverDiagnosisPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard
                     label="총 비용"
-                    value={fmtKRW(-totalCost)}
+                    value={fmtMan(-totalCost)}
                     formula="원가 + 봉투 + 박스 + 택배 + 포장비"
-                    sub={`원가 ${fmtKRW(diagnosis.cost)}`}
+                    sub={`원가 ${fmtMan(diagnosis.cost)}`}
                   />
-                  <KpiCard label="배송비 매출" value={fmtKRW(diagnosis.shipRevenue)} sub="구매자부담−수수료" />
-                  <KpiCard label="광고비" value={fmtKRW(-diagnosis.adCost)} sub="수기 입력" />
+                  <KpiCard label="배송비 매출" value={fmtMan(diagnosis.shipRevenue)} sub="구매자부담−수수료" />
+                  <KpiCard label="광고비" value={fmtMan(-diagnosis.adCost)} sub="수기 입력" />
                   <KpiCard
                     label="순이익"
-                    value={fmtKRW(diagnosis.netProfit)}
+                    value={fmtMan(diagnosis.netProfit)}
                     accent={diagnosis.netProfit >= 0 ? 'green' : 'red'}
                     sub={marginPct ? `마진율 ${marginPct}` : ''}
                   />

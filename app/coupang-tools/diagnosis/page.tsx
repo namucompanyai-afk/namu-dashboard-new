@@ -21,6 +21,7 @@ import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import MasterDiagnosisView from '@/components/coupang/MasterDiagnosisView'
 import KpiCard from '@/components/pnl/KpiCard'
+import { formatKRW, formatMan, formatPct } from '@/components/pnl/format'
 import { ChannelBadge, ChannelDistribution } from '../_lib/channel'
 
 // ─────────────────────────────────────────────────────────────
@@ -38,19 +39,6 @@ const VERDICT_STYLES: Record<VerdictCode, { dot: string; bg: string; text: strin
 // 유틸
 // ─────────────────────────────────────────────────────────────
 
-function formatKRW(n: number): string {
-  return Math.round(n).toLocaleString() + '원'
-}
-
-function formatMan(n: number, withSign = false): string {
-  const v = Math.round(n / 10000)
-  return (withSign && v >= 0 ? '+' : '') + v.toLocaleString() + '만'
-}
-
-function formatPct(n: number | null, digits = 0): string {
-  if (n == null) return '–'
-  return n.toFixed(digits) + '%'
-}
 
 // ─────────────────────────────────────────────────────────────
 // 메인 컴포넌트
