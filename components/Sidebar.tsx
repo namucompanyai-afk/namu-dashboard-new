@@ -11,6 +11,7 @@ export default function Sidebar() {
   const [isHROpen, setIsHROpen] = useState(true);
   const [isPnlOpen, setIsPnlOpen] = useState(true);          // 손익 관리자 (최상위)
   const [isCoupangOpen, setIsCoupangOpen] = useState(true);  // 쿠팡 서브
+  const [isNaverOpen, setIsNaverOpen] = useState(true);      // 스마트스토어 서브
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -148,11 +149,22 @@ export default function Sidebar() {
                     )}
                   </div>
 
-                  {/* 스마트스토어 (개발중) */}
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-gray-500 cursor-not-allowed">
-                    <span>🟢</span>
-                    <span>스마트스토어</span>
-                    <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                  {/* 스마트스토어 */}
+                  <div>
+                    <button onClick={() => setIsNaverOpen(!isNaverOpen)} className={'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (pathname.startsWith('/naver-tools') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                      <span>🟢</span>
+                      <span className="flex-1 text-left">스마트스토어</span>
+                      <span className="text-xs">{isNaverOpen ? '▼' : '▶'}</span>
+                    </button>
+
+                    {isNaverOpen && (
+                      <div className="ml-4 mt-1 space-y-1">
+                        <Link href="/naver-tools/diagnosis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/naver-tools/diagnosis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                          <span>🎯</span>
+                          <span>수익 진단</span>
+                        </Link>
+                      </div>
+                    )}
                   </div>
 
                   {/* 지마켓 (개발중) */}

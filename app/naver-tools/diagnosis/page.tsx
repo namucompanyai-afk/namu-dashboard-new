@@ -1,0 +1,402 @@
+'use client'
+
+import React, { useRef, useState } from 'react'
+import { useNaverStore } from '@/lib/naver/store'
+import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
+import { parseNaverProductMatch } from '@/lib/naver/parsers/productMatch'
+import { parseNaverMarginMaster } from '@/lib/naver/marginNaver'
+
+function fmtKRW(n: number): string {
+  const sign = n < 0 ? '-' : ''
+  return sign + Math.abs(Math.round(n)).toLocaleString('ko-KR') + '원'
+}
+
+function fmtPct(n: number): string {
+  return (n * 100).toFixed(1) + '%'
+}
+
+export default function NaverDiagnosisPage() {
+  const {
+    settlement,
+    productMatch,
+    marginMap,
+    manual,
+    diagnosis,
+    setSettlement,
+    setMarginData,
+    setManual,
+  } = useNaverStore()
+
+  const settleInputRef = useRef<HTMLInputElement>(null)
+  const masterInputRef = useRef<HTMLInputElement>(null)
+
+  const [settleFile, setSettleFile] = useState<string>('')
+  const [masterFile, setMasterFile] = useState<string>('')
+  const [parseError, setParseError] = useState<string>('')
+
+  // 수기 입력 폼 로컬 상태 (저장 버튼 누를 때만 store에 반영)
+  const [adCostDraft, setAdCostDraft] = useState<string>('')
+  const [shipDraft, setShipDraft] = useState<{
+    s: { unit: string; count: string }
+    m: { unit: string; count: string }
+    l: { unit: string; count: string }
+  }>({
+    s: { unit: '', count: '' },
+    m: { unit: '', count: '' },
+    l: { unit: '', count: '' },
+  })
+
+  React.useEffect(() => {
+    setAdCostDraft(String(manual.adCost ?? 0))
+    setShipDraft({
+      s: { unit: String(manual.shipSmall.unit), count: String(manual.shipSmall.count) },
+      m: { unit: String(manual.shipMedium.unit), count: String(manual.shipMedium.count) },
+      l: { unit: String(manual.shipLarge.unit), count: String(manual.shipLarge.count) },
+    })
+  }, [manual])
+
+  const onPickSettlement = async (file: File) => {
+    try {
+      setParseError('')
+      const buf = await file.arrayBuffer()
+      const data = await parseNaverSettlement(buf)
+      setSettleFile(file.name)
+      setSettlement(data)
+    } catch (e) {
+      setParseError('정산파일 파싱 실패: ' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  const onPickMaster = async (file: File) => {
+    try {
+      setParseError('')
+      const buf = await file.arrayBuffer()
+      const [pm, mm] = await Promise.all([
+        parseNaverProductMatch(buf),
+        parseNaverMarginMaster(buf),
+      ])
+      setMasterFile(file.name)
+      setMarginData(pm, mm)
+    } catch (e) {
+      setParseError('마진마스터 파싱 실패: ' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  const onSaveManual = () => {
+    if (!settlement) return
+    setManual({
+      period: manual.period,
+      adCost: Number(adCostDraft) || 0,
+      shipSmall: { unit: Number(shipDraft.s.unit) || 0, count: Number(shipDraft.s.count) || 0 },
+      shipMedium: { unit: Number(shipDraft.m.unit) || 0, count: Number(shipDraft.m.count) || 0 },
+      shipLarge: { unit: Number(shipDraft.l.unit) || 0, count: Number(shipDraft.l.count) || 0 },
+    })
+  }
+
+  const shipTotal =
+    (Number(shipDraft.s.unit) || 0) * (Number(shipDraft.s.count) || 0) +
+    (Number(shipDraft.m.unit) || 0) * (Number(shipDraft.m.count) || 0) +
+    (Number(shipDraft.l.unit) || 0) * (Number(shipDraft.l.count) || 0)
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold">스마트스토어 수익 진단</h1>
+          <p className="text-sm text-gray-500 mt-1">정산금 − 비용 − 광고비 (월별)</p>
+        </div>
+        {diagnosis?.period.start && (
+          <div className="text-sm text-gray-600">
+            기간: {diagnosis.period.start} ~ {diagnosis.period.end}
+          </div>
+        )}
+      </div>
+
+      {/* 업로드 영역 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <UploadCard
+          label="정산파일 (.xlsx)"
+          desc="네이버 정산내역 — 수수료상세-건별 시트"
+          fileName={settleFile}
+          inputRef={settleInputRef}
+          onPick={onPickSettlement}
+          summary={
+            settlement
+              ? `${settlement.productOrderCount}건 / ${settlement.dateRange?.min ?? '?'} ~ ${settlement.dateRange?.max ?? '?'}`
+              : ''
+          }
+        />
+        <UploadCard
+          label="마진마스터 (.xlsx)"
+          desc="네이버상품매칭 + 마진계산_네이버 시트 동시 파싱"
+          fileName={masterFile}
+          inputRef={masterInputRef}
+          onPick={onPickMaster}
+          summary={
+            productMatch && marginMap
+              ? `매칭 ${productMatch.size}개 / 옵션 ${Array.from(marginMap.values()).reduce((s, a) => s + a.length, 0)}개`
+              : ''
+          }
+        />
+      </div>
+
+      {parseError && (
+        <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded">
+          {parseError}
+        </div>
+      )}
+
+      {/* 수기 입력 */}
+      <div className="bg-white border rounded-lg p-5 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">
+            {manual.period || '기간 미정'} 광고비 + 택배비 입력
+          </h2>
+          <button
+            onClick={onSaveManual}
+            className="px-4 py-2 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-300"
+            disabled={!settlement}
+          >
+            저장
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <label className="text-sm w-20 text-gray-700">광고비</label>
+            <input
+              type="number"
+              value={adCostDraft}
+              onChange={(e) => setAdCostDraft(e.target.value)}
+              className="flex-1 max-w-xs px-3 py-1.5 border rounded text-sm"
+              placeholder="0"
+            />
+            <span className="text-sm text-gray-500">원</span>
+          </div>
+
+          <div className="border-t pt-4">
+            <div className="text-sm text-gray-700 mb-2">택배비</div>
+            <ShipRow
+              label="소"
+              draft={shipDraft.s}
+              onChange={(d) => setShipDraft((p) => ({ ...p, s: d }))}
+            />
+            <ShipRow
+              label="중"
+              draft={shipDraft.m}
+              onChange={(d) => setShipDraft((p) => ({ ...p, m: d }))}
+            />
+            <ShipRow
+              label="대"
+              draft={shipDraft.l}
+              onChange={(d) => setShipDraft((p) => ({ ...p, l: d }))}
+            />
+            <div className="text-right text-sm text-gray-600 mt-2">
+              합계: <span className="font-semibold">{fmtKRW(shipTotal)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* KPI 카드 */}
+      {diagnosis && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+            <Kpi label="매출" value={fmtKRW(diagnosis.revenue)} sub={`${diagnosis.productCount}종`} />
+            <Kpi label="정산금" value={fmtKRW(diagnosis.settleAmount)} sub={`수수료 ${fmtKRW(diagnosis.settleFee)}`} />
+            <Kpi label="매출 건수" value={settlement?.productOrderCount.toLocaleString() ?? '0'} sub="상품주문" />
+            <Kpi label="기간" value={diagnosis.period.start || '—'} sub={diagnosis.period.end || ''} />
+            <Kpi
+              label="총 비용"
+              value={fmtKRW(diagnosis.cost + diagnosis.bag + diagnosis.box + diagnosis.pack + diagnosis.shipReal)}
+              sub={`원가 ${fmtKRW(diagnosis.cost)}`}
+            />
+            <Kpi label="배송비 매출" value={fmtKRW(diagnosis.shipRevenue)} sub="구매자부담−수수료" />
+            <Kpi label="광고비" value={fmtKRW(diagnosis.adCost)} sub="수기 입력" />
+            <Kpi
+              label="순이익"
+              value={fmtKRW(diagnosis.netProfit)}
+              valueClass={diagnosis.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}
+              sub={diagnosis.revenue > 0 ? fmtPct(diagnosis.netProfit / diagnosis.revenue) : ''}
+            />
+          </div>
+
+          {/* 매칭 통계 */}
+          <div className="text-xs text-gray-500 mb-3">
+            매칭 {diagnosis.matched} / 미매칭 {diagnosis.unmatched} (총 {diagnosis.matched + diagnosis.unmatched}건)
+          </div>
+
+          {/* 상품별 손익 표 */}
+          <div className="bg-white border rounded-lg overflow-hidden">
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr className="text-xs text-gray-600">
+                    <th className="px-3 py-2 text-left">상품명</th>
+                    <th className="px-3 py-2 text-right">건수</th>
+                    <th className="px-3 py-2 text-right">매출</th>
+                    <th className="px-3 py-2 text-right">평균단가</th>
+                    <th className="px-3 py-2 text-right">원가합계</th>
+                    <th className="px-3 py-2 text-right">마진</th>
+                    <th className="px-3 py-2 text-right">마진율</th>
+                    <th className="px-3 py-2 text-center">매칭</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {diagnosis.products.map((p) => {
+                    const avg = p.count > 0 ? p.revenue / p.count : 0
+                    const rate = p.revenue > 0 ? p.profit / p.revenue : 0
+                    return (
+                      <tr
+                        key={p.productName}
+                        className={'border-t ' + (p.matched ? '' : 'bg-gray-50 text-gray-500')}
+                      >
+                        <td className="px-3 py-2 max-w-md truncate" title={p.productName}>
+                          {p.productName}
+                        </td>
+                        <td className="px-3 py-2 text-right">{p.count}</td>
+                        <td className="px-3 py-2 text-right">{fmtKRW(p.revenue)}</td>
+                        <td className="px-3 py-2 text-right text-gray-500">{fmtKRW(avg)}</td>
+                        <td className="px-3 py-2 text-right">{fmtKRW(p.cost)}</td>
+                        <td
+                          className={
+                            'px-3 py-2 text-right ' +
+                            (p.profit >= 0 ? 'text-emerald-700' : 'text-red-600')
+                          }
+                        >
+                          {fmtKRW(p.profit)}
+                        </td>
+                        <td className="px-3 py-2 text-right text-xs text-gray-600">
+                          {p.revenue > 0 ? fmtPct(rate) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-center text-xs">
+                          {p.matched ? '✅' : <span className="text-gray-400">❌ 미매칭</span>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {diagnosis.products.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-8 text-center text-gray-400">
+                        데이터 없음
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {!diagnosis && (
+        <div className="text-center text-gray-500 py-12 text-sm">
+          정산파일 + 마진마스터를 모두 업로드하면 진단 결과가 표시됩니다.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function UploadCard({
+  label,
+  desc,
+  fileName,
+  summary,
+  inputRef,
+  onPick,
+}: {
+  label: string
+  desc: string
+  fileName: string
+  summary: string
+  inputRef: React.RefObject<HTMLInputElement | null>
+  onPick: (file: File) => void
+}) {
+  return (
+    <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-emerald-400 transition-colors">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <div className="text-sm font-medium">{label}</div>
+          <div className="text-xs text-gray-500">{desc}</div>
+        </div>
+        <button
+          onClick={() => inputRef.current?.click()}
+          className="px-3 py-1.5 text-xs bg-emerald-600 text-white rounded hover:bg-emerald-700"
+        >
+          {fileName ? '재업로드' : '파일 선택'}
+        </button>
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".xlsx"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) onPick(f)
+          if (inputRef.current) inputRef.current.value = ''
+        }}
+      />
+      {fileName && (
+        <div className="text-xs text-gray-600 mt-1">
+          📎 {fileName} {summary && <span className="text-gray-400 ml-2">{summary}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ShipRow({
+  label,
+  draft,
+  onChange,
+}: {
+  label: string
+  draft: { unit: string; count: string }
+  onChange: (d: { unit: string; count: string }) => void
+}) {
+  const total = (Number(draft.unit) || 0) * (Number(draft.count) || 0)
+  return (
+    <div className="flex items-center gap-2 mb-1.5 text-sm">
+      <span className="w-6 text-gray-600">{label}</span>
+      <span className="text-xs text-gray-500">단가</span>
+      <input
+        type="number"
+        value={draft.unit}
+        onChange={(e) => onChange({ ...draft, unit: e.target.value })}
+        className="w-24 px-2 py-1 border rounded text-sm text-right"
+      />
+      <span className="text-xs text-gray-400">×</span>
+      <span className="text-xs text-gray-500">수량</span>
+      <input
+        type="number"
+        value={draft.count}
+        onChange={(e) => onChange({ ...draft, count: e.target.value })}
+        className="w-20 px-2 py-1 border rounded text-sm text-right"
+      />
+      <span className="text-xs text-gray-400">=</span>
+      <span className="text-xs text-gray-700 w-24 text-right">{fmtKRW(total)}</span>
+    </div>
+  )
+}
+
+function Kpi({
+  label,
+  value,
+  sub,
+  valueClass,
+}: {
+  label: string
+  value: string
+  sub?: string
+  valueClass?: string
+}) {
+  return (
+    <div className="bg-white border rounded-lg p-3">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className={'text-lg font-semibold mt-0.5 ' + (valueClass ?? '')}>{value}</div>
+      {sub && <div className="text-xs text-gray-400 mt-0.5 truncate">{sub}</div>}
+    </div>
+  )
+}
