@@ -1075,6 +1075,16 @@ function NaverTrendChart({
     )
   }
 
+  // activeDot onClick — recharts 가 hover 시 그리는 큰 원이 BigHitDot 위를 덮어 클릭 가로채는 문제 해결
+  const activeDotClick = onPointClick
+    ? (_: unknown, ev: { index?: number; currentTarget?: { blur?: () => void } }) => {
+        const idx = ev?.index
+        if (idx != null && trendData[idx]?._analysis) onPointClick(trendData[idx]._analysis)
+        try { ev?.currentTarget?.blur?.() } catch { /* ignore */ }
+        try { (document.activeElement as HTMLElement | null)?.blur?.() } catch { /* ignore */ }
+      }
+    : undefined
+
   return (
     <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4">
       <ToggleHeader />
@@ -1084,41 +1094,49 @@ function NaverTrendChart({
           <span className="ml-2 text-orange-600">· 점 클릭 시 해당 시점 데이터로 진단</span>
         )}
       </div>
-      <ResponsiveContainer width="100%" height={250}>
-        <LineChart data={trendData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-          <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => (v < 0 ? '' : `${v.toLocaleString()}만`)} />
-          <Tooltip
-            content={<CompactTrendTooltip />}
-            offset={20}
-            cursor={{ stroke: '#10b981', strokeWidth: 24, strokeOpacity: 0.1 }}
-          />
-          <Legend />
-          <Line
-            type="monotone"
-            dataKey="매출"
-            stroke="#2563eb"
-            strokeWidth={2}
-            dot={<BigHitDot onPointClick={onPointClick} />}
-            activeDot={{
-              r: 10,
-              cursor: onPointClick ? 'pointer' : 'default',
-            }}
-          />
-          <Line
-            type="monotone"
-            dataKey="순이익"
-            stroke="#10b981"
-            strokeWidth={2}
-            dot={<BigHitDot onPointClick={onPointClick} />}
-            activeDot={{
-              r: 10,
-              cursor: onPointClick ? 'pointer' : 'default',
-            }}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+      <div
+        tabIndex={-1}
+        className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+        style={{ outline: 'none' }}
+      >
+        <ResponsiveContainer width="100%" height={250}>
+          <LineChart data={trendData} tabIndex={-1} style={{ outline: 'none' }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => (v < 0 ? '' : `${v.toLocaleString()}만`)} />
+            <Tooltip
+              content={<CompactTrendTooltip />}
+              offset={20}
+              cursor={{ stroke: '#10b981', strokeWidth: 24, strokeOpacity: 0.1 }}
+            />
+            <Legend />
+            <Line
+              type="monotone"
+              dataKey="매출"
+              stroke="#2563eb"
+              strokeWidth={2}
+              dot={<BigHitDot onPointClick={onPointClick} />}
+              activeDot={{
+                r: 10,
+                cursor: onPointClick ? 'pointer' : 'default',
+                onClick: activeDotClick,
+              }}
+            />
+            <Line
+              type="monotone"
+              dataKey="순이익"
+              stroke="#10b981"
+              strokeWidth={2}
+              dot={<BigHitDot onPointClick={onPointClick} />}
+              activeDot={{
+                r: 10,
+                cursor: onPointClick ? 'pointer' : 'default',
+                onClick: activeDotClick,
+              }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   )
 }
