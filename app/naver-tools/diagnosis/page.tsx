@@ -84,11 +84,13 @@ export default function NaverDiagnosisPage() {
   })
 
   React.useEffect(() => {
-    setAdCostDraft(String(manual.adCost ?? 0))
+    // 0/빈값은 ''로 둬서 화면에 빈칸으로 표시. 단가는 0이어도 그대로(고정 디폴트).
+    const blankIfZero = (n: number) => (n ? String(n) : '')
+    setAdCostDraft(blankIfZero(manual.adCost ?? 0))
     setShipDraft({
-      s: { unit: String(manual.shipSmall.unit), count: String(manual.shipSmall.count) },
-      m: { unit: String(manual.shipMedium.unit), count: String(manual.shipMedium.count) },
-      l: { unit: String(manual.shipLarge.unit), count: String(manual.shipLarge.count) },
+      s: { unit: String(manual.shipSmall.unit), count: blankIfZero(manual.shipSmall.count) },
+      m: { unit: String(manual.shipMedium.unit), count: blankIfZero(manual.shipMedium.count) },
+      l: { unit: String(manual.shipLarge.unit), count: blankIfZero(manual.shipLarge.count) },
     })
   }, [manual])
 
@@ -420,6 +422,7 @@ function ShipRow({
         value={draft.count}
         onChange={(e) => onChange({ ...draft, count: e.target.value })}
         className="w-20 px-2 py-1 border rounded text-sm text-right"
+        placeholder="0"
       />
       <span className="text-xs text-gray-400">=</span>
       <span className="text-xs text-gray-700 w-24 text-right">{fmtKRW(total)}</span>
