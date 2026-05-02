@@ -93,7 +93,7 @@ export default function NaverDiagnosisPage() {
     setManual,
     loadFromApi,
     saveLast,
-    saveAuto,
+    saveExplicit,
     loadList,
     purgeAll,
   } = useNaverStore()
@@ -120,6 +120,22 @@ export default function NaverDiagnosisPage() {
   const onResetAll = async () => {
     if (!confirm('정말 모든 분석을 초기화하시겠습니까?\n저장된 분석도 모두 삭제됩니다 (마진마스터는 유지).')) return
     await purgeAll()
+  }
+
+  // 명시 저장 다이얼로그 (쿠팡 패턴)
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [saveLabel, setSaveLabel] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const onSaveExplicit = async () => {
+    if (!diagnosis) return
+    setSaving(true)
+    const id = await saveExplicit(saveLabel)
+    setSaving(false)
+    if (id) {
+      setShowSaveDialog(false)
+      setSaveLabel('')
+    }
   }
 
   // 수기 입력 폼 로컬 상태 (저장 버튼 누를 때만 store에 반영)
@@ -157,7 +173,7 @@ export default function NaverDiagnosisPage() {
     }
   }
 
-  const onSaveManual = async () => {
+  const onSaveManual = () => {
     if (!settlement) return
     setManual({
       period: manual.period,
@@ -166,10 +182,6 @@ export default function NaverDiagnosisPage() {
       shipMedium: { unit: Number(shipDraft.m.unit) || 0, count: Number(shipDraft.m.count) || 0 },
       shipLarge: { unit: Number(shipDraft.l.unit) || 0, count: Number(shipDraft.l.count) || 0 },
     })
-    // setManual → recompute → diagnosis 갱신은 마이크로태스크로 동기 반영됨
-    // 한 박자 양보 후 자동 explicit 저장 (월/주별 자동 분류 + 같은 키 덮어쓰기)
-    await new Promise((r) => setTimeout(r, 0))
-    await saveAuto()
   }
 
   const shipTotal =
@@ -198,6 +210,13 @@ export default function NaverDiagnosisPage() {
           )}
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setShowSaveDialog(true)}
+              disabled={!diagnosis}
+              className="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-300"
+            >
+              💾 분석 저장
+            </button>
+            <button
               onClick={() => alert('히스토리 패널은 준비 중입니다 (PR3에서 추가)')}
               className="text-sm px-3 py-1.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
             >
@@ -212,6 +231,45 @@ export default function NaverDiagnosisPage() {
           </div>
         </div>
       </div>
+
+      {/* 명시 저장 다이얼로그 */}
+      {showSaveDialog && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-5 w-full max-w-md shadow-lg">
+            <h3 className="text-lg font-semibold mb-3">분석 저장</h3>
+            <p className="text-sm text-gray-600 mb-3">
+              이번 진단 결과를 저장합니다. 라벨을 입력하면 나중에 알아보기 쉬워요.
+            </p>
+            <input
+              type="text"
+              value={saveLabel}
+              onChange={(e) => setSaveLabel(e.target.value)}
+              placeholder="예: 4월 정산 마감"
+              className="w-full px-3 py-2 border rounded text-sm mb-4"
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowSaveDialog(false)
+                  setSaveLabel('')
+                }}
+                className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
+                disabled={saving}
+              >
+                취소
+              </button>
+              <button
+                onClick={onSaveExplicit}
+                className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-300"
+                disabled={saving}
+              >
+                {saving ? '저장 중…' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 업로드 영역 — 정산파일만 (마진마스터는 데이터 관리에서 자동 로드) */}
       <div className="grid grid-cols-1 gap-4 mb-4">
