@@ -81,9 +81,13 @@ export default function NaverDiagnosisPage() {
     diagnosis,
     marginLoading,
     marginMissing,
+    snapshots,
     setSettlement,
     setManual,
     loadFromApi,
+    saveLast,
+    saveExplicit,
+    loadList,
   } = useNaverStore()
 
   const settleInputRef = useRef<HTMLInputElement>(null)
@@ -93,7 +97,33 @@ export default function NaverDiagnosisPage() {
 
   useEffect(() => {
     loadFromApi()
-  }, [loadFromApi])
+    loadList()
+  }, [loadFromApi, loadList])
+
+  // 자동 저장 (1초 debounce)
+  useEffect(() => {
+    if (!diagnosis) return
+    const t = setTimeout(() => {
+      saveLast()
+    }, 1000)
+    return () => clearTimeout(t)
+  }, [diagnosis, saveLast])
+
+  // 명시 저장 다이얼로그
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [saveLabel, setSaveLabel] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const onSaveExplicit = async () => {
+    if (!diagnosis) return
+    setSaving(true)
+    const id = await saveExplicit(saveLabel)
+    setSaving(false)
+    if (id) {
+      setShowSaveDialog(false)
+      setSaveLabel('')
+    }
+  }
 
   // 수기 입력 폼 로컬 상태 (저장 버튼 누를 때만 store에 반영)
   const [adCostDraft, setAdCostDraft] = useState<string>('')
@@ -153,12 +183,60 @@ export default function NaverDiagnosisPage() {
           <h1 className="text-2xl font-bold">스마트스토어 수익 진단</h1>
           <p className="text-sm text-gray-500 mt-1">정산금 − 비용 − 광고비 (월별)</p>
         </div>
-        {diagnosis?.period.start && (
-          <div className="text-sm text-gray-600">
-            기간: {diagnosis.period.start} ~ {diagnosis.period.end}
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {diagnosis?.period.start && (
+            <div className="text-sm text-gray-600">
+              기간: {fmtPeriod(diagnosis.period.start, diagnosis.period.end)}
+            </div>
+          )}
+          <button
+            onClick={() => setShowSaveDialog(true)}
+            disabled={!diagnosis}
+            className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-300"
+          >
+            분석 저장 ({snapshots.length})
+          </button>
+        </div>
       </div>
+
+      {/* 명시 저장 다이얼로그 */}
+      {showSaveDialog && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-5 w-full max-w-md shadow-lg">
+            <h3 className="text-lg font-semibold mb-3">분석 저장</h3>
+            <p className="text-sm text-gray-600 mb-3">
+              이번 진단 결과를 저장합니다. 라벨을 입력하면 나중에 알아보기 쉬워요.
+            </p>
+            <input
+              type="text"
+              value={saveLabel}
+              onChange={(e) => setSaveLabel(e.target.value)}
+              placeholder="예: 4월 정산 마감"
+              className="w-full px-3 py-2 border rounded text-sm mb-4"
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowSaveDialog(false)
+                  setSaveLabel('')
+                }}
+                className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
+                disabled={saving}
+              >
+                취소
+              </button>
+              <button
+                onClick={onSaveExplicit}
+                className="px-3 py-1.5 text-sm bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:bg-gray-300"
+                disabled={saving}
+              >
+                {saving ? '저장 중…' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 업로드 영역 — 정산파일만 (마진마스터는 데이터 관리에서 자동 로드) */}
       <div className="grid grid-cols-1 gap-4 mb-4">
