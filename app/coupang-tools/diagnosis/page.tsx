@@ -20,6 +20,7 @@ import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import MasterDiagnosisView from '@/components/coupang/MasterDiagnosisView'
+import KpiCard from '@/components/pnl/KpiCard'
 import { ChannelBadge, ChannelDistribution } from '../_lib/channel'
 
 // ─────────────────────────────────────────────────────────────
@@ -1828,43 +1829,6 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
 // ─────────────────────────────────────────────────────────────
 // 작은 컴포넌트들
 // ─────────────────────────────────────────────────────────────
-
-function KpiCard(props: {
-  label: string
-  value: string
-  sub?: string
-  formula?: string
-  accent?: 'green' | 'red' | 'orange'
-  compare?: { text: string; up: boolean } | null
-  compareGood?: 'up' | 'down'  // up: 증가가 좋음, down: 감소가 좋음
-}) {
-  const colorClass = props.accent === 'green' ? 'text-green-700'
-    : props.accent === 'red' ? 'text-red-700'
-    : props.accent === 'orange' ? 'text-orange-700'
-    : 'text-gray-900'
-
-  // 비교 색깔: 좋은 방향이면 초록, 나쁘면 빨강
-  let cmpClass = ''
-  if (props.compare) {
-    const isGood = (props.compareGood === 'up' && props.compare.up)
-      || (props.compareGood === 'down' && !props.compare.up)
-    cmpClass = isGood ? 'text-green-600' : 'text-red-600'
-  }
-
-  return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4">
-      <div className="text-xs text-gray-500 mb-1">{props.label}</div>
-      <div className={`text-xl font-bold font-mono ${colorClass}`}>{props.value}</div>
-      {props.formula && (
-        <div className="text-[10px] text-gray-400 font-mono mt-1">{props.formula}</div>
-      )}
-      {props.sub && <div className="text-xs text-gray-500 mt-0.5">{props.sub}</div>}
-      {props.compare && (
-        <div className={`text-xs font-medium mt-1 ${cmpClass}`}>{props.compare.text}</div>
-      )}
-    </div>
-  )
-}
 
 function StatCard(props: { label: string; value: string }) {
   return (

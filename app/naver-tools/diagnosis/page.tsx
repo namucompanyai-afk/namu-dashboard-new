@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useNaverStore } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
+import KpiCard from '@/components/pnl/KpiCard'
 
 function fmtKRW(n: number): string {
   const sign = n < 0 ? '-' : ''
@@ -11,6 +12,18 @@ function fmtKRW(n: number): string {
 
 function fmtPct(n: number): string {
   return (n * 100).toFixed(1) + '%'
+}
+
+/** "2026-04-01" / "2026-04-30" → "2026-04-01 ~ 30" (같은 월) */
+function fmtPeriod(start: string, end: string): string {
+  if (!start || !end) return start || end || '—'
+  if (start === end) return start
+  const [sy, sm, sd] = start.split('-')
+  const [ey, em, ed] = end.split('-')
+  if (sy === ey && sm === em) return `${start} ~ ${ed}`
+  if (sy === ey) return `${start} ~ ${em}-${ed}`
+  return `${start} ~ ${end}`
+  void sd
 }
 
 /** 정수 → 한글 금액 표기 ("3,600,000" → "삼백육십만원"). 0/빈값은 ''. */
@@ -249,25 +262,50 @@ export default function NaverDiagnosisPage() {
       {/* KPI 카드 */}
       {diagnosis && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-            <Kpi label="매출" value={fmtKRW(diagnosis.revenue)} sub={`${diagnosis.productCount}종`} />
-            <Kpi label="정산금" value={fmtKRW(diagnosis.settleAmount)} sub={`수수료 ${fmtKRW(diagnosis.settleFee)}`} />
-            <Kpi label="매출 건수" value={settlement?.productOrderCount.toLocaleString() ?? '0'} sub="상품주문" />
-            <Kpi label="기간" value={diagnosis.period.start || '—'} sub={diagnosis.period.end || ''} />
-            <Kpi
-              label="총 비용"
-              value={fmtKRW(diagnosis.cost + diagnosis.bag + diagnosis.box + diagnosis.pack + diagnosis.shipReal)}
-              sub={`원가 ${fmtKRW(diagnosis.cost)}`}
-            />
-            <Kpi label="배송비 매출" value={fmtKRW(diagnosis.shipRevenue)} sub="구매자부담−수수료" />
-            <Kpi label="광고비" value={fmtKRW(diagnosis.adCost)} sub="수기 입력" />
-            <Kpi
-              label="순이익"
-              value={fmtKRW(diagnosis.netProfit)}
-              valueClass={diagnosis.netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}
-              sub={diagnosis.revenue > 0 ? fmtPct(diagnosis.netProfit / diagnosis.revenue) : ''}
-            />
-          </div>
+          {(() => {
+            const totalCost =
+              diagnosis.cost + diagnosis.bag + diagnosis.box + diagnosis.pack + diagnosis.shipReal
+            const feePct = diagnosis.revenue > 0
+              ? ((Math.abs(diagnosis.settleFee) / diagnosis.revenue) * 100).toFixed(1)
+              : '0.0'
+            const marginPct = diagnosis.revenue > 0
+              ? fmtPct(diagnosis.netProfit / diagnosis.revenue)
+              : ''
+            return (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <KpiCard label="매출" value={fmtKRW(diagnosis.revenue)} sub={`${diagnosis.productCount}종`} />
+                  <KpiCard
+                    label="정산금"
+                    value={fmtKRW(diagnosis.settleAmount)}
+                    sub={`수수료 ${fmtKRW(diagnosis.settleFee)} (${feePct}%)`}
+                  />
+                  <KpiCard
+                    label="매출 건수"
+                    value={(settlement?.productOrderCount ?? 0).toLocaleString()}
+                    sub="상품주문"
+                  />
+                  <KpiCard label="기간" value={fmtPeriod(diagnosis.period.start, diagnosis.period.end)} />
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <KpiCard
+                    label="총 비용"
+                    value={fmtKRW(-totalCost)}
+                    formula="원가 + 봉투 + 박스 + 택배 + 포장비"
+                    sub={`원가 ${fmtKRW(diagnosis.cost)}`}
+                  />
+                  <KpiCard label="배송비 매출" value={fmtKRW(diagnosis.shipRevenue)} sub="구매자부담−수수료" />
+                  <KpiCard label="광고비" value={fmtKRW(-diagnosis.adCost)} sub="수기 입력" />
+                  <KpiCard
+                    label="순이익"
+                    value={fmtKRW(diagnosis.netProfit)}
+                    accent={diagnosis.netProfit >= 0 ? 'green' : 'red'}
+                    sub={marginPct ? `마진율 ${marginPct}` : ''}
+                  />
+                </div>
+              </>
+            )
+          })()}
 
           {/* 매칭 통계 */}
           <div className="text-xs text-gray-500 mb-3">
@@ -430,22 +468,3 @@ function ShipRow({
   )
 }
 
-function Kpi({
-  label,
-  value,
-  sub,
-  valueClass,
-}: {
-  label: string
-  value: string
-  sub?: string
-  valueClass?: string
-}) {
-  return (
-    <div className="bg-white border rounded-lg p-3">
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className={'text-lg font-semibold mt-0.5 ' + (valueClass ?? '')}>{value}</div>
-      {sub && <div className="text-xs text-gray-400 mt-0.5 truncate">{sub}</div>}
-    </div>
-  )
-}
