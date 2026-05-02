@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { NaverSettlementData } from './parsers/settlement'
 import type { NaverProductMatch } from './parsers/productMatch'
-import type { NaverMarginMap } from './marginNaver'
+import type { NaverMarginMap, NaverMarginOption } from './marginNaver'
 import {
   computeNaverDiagnosis,
   type NaverDiagnosisResult,
@@ -60,11 +60,16 @@ interface NaverStore {
   marginMap: NaverMarginMap | null
   manual: NaverManualInput
   diagnosis: NaverDiagnosisResult | null
+  /** 마진마스터 자동 fetch 진행 상태 */
+  marginLoading: boolean
+  /** 마진마스터 자동 fetch 끝났는데 저장된 데이터가 없음 */
+  marginMissing: boolean
 
   setSettlement: (data: NaverSettlementData) => void
   setMarginData: (productMatch: Map<string, NaverProductMatch>, marginMap: NaverMarginMap) => void
   setManual: (manual: NaverManualInput) => void
   recompute: () => void
+  loadFromApi: () => Promise<void>
   reset: () => void
 }
 
@@ -74,6 +79,8 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   marginMap: null,
   manual: { ...DEFAULT_MANUAL },
   diagnosis: null,
+  marginLoading: false,
+  marginMissing: false,
 
   setSettlement: (data) => {
     const period = periodFromDate(data.dateRange?.min)
@@ -103,6 +110,39 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
     set({ diagnosis })
   },
 
+  loadFromApi: async () => {
+    if (get().productMatch && get().marginMap) return
+    set({ marginLoading: true, marginMissing: false })
+    try {
+      const [matchRes, marginRes] = await Promise.all([
+        fetch('/api/coupang-master?type=naver_match'),
+        fetch('/api/coupang-master?type=naver_margin'),
+      ])
+      const matchJson = await matchRes.json()
+      const marginJson = await marginRes.json()
+
+      const matchData = matchJson?.data
+      const marginData = marginJson?.data
+      if (!matchData || !marginData) {
+        set({ marginLoading: false, marginMissing: true })
+        return
+      }
+
+      const productMatch = new Map<string, NaverProductMatch>(
+        Object.entries(matchData) as [string, NaverProductMatch][],
+      )
+      const marginMap: NaverMarginMap = new Map<string, NaverMarginOption[]>()
+      for (const [k, v] of Object.entries(marginData)) {
+        if (Array.isArray(v)) marginMap.set(k, v as NaverMarginOption[])
+      }
+      set({ productMatch, marginMap, marginLoading: false, marginMissing: false })
+      get().recompute()
+    } catch (e) {
+      console.warn('네이버 마진마스터 자동 로드 실패:', e)
+      set({ marginLoading: false, marginMissing: true })
+    }
+  },
+
   reset: () => {
     set({
       settlement: null,
@@ -110,6 +150,8 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
       marginMap: null,
       manual: { ...DEFAULT_MANUAL },
       diagnosis: null,
+      marginLoading: false,
+      marginMissing: false,
     })
   },
 }))

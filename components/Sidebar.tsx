@@ -123,6 +123,12 @@ export default function Sidebar() {
 
               {isPnlOpen && (
                 <div className="ml-4 mt-1 space-y-1">
+                  {/* 데이터 관리 — 손익 관리자 직속 (쿠팡/스스 공유) */}
+                  <Link href="/coupang-tools/data-management" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/coupang-tools/data-management') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                    <span>💾</span>
+                    <span>데이터 관리</span>
+                  </Link>
+
                   {/* 쿠팡 */}
                   <div>
                     <button onClick={() => setIsCoupangOpen(!isCoupangOpen)} className={'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (pathname.startsWith('/coupang-tools') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
@@ -140,10 +146,6 @@ export default function Sidebar() {
                         <Link href="/coupang-tools/ad-analysis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/ad-analysis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                           <span>📈</span>
                           <span>광고 분석</span>
-                        </Link>
-                        <Link href="/coupang-tools/data-management" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/data-management') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-                          <span>💾</span>
-                          <span>데이터 관리</span>
                         </Link>
                       </div>
                     )}

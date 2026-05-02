@@ -5,16 +5,24 @@ import { getData, saveData } from "@/lib/supabase";
  * 쿠팡 마스터 데이터 API
  *
  * type별로 dashboard_data 테이블에 저장:
- *   - coupang_margin_master  : 마진 마스터 (마진분석.xlsx 파싱 결과)
+ *   - coupang_margin_master  : 마진 마스터 (마진분석.xlsx 파싱 결과 — 쿠팡 마진계산_쿠팡 시트)
  *   - coupang_settlement     : 그로스 정산
  *   - coupang_price_inventory: 가격/재고
+ *   - coupang_naver_match    : 네이버 상품매칭 (마진마스터 "네이버상품매칭" 시트, Map → object)
+ *   - coupang_naver_margin   : 네이버 마진계산 (마진마스터 "마진계산_네이버" 시트, Map → object)
  *
  * GET    /api/coupang-master?type=margin_master   → 데이터 받기
  * POST   /api/coupang-master                       → 저장 (type, data, fileName 포함)
  * DELETE /api/coupang-master?type=margin_master   → 삭제
  */
 
-const VALID_TYPES = ['margin_master', 'settlement', 'price_inventory'] as const;
+const VALID_TYPES = [
+  'margin_master',
+  'settlement',
+  'price_inventory',
+  'naver_match',
+  'naver_margin',
+] as const;
 type DataType = typeof VALID_TYPES[number];
 
 function getKey(type: DataType): string {

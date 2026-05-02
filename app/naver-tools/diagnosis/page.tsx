@@ -1,10 +1,8 @@
 'use client'
 
-import React, { useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useNaverStore } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
-import { parseNaverProductMatch } from '@/lib/naver/parsers/productMatch'
-import { parseNaverMarginMaster } from '@/lib/naver/marginNaver'
 
 function fmtKRW(n: number): string {
   const sign = n < 0 ? '-' : ''
@@ -22,17 +20,21 @@ export default function NaverDiagnosisPage() {
     marginMap,
     manual,
     diagnosis,
+    marginLoading,
+    marginMissing,
     setSettlement,
-    setMarginData,
     setManual,
+    loadFromApi,
   } = useNaverStore()
 
   const settleInputRef = useRef<HTMLInputElement>(null)
-  const masterInputRef = useRef<HTMLInputElement>(null)
 
   const [settleFile, setSettleFile] = useState<string>('')
-  const [masterFile, setMasterFile] = useState<string>('')
   const [parseError, setParseError] = useState<string>('')
+
+  useEffect(() => {
+    loadFromApi()
+  }, [loadFromApi])
 
   // 수기 입력 폼 로컬 상태 (저장 버튼 누를 때만 store에 반영)
   const [adCostDraft, setAdCostDraft] = useState<string>('')
@@ -67,21 +69,6 @@ export default function NaverDiagnosisPage() {
     }
   }
 
-  const onPickMaster = async (file: File) => {
-    try {
-      setParseError('')
-      const buf = await file.arrayBuffer()
-      const [pm, mm] = await Promise.all([
-        parseNaverProductMatch(buf),
-        parseNaverMarginMaster(buf),
-      ])
-      setMasterFile(file.name)
-      setMarginData(pm, mm)
-    } catch (e) {
-      setParseError('마진마스터 파싱 실패: ' + (e instanceof Error ? e.message : String(e)))
-    }
-  }
-
   const onSaveManual = () => {
     if (!settlement) return
     setManual({
@@ -112,8 +99,8 @@ export default function NaverDiagnosisPage() {
         )}
       </div>
 
-      {/* 업로드 영역 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      {/* 업로드 영역 — 정산파일만 (마진마스터는 데이터 관리에서 자동 로드) */}
+      <div className="grid grid-cols-1 gap-4 mb-4">
         <UploadCard
           label="정산파일 (.xlsx)"
           desc="네이버 정산내역 — 수수료상세-건별 시트"
@@ -126,19 +113,35 @@ export default function NaverDiagnosisPage() {
               : ''
           }
         />
-        <UploadCard
-          label="마진마스터 (.xlsx)"
-          desc="네이버상품매칭 + 마진계산_네이버 시트 동시 파싱"
-          fileName={masterFile}
-          inputRef={masterInputRef}
-          onPick={onPickMaster}
-          summary={
-            productMatch && marginMap
-              ? `매칭 ${productMatch.size}개 / 옵션 ${Array.from(marginMap.values()).reduce((s, a) => s + a.length, 0)}개`
-              : ''
-          }
-        />
       </div>
+
+      {/* 마진마스터 자동 로드 상태 */}
+      {marginLoading && (
+        <div className="mb-4 p-3 bg-gray-50 border border-gray-200 text-gray-600 text-sm rounded">
+          마진마스터 데이터 불러오는 중…
+        </div>
+      )}
+      {!marginLoading && marginMissing && (
+        <div className="mb-4 rounded-lg border border-orange-300 bg-orange-50 p-4">
+          <div className="font-semibold text-orange-700 mb-1">⚠ 마진마스터 등록이 필요합니다</div>
+          <p className="text-sm text-gray-700 mb-2">
+            진단을 위해서는 먼저 마진마스터(네이버상품매칭 + 마진계산_네이버 시트) 데이터가 필요합니다.<br />
+            <strong>「데이터 관리」</strong> 페이지에서 한 번만 등록하면 자동으로 사용됩니다.
+          </p>
+          <a
+            href="/coupang-tools/data-management"
+            className="inline-block px-4 py-2 bg-orange-500 text-white text-sm rounded hover:bg-orange-600"
+          >
+            데이터 관리 페이지로 이동 →
+          </a>
+        </div>
+      )}
+      {!marginLoading && productMatch && marginMap && (
+        <div className="mb-4 text-xs text-gray-500">
+          마진마스터 자동 로드: 매칭 {productMatch.size}개 / 옵션{' '}
+          {Array.from(marginMap.values()).reduce((s, a) => s + a.length, 0)}개
+        </div>
+      )}
 
       {parseError && (
         <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded">
