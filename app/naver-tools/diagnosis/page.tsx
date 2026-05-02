@@ -202,6 +202,35 @@ export default function NaverDiagnosisPage() {
     loadList()
   }, [loadFromApi, loadList])
 
+  // 페이지 마운트 시 가장 최근 저장 분석을 frozen view 로 자동 로드 (정산파일 없을 때만)
+  const autoLoadedRef = useRef(false)
+  useEffect(() => {
+    if (autoLoadedRef.current) return
+    if (settlement) {
+      autoLoadedRef.current = true
+      return
+    }
+    if (loadedSnapshot) {
+      autoLoadedRef.current = true
+      return
+    }
+    if (!snapshots || snapshots.length === 0) return
+
+    const sorted = [...snapshots]
+      .filter((a) => a.period?.end || a.weekKey || a.monthKey)
+      .sort((a, b) => {
+        const ka = a.period?.end || a.weekKey || a.monthKey || ''
+        const kb = b.period?.end || b.weekKey || b.monthKey || ''
+        return kb.localeCompare(ka)
+      })
+    const latest = sorted[0]
+    if (!latest?.id) return
+
+    autoLoadedRef.current = true
+    handleLoadAnalysis(latest)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshots])
+
   // 자동 저장 (1초 debounce)
   useEffect(() => {
     if (!diagnosis) return
@@ -324,6 +353,8 @@ export default function NaverDiagnosisPage() {
       const data = await parseNaverSettlement(buf)
       setSettleFile(file.name)
       setSettlement(data)
+      // 새 정산파일 업로드 → frozen view 해제, 라이브 모드
+      setLoadedSnapshot(null)
     } catch (e) {
       setParseError('정산파일 파싱 실패: ' + (e instanceof Error ? e.message : String(e)))
     }
