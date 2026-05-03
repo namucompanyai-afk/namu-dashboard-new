@@ -13,7 +13,7 @@ import {
 } from 'recharts'
 import { useNaverStore, type NaverSnapshotMeta } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
-import { computeAliasTrend, type NaverAliasTrendPoint } from '@/lib/naver/diagnosis'
+import { computeAliasTrend, startOfWeek, type NaverAliasTrendPoint } from '@/lib/naver/diagnosis'
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
 
@@ -315,11 +315,12 @@ export default function NaverDiagnosisPage() {
     let weekKey: string | null = null
     let monthKey: string | null = null
     let label = ''
-    if (days >= 6 && days <= 8) {
+    if (days >= 3 && days <= 10) {
       trendType = 'weekly'
-      weekKey = start
+      // 같은 주에서 다운받은 정산파일들이 같은 weekKey 로 묶이도록 일요일 기준 정렬
+      weekKey = startOfWeek(start)
       label = `주별: ${start} ~ ${end} (${days}일)`
-    } else if (days >= 28 && days <= 31) {
+    } else if (days >= 25 && days <= 35) {
       trendType = 'monthly'
       monthKey = start.slice(0, 7)
       label = `${start.slice(0, 7)} 월별`
