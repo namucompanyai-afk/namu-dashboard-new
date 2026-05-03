@@ -13,7 +13,7 @@ import {
 } from 'recharts'
 import { useNaverStore, type NaverSnapshotMeta } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
-import { computeAliasTrend, startOfWeek, type NaverAliasTrendPoint } from '@/lib/naver/diagnosis'
+import { computeAliasTrend, type NaverAliasTrendPoint } from '@/lib/naver/diagnosis'
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
 
@@ -292,66 +292,6 @@ export default function NaverDiagnosisPage() {
     return () => clearTimeout(t)
   }, [diagnosis, saveLast])
 
-  // 정산파일 업로드 시 period 길이로 자동 weekly/monthly snapshot 저장 (라이브 모드만)
-  //   6~8일 → weekly (weekKey = period.start)
-  //   28~31일 → monthly (monthKey = YYYY-MM of period.start)
-  //   그 외 → 자동 저장 X
-  //   같은 키 있으면 id 재사용 (덮어쓰기)
-  const autoSavedKeyRef = useRef<string>('')
-  const adCostKey = manual.adCost
-  const shipSmallKey = `${manual.shipSmall.unit}|${manual.shipSmall.count}`
-  const shipMediumKey = `${manual.shipMedium.unit}|${manual.shipMedium.count}`
-  const shipLargeKey = `${manual.shipLarge.unit}|${manual.shipLarge.count}`
-
-  useEffect(() => {
-    if (loadedSnapshot) return // frozen view 시 스킵
-    if (!diagnosis) return
-    const start = diagnosis.period.start
-    const end = diagnosis.period.end
-    if (!start || !end) return
-    const days = Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1
-
-    let trendType: 'weekly' | 'monthly' | null = null
-    let weekKey: string | null = null
-    let monthKey: string | null = null
-    let label = ''
-    if (days >= 3 && days <= 10) {
-      trendType = 'weekly'
-      // 같은 주에서 다운받은 정산파일들이 같은 weekKey 로 묶이도록 일요일 기준 정렬
-      weekKey = startOfWeek(start)
-      label = `주별: ${start} ~ ${end} (${days}일)`
-    } else if (days >= 25 && days <= 35) {
-      trendType = 'monthly'
-      monthKey = start.slice(0, 7)
-      label = `${start.slice(0, 7)} 월별`
-    } else {
-      return
-    }
-
-    // 가드: 같은 (key + adCost + ship) 조합 한 번만 저장
-    const guardKey = `${trendType}|${weekKey ?? monthKey}|${adCostKey}|${shipSmallKey}|${shipMediumKey}|${shipLargeKey}|${diagnosis.netProfit}`
-    if (autoSavedKeyRef.current === guardKey) return
-
-    const t = setTimeout(async () => {
-      const cur = useNaverStore.getState().snapshots
-      const existing = cur.find(
-        (s) =>
-          s.includeInTrend &&
-          ((trendType === 'weekly' && s.weekKey === weekKey) ||
-            (trendType === 'monthly' && s.monthKey === monthKey)),
-      )
-      autoSavedKeyRef.current = guardKey
-      await useNaverStore.getState().saveExplicit(label, {
-        weekKey,
-        monthKey,
-        trendType,
-        includeInTrend: true,
-        id: existing?.id,
-      })
-    }, 1200)
-    return () => clearTimeout(t)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diagnosis, adCostKey, shipSmallKey, shipMediumKey, shipLargeKey, loadedSnapshot])
 
   const onResetAll = async () => {
     if (!confirm('정말 모든 분석을 초기화하시겠습니까?\n저장된 분석도 모두 삭제됩니다 (마진마스터는 유지).')) return
@@ -855,7 +795,7 @@ export default function NaverDiagnosisPage() {
                     label="총 비용"
                     value={fmtMan(-totalCost)}
                     formula="원가 + 봉투 + 박스 + 택배 + 포장비"
-                    sub={`원가 ${fmtMan(d.cost)}`}
+                    sub={`원가 ${fmtMan(d.cost)} (${d.matched}건 매칭 / ${d.matched + d.unmatched}건)`}
                   />
                   <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
                   <KpiCard label="광고비" value={fmtMan(-d.adCost)} sub="수기 입력" />
