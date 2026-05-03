@@ -443,7 +443,7 @@ export default function NaverDiagnosisPage() {
       <div className="flex items-end justify-between mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold">스마트스토어 수익 진단</h1>
-          <p className="text-sm text-gray-500 mt-1">정산금 − 비용 − 광고비 (월별)</p>
+          <p className="text-sm text-gray-500 mt-1">정산금 − 비용 − 광고비</p>
         </div>
         <div className="flex items-end gap-3">
           {displayDiagnosis?.period.start && (
