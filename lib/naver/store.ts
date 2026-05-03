@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { NaverSettlementData } from './parsers/settlement'
+import type { NaverOrderQueryData } from './parsers/orderQuery'
 import type { NaverProductMatch } from './parsers/productMatch'
 import type { NaverMarginMap, NaverMarginOption, NaverCpmConfig } from './marginNaver'
 import {
@@ -73,6 +74,10 @@ export interface NaverSnapshotMeta {
 
 interface NaverStore {
   settlement: NaverSettlementData | null
+  /** 주문조회 (옵션정보 + 수량) — diagnosis 정확 매칭용. PR2 부터 실제 사용. */
+  orderQuery: NaverOrderQueryData | null
+  orderQueryFileName: string
+  orderQuerySavedAt: string | null
   productMatch: Map<string, NaverProductMatch> | null
   marginMap: NaverMarginMap | null
   cpmConfig: NaverCpmConfig
@@ -92,6 +97,8 @@ interface NaverStore {
   snapshotsLoading: boolean
 
   setSettlement: (data: NaverSettlementData, fileName?: string) => void
+  setOrderQuery: (data: NaverOrderQueryData, fileName?: string) => void
+  clearOrderQuery: () => void
   setMarginData: (productMatch: Map<string, NaverProductMatch>, marginMap: NaverMarginMap) => void
   setManual: (manual: NaverManualInput) => void
   recompute: () => void
@@ -153,6 +160,9 @@ export function buildAutoLabel(
 
 export const useNaverStore = create<NaverStore>((set, get) => ({
   settlement: null,
+  orderQuery: null,
+  orderQueryFileName: '',
+  orderQuerySavedAt: null,
   productMatch: null,
   marginMap: null,
   cpmConfig: { ...DEFAULT_CPM },
@@ -169,6 +179,21 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
     const period = periodFromDate(data.dateRange?.min)
     const manual = loadManual(period)
     set({ settlement: data, manual, settlementFileName: fileName ?? '' })
+    get().recompute()
+  },
+
+  setOrderQuery: (data, fileName) => {
+    set({
+      orderQuery: data,
+      orderQueryFileName: fileName ?? '',
+      orderQuerySavedAt: new Date().toISOString(),
+    })
+    // PR3 에서 diagnosis 가 orderQuery 를 활용 — 일단 in-memory 만 보관
+    get().recompute()
+  },
+
+  clearOrderQuery: () => {
+    set({ orderQuery: null, orderQueryFileName: '', orderQuerySavedAt: null })
     get().recompute()
   },
 
@@ -401,6 +426,9 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   reset: () => {
     set({
       settlement: null,
+      orderQuery: null,
+      orderQueryFileName: '',
+      orderQuerySavedAt: null,
       productMatch: null,
       marginMap: null,
       cpmConfig: { ...DEFAULT_CPM },
