@@ -957,7 +957,12 @@ interface KeywordOption {
   cvrPct: number | null
   bepCpcVatExcl: number | null
   recommendedBidVatExcl: number | null
+  /** BEP CPC 산출에 쓴 CVR source. 'option' = 옵션+키워드 자체 / 'campaign' = 캠페인 평균 fallback (clicks<20). */
+  cvrSource: 'option' | 'campaign' | null
 }
+
+/** 옵션 자체 CVR 신뢰도 임계 — 클릭 < N 이면 캠페인 평균 CVR 로 fallback */
+const OPTION_CVR_MIN_CLICKS = 20
 
 function computeKeywordOptions(
   keyword: string,
@@ -965,6 +970,7 @@ function computeKeywordOptions(
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
   rowMap: ReturnType<typeof buildMarginRowMap>,
+  campaignAvgCvr: number | null,
 ): KeywordOption[] {
   // 검색 영역 + 해당 키워드만
   const filtered = campaignRows.filter((r) =>
@@ -992,13 +998,27 @@ function computeKeywordOptions(
     const bep = bepMap.get(optId) ?? null
     let bepCpcVatExcl: number | null = null
     let recBid: number | null = null
-    if (cvrPct != null && price && bep && bep > 0) {
+    let cvrSource: 'option' | 'campaign' | null = null
+    // 옵션 자체 CVR 신뢰도 가드 — clicks<20 이면 단발성 데이터(클릭 1→전환 1=100%) 가능성, 캠페인 평균으로 fallback
+    let cvrUsedPct: number | null = null
+    if (cvrPct != null && clicks >= OPTION_CVR_MIN_CLICKS) {
+      cvrUsedPct = cvrPct
+      cvrSource = 'option'
+    } else if (campaignAvgCvr != null && campaignAvgCvr > 0) {
+      cvrUsedPct = campaignAvgCvr * 100
+      cvrSource = 'campaign'
+    }
+    if (cvrUsedPct != null && price && bep && bep > 0) {
       // BEP CPC (VAT 별도) = (CVR × 단가) / (BEP × 1.1). 추천 입찰가 = BEP CPC × 0.95 (5% 안전마진).
-      const cpc = ((cvrPct / 100) * price) / ((bep / 100) * 1.1)
+      const cpc = ((cvrUsedPct / 100) * price) / ((bep / 100) * 1.1)
       if (Number.isFinite(cpc) && cpc > 0) {
         bepCpcVatExcl = cpc
         recBid = cpc * 0.95
+      } else {
+        cvrSource = null
       }
+    } else {
+      cvrSource = null
     }
     out.push({
       optionId: optId,
@@ -1012,6 +1032,7 @@ function computeKeywordOptions(
       cvrPct,
       bepCpcVatExcl,
       recommendedBidVatExcl: recBid,
+      cvrSource,
     })
   }
   out.sort((a, b) => b.sold - a.sold)
@@ -1036,6 +1057,9 @@ function KeywordOptionRow({ entry }: { entry: KeywordOption }) {
           <span className="aa-kw-opt-metric">추천 입찰가 {entry.recommendedBidVatExcl != null
             ? <span className="bid-recommend">{Math.round(entry.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
             : <span className="text-muted">—</span>}
+            {entry.cvrSource === 'campaign' && (
+              <span style={{ marginLeft: 4, fontSize: 10, color: '#94A3B8' }}>(캠페인 평균 CVR)</span>
+            )}
           </span>
         </div>
       </td>
@@ -1065,6 +1089,16 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
       return next
     })
   }
+
+  // 캠페인 평균 CVR — 옵션 row 의 클릭<20 fallback CVR (키워드 row BEP fallback 과 동일 정의)
+  const campaignAvgCvr = useMemo(() => {
+    let totalOrders = 0, totalClicks = 0
+    for (const r of campaignRows) {
+      totalOrders += r.sold14d || 0
+      totalClicks += r.clicks || 0
+    }
+    return totalClicks > 0 ? totalOrders / totalClicks : null
+  }, [campaignRows])
 
   const TH = ({ label, k, num, minWidth, sticky, sticky2, width }: any) => (
     <th
@@ -1172,7 +1206,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
             {sorted.map((r) => {
               const isExpanded = expandedKws.has(r.keyword)
               const opts = isExpanded
-                ? computeKeywordOptions(r.keyword, campaignRows, bepMap, priceMap, rowMap)
+                ? computeKeywordOptions(r.keyword, campaignRows, bepMap, priceMap, rowMap, campaignAvgCvr)
                 : []
               return (
                 <React.Fragment key={r.keyword}>
