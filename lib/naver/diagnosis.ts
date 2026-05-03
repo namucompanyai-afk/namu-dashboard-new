@@ -239,13 +239,14 @@ export function computeNaverDiagnosis(
     if (opts && opts.length > 0) {
       const opt = pickOptionWithKg(opts, r.basePrice, kgHint)
       if (opt) {
-        // opt.cost / opt.bag 은 1주문 단위 (이미 옵션 봉수 반영). 수량(qty) 곱으로 다중 주문 처리.
-        cost += opt.cost * qty
-        bag += opt.bag * qty
+        // 마진마스터 P/Q/X = 1봉 단위 (실측 확인) → 봉수 × 수량 곱셈 필요
+        const bags = (opt.bagCount || 1) * qty
+        cost += opt.cost * bags
+        bag += opt.bag * bags
         // box: 옵션별 합산 X (manual.ship*.count × 박스 단가)
-        pack += opt.pack * qty
-        totalBags += (opt.bagCount || 0) * qty
-        acc.cost += opt.cost * qty
+        pack += opt.pack * bags
+        totalBags += bags
+        acc.cost += opt.cost * bags
         acc.matched = true
         if (!acc.alias) acc.alias = opt.alias
         matched += 1

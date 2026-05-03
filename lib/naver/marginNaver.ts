@@ -157,9 +157,10 @@ export async function parseNaverMarginMaster(buffer: ArrayBuffer): Promise<Naver
     const kgPerBag = toNum(r[COL.kgPerBag]) || 1
     let cost = toNum(r[COL.cost])
     // P 캐시값이 비어있으면(Excel 미저장) 원가표에서 별칭+kg 키로 fallback lookup
+    // 마진마스터 P/Q/X 는 모두 1봉 단위 (실측 확인). 봉수 곱셈은 진단 계산에서.
     if (cost <= 0 && alias) {
       const fallbackUnit = costFallback.get(`${alias}|${kgPerBag}`)
-      if (fallbackUnit && fallbackUnit > 0) cost = fallbackUnit * bagCount
+      if (fallbackUnit && fallbackUnit > 0) cost = fallbackUnit
     }
 
     const opt: NaverMarginOption = {
