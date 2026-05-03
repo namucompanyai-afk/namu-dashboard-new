@@ -55,6 +55,8 @@ export interface NaverDiagnosisResult {
   productCount: number
   matched: number
   unmatched: number
+  /** 매칭 실패 row 의 매출 합계 (basePrice). 마진율 신뢰도 판단용 */
+  unmatchedRevenue: number
 
   products: NaverProductBreakdown[]
 }
@@ -167,6 +169,7 @@ export function computeNaverDiagnosis(
   let pack = 0
   let matched = 0
   let unmatched = 0
+  let unmatchedRevenue = 0
 
   for (const r of settlement.rows) {
     if (r.kind !== '상품주문') continue
@@ -192,9 +195,11 @@ export function computeNaverDiagnosis(
         matched += 1
       } else {
         unmatched += 1
+        unmatchedRevenue += r.basePrice
       }
     } else {
       unmatched += 1
+      unmatchedRevenue += r.basePrice
     }
     products.set(name, acc)
   }
@@ -246,6 +251,7 @@ export function computeNaverDiagnosis(
     productCount: products.size,
     matched,
     unmatched,
+    unmatchedRevenue,
     products: productList,
   }
 }

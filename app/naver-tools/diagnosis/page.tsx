@@ -182,6 +182,7 @@ export default function NaverDiagnosisPage() {
         productOrderCount: number
         matched: number
         unmatched: number
+        unmatchedRevenue?: number
       }
       const products =
         ((loadedSnapshot as unknown as { products?: Array<{
@@ -209,6 +210,7 @@ export default function NaverDiagnosisPage() {
         productCount: products.length,
         matched: s.matched ?? 0,
         unmatched: s.unmatched ?? 0,
+        unmatchedRevenue: s.unmatchedRevenue ?? 0,
         products,
         _productOrderCount: s.productOrderCount ?? 0,
       }
@@ -774,8 +776,31 @@ export default function NaverDiagnosisPage() {
             const productCountSub = loadedSnapshot
               ? `매칭 ${d.matched}/${d.matched + d.unmatched}`
               : `${d.productCount}종`
+            const totalRows = d.matched + d.unmatched
+            const unmatchedPct = totalRows > 0 ? ((d.unmatched / totalRows) * 100).toFixed(1) : '0'
+            const unmatchedRevPct = d.revenue > 0
+              ? ((d.unmatchedRevenue / d.revenue) * 100).toFixed(1)
+              : '0'
             return (
               <>
+                {d.unmatched > 0 && (
+                  <div className="bg-amber-50 border-l-4 border-amber-500 px-4 py-3 mb-4 rounded">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-sm text-amber-900">
+                        ⚠ 원가 미매칭 <strong>{d.unmatched}건</strong>
+                        {' · 매출 '}
+                        <strong>{formatKRW(d.unmatchedRevenue)}원</strong>
+                        {' (전체 '}
+                        {unmatchedRevPct}
+                        {'%)'}
+                      </div>
+                      <div className="text-xs text-amber-700">
+                        마진마스터 매칭표에 등록되지 않은 상품 — 마진율이 부풀려져 표시될 수 있습니다
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard label="매출" value={fmtMan(d.revenue)} sub={productCountSub} />
                   <KpiCard
@@ -795,7 +820,7 @@ export default function NaverDiagnosisPage() {
                     label="총 비용"
                     value={fmtMan(-totalCost)}
                     formula="원가 + 봉투 + 박스 + 택배 + 포장비"
-                    sub={`원가 ${fmtMan(d.cost)} (${d.matched}건 매칭 / ${d.matched + d.unmatched}건)`}
+                    sub={`원가 ${fmtMan(d.cost)} · 매칭 ${d.matched}건 / 미매칭 ${d.unmatched}건 (${fmtMan(d.unmatchedRevenue)}, ${unmatchedPct}%)`}
                   />
                   <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
                   <KpiCard label="광고비" value={fmtMan(-d.adCost)} sub="수기 입력" />
