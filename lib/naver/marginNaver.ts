@@ -79,11 +79,43 @@ export async function parseNaverCpmConfig(buffer: ArrayBuffer): Promise<NaverCpm
   return { ...DEFAULT_CPM }
 }
 
+/**
+ * 원가표 시트에서 별칭+kg 키 → 1봉 원가(P 윙원가=H+I+K) 맵 생성.
+ * 마진계산_네이버 P 캐시값이 비어있을 때 fallback 으로 사용.
+ */
+function buildCostBookFallback(wb: XLSX.WorkBook): Map<string, number> {
+  const aoa = findSheet(wb, ['원가표'])
+  const out = new Map<string, number>()
+  if (!aoa) return out
+  // 헤더 R3 가정. 별칭 C(2) / 원곡가 H(7) / 윙작업비 I(8) / 혼합비 K(10) / 기준용량 G(6)
+  for (let i = 3; i < aoa.length; i++) {
+    const row = aoa[i]
+    if (!Array.isArray(row)) continue
+    const alias = toStr(row[2])
+    if (!alias) continue
+    const H = toNum(row[7])
+    const I = toNum(row[8])
+    const K = toNum(row[10])
+    const unitPrice = H + I + K
+    // 기준kg: G 텍스트 ('1kg', '180g', '0.5kg', ...) → 숫자
+    const g = toStr(row[6]).toLowerCase()
+    let baseKg = 0
+    if (g.endsWith('kg')) baseKg = Number(g.replace('kg', '')) || 0
+    else if (g.endsWith('g')) baseKg = (Number(g.replace('g', '')) || 0) / 1000
+    else baseKg = Number(g) || 0
+    if (baseKg <= 0 || unitPrice <= 0) continue
+    const key = `${alias}|${baseKg}`
+    if (!out.has(key)) out.set(key, unitPrice)
+  }
+  return out
+}
+
 export async function parseNaverMarginMaster(buffer: ArrayBuffer): Promise<NaverMarginMap> {
   const wb = XLSX.read(buffer, { type: 'array', cellFormula: false })
   const aoa = findSheet(wb, ['마진계산_네이버'])
   const map: NaverMarginMap = new Map()
   if (!aoa) return map
+  const costFallback = buildCostBookFallback(wb)
 
   // 헤더 행 탐색 (R4 가정, 노출ID/옵션ID/별칭/실판매가 키 포함 행)
   let headerIdx = -1
@@ -120,14 +152,24 @@ export async function parseNaverMarginMaster(buffer: ArrayBuffer): Promise<Naver
     const exposureId = toStr(r[COL.exposureId])
     if (!exposureId) continue
 
+    const alias = toStr(r[COL.alias])
+    const bagCount = toNum(r[COL.bagCount]) || 1
+    const kgPerBag = toNum(r[COL.kgPerBag]) || 1
+    let cost = toNum(r[COL.cost])
+    // P 캐시값이 비어있으면(Excel 미저장) 원가표에서 별칭+kg 키로 fallback lookup
+    if (cost <= 0 && alias) {
+      const fallbackUnit = costFallback.get(`${alias}|${kgPerBag}`)
+      if (fallbackUnit && fallbackUnit > 0) cost = fallbackUnit * bagCount
+    }
+
     const opt: NaverMarginOption = {
       exposureId,
-      alias: toStr(r[COL.alias]),
+      alias,
       optionName: toStr(r[COL.optionName]),
-      bagCount: toNum(r[COL.bagCount]) || 1,
-      kgPerBag: toNum(r[COL.kgPerBag]) || 1,
+      bagCount,
+      kgPerBag,
       sellPrice: toNum(r[COL.sellPrice]),
-      cost: toNum(r[COL.cost]),
+      cost,
       bag: toNum(r[COL.bag]),
       box: toNum(r[COL.box]),
       ship: toNum(r[COL.ship]),

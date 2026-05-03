@@ -538,10 +538,10 @@ export default function NaverDiagnosisPage() {
               <div className="text-sm font-mono font-medium text-gray-800 mt-0.5">
                 {fmtPeriodSmart(loadedSnapshot, displayDiagnosis.period)}
               </div>
-              <div className={'text-[10px] ' + (loadedSnapshot ? 'text-blue-600 font-medium' : 'text-gray-400')}>
+              <div className={'text-[10px] ' + (loadedSnapshot ? 'text-blue-600 font-medium' : 'text-emerald-600 font-medium')}>
                 {loadedSnapshot
                   ? `📌 ${loadedSnapshot.label || '저장된 분석'} (frozen)`
-                  : '현재 보고 있는 분석'}
+                  : '🟢 LIVE — 현재 업로드된 정산파일'}
               </div>
             </div>
           )}
