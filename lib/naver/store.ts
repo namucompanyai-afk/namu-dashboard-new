@@ -214,7 +214,13 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
       set({ diagnosis: null })
       return
     }
-    const diagnosis = computeNaverDiagnosis(settlement, productMatch, marginMap, manual)
+    const diagnosis = computeNaverDiagnosis(
+      settlement,
+      productMatch,
+      marginMap,
+      manual,
+      get().orderQuery,
+    )
     set({ diagnosis })
   },
 

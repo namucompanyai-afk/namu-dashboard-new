@@ -1,6 +1,7 @@
 import type { NaverSettlementData } from './parsers/settlement'
 import type { NaverProductMatch } from './parsers/productMatch'
 import type { NaverMarginMap, NaverMarginOption } from './marginNaver'
+import type { NaverOrderQueryData } from './parsers/orderQuery'
 
 /**
  * 스마트스토어(네이버) 손익 진단
@@ -97,6 +98,30 @@ function pickClosestOption(
   return best
 }
 
+/** 옵션정보 또는 상품명에서 1봉kg 추출. '1kg'/'500g'/'180g' 등. */
+function parseKgFromText(text: string): number | null {
+  if (!text) return null
+  const mKg = text.match(/(\d+(?:\.\d+)?)\s*kg/i)
+  if (mKg) return Number(mKg[1])
+  const mG = text.match(/(\d+(?:\.\d+)?)\s*g/i)
+  if (mG) return Number(mG[1]) / 1000
+  return null
+}
+
+/** kgHint 우선 매칭. 같은 1봉kg 후보 중 sellPrice 가까운 것. 없으면 전체 후보 중 가까운 것 (fallback). */
+function pickOptionWithKg(
+  options: NaverMarginOption[],
+  basePrice: number,
+  kgHint: number | null,
+): NaverMarginOption | null {
+  if (!options || options.length === 0) return null
+  if (kgHint != null && kgHint > 0) {
+    const same = options.filter((o) => Math.abs((o.kgPerBag || 0) - kgHint) < 0.01)
+    if (same.length > 0) return pickClosestOption(same, basePrice)
+  }
+  return pickClosestOption(options, basePrice)
+}
+
 /** YYYY-MM-DD → 그 주의 일요일(YYYY-MM-DD) — 쿠팡과 동일 일~토 주차 */
 export function startOfWeek(dateStr: string): string {
   const d = new Date(dateStr)
@@ -176,6 +201,7 @@ export function computeNaverDiagnosis(
   productMatch: Map<string, NaverProductMatch>,
   marginMap: NaverMarginMap,
   manual: NaverManualInput,
+  orderQuery?: NaverOrderQueryData | null,
 ): NaverDiagnosisResult {
   const products = new Map<
     string,
@@ -201,17 +227,25 @@ export function computeNaverDiagnosis(
     acc.count += 1
     acc.revenue += r.basePrice
 
+    // 주문조회(옵션정보+수량) 결합 — 있으면 정확 매칭 (kgHint + qty 곱)
+    const orderRow = orderQuery?.indexByOrderId.get(r.productOrderId) ?? null
+    const qty = orderRow?.quantity && orderRow.quantity > 0 ? orderRow.quantity : 1
+    const kgHint = orderRow
+      ? parseKgFromText(orderRow.optionInfo) ?? parseKgFromText(orderRow.productName)
+      : parseKgFromText(name)
+
     const match = productMatch.get(name)
     const opts = match?.exposureId ? marginMap.get(match.exposureId) : undefined
     if (opts && opts.length > 0) {
-      const opt = pickClosestOption(opts, r.basePrice)
+      const opt = pickOptionWithKg(opts, r.basePrice, kgHint)
       if (opt) {
-        cost += opt.cost
-        bag += opt.bag
-        // box: 옵션별 합산 X (아래 manual.ship*.count × 박스 단가 로 계산)
-        pack += opt.pack
-        totalBags += opt.bagCount || 0
-        acc.cost += opt.cost
+        // opt.cost / opt.bag 은 1주문 단위 (이미 옵션 봉수 반영). 수량(qty) 곱으로 다중 주문 처리.
+        cost += opt.cost * qty
+        bag += opt.bag * qty
+        // box: 옵션별 합산 X (manual.ship*.count × 박스 단가)
+        pack += opt.pack * qty
+        totalBags += (opt.bagCount || 0) * qty
+        acc.cost += opt.cost * qty
         acc.matched = true
         if (!acc.alias) acc.alias = opt.alias
         matched += 1
