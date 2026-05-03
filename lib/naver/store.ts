@@ -209,19 +209,47 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   },
 
   recompute: () => {
-    const { settlement, productMatch, marginMap, manual } = get()
+    const { settlement, productMatch, marginMap, manual, orderQuery } = get()
+    if (typeof window !== 'undefined') {
+      // eslint-disable-next-line no-console
+      console.log('[naver.recompute]', {
+        hasSettlement: !!settlement,
+        settlementRows: settlement?.rows.length ?? 0,
+        hasProductMatch: !!productMatch,
+        productMatchSize: productMatch?.size ?? 0,
+        hasMarginMap: !!marginMap,
+        marginMapSize: marginMap?.size ?? 0,
+        hasOrderQuery: !!orderQuery,
+        orderQueryRows: orderQuery?.rows.length ?? 0,
+      })
+    }
     if (!settlement || !productMatch || !marginMap) {
       set({ diagnosis: null })
       return
     }
-    const diagnosis = computeNaverDiagnosis(
-      settlement,
-      productMatch,
-      marginMap,
-      manual,
-      get().orderQuery,
-    )
-    set({ diagnosis })
+    try {
+      const diagnosis = computeNaverDiagnosis(
+        settlement,
+        productMatch,
+        marginMap,
+        manual,
+        orderQuery,
+      )
+      if (typeof window !== 'undefined') {
+        // eslint-disable-next-line no-console
+        console.log('[naver.recompute] diagnosis OK', {
+          revenue: diagnosis.revenue,
+          matched: diagnosis.matched,
+          unmatched: diagnosis.unmatched,
+          totalBags: diagnosis.totalBags,
+        })
+      }
+      set({ diagnosis })
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[naver.recompute] computeNaverDiagnosis 예외:', e)
+      set({ diagnosis: null })
+    }
   },
 
   loadFromApi: async () => {

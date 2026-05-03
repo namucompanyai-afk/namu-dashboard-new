@@ -979,9 +979,30 @@ export default function NaverDiagnosisPage() {
         </>
       )}
 
-      {!diagnosis && (
-        <div className="text-center text-gray-500 py-12 text-sm">
-          정산파일 + 마진마스터를 모두 업로드하면 진단 결과가 표시됩니다.
+      {!displayDiagnosis && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-5 text-sm">
+          <div className="font-semibold text-gray-700 mb-2">진단 결과 미표시 — 진단 가능 상태 점검</div>
+          <ul className="space-y-1 text-xs">
+            <li>
+              {settlement ? '✓' : '✗'} 정산내역:{' '}
+              {settlement
+                ? `${settlement.productOrderCount.toLocaleString()}건 / ${settlement.dateRange?.min ?? '?'} ~ ${settlement.dateRange?.max ?? '?'}`
+                : '미업로드 — 상단 카드에서 업로드'}
+            </li>
+            <li>
+              {productMatch && marginMap ? '✓' : '✗'} 마진마스터:{' '}
+              {productMatch && marginMap
+                ? `매칭 ${productMatch.size}건 / 옵션 ${Array.from(marginMap.values()).reduce((s, a) => s + a.length, 0)}개`
+                : marginLoading
+                  ? '로드 중…'
+                  : marginMissing
+                    ? '미등록 — 데이터 관리에서 업로드 필요'
+                    : '미로드'}
+            </li>
+            <li>
+              {diagnosis ? '✓' : '✗'} 진단 계산: {diagnosis ? '완료' : '실패 — 콘솔 [naver.recompute] 로그 확인'}
+            </li>
+          </ul>
         </div>
       )}
     </div>

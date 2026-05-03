@@ -104,10 +104,15 @@ export default function SettlementUploadModal({ open, onOpenChange }: Props) {
 
   const onApply = () => {
     if (!settle || !order) return
+    // eslint-disable-next-line no-console
+    console.log('[naver.modal.onApply]', {
+      settleRows: settle.data.rows.length,
+      productOrderCount: settle.data.productOrderCount,
+      orderRows: order.data.rows.length,
+    })
     setSettlement(settle.data, settle.fileName)
     setOrderQuery(order.data, order.fileName)
     onOpenChange(false)
-    // 모달 상태 초기화 (다음 열림 때 빈 상태)
     setSettle(null)
     setOrder(null)
     setError('')
