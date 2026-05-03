@@ -82,12 +82,16 @@ interface NaverStore {
   marginLoading: boolean
   /** 마진마스터 자동 fetch 끝났는데 저장된 데이터가 없음 */
   marginMissing: boolean
+  /** 마진마스터 fingerprint — naver_match.savedAt (변경 감지용) */
+  marginSavedAt: string | null
+  /** 정산파일명 (snapshot raw 메타용) */
+  settlementFileName: string
 
   /** 명시 저장된 분석 메타 목록 */
   snapshots: NaverSnapshotMeta[]
   snapshotsLoading: boolean
 
-  setSettlement: (data: NaverSettlementData) => void
+  setSettlement: (data: NaverSettlementData, fileName?: string) => void
   setMarginData: (productMatch: Map<string, NaverProductMatch>, marginMap: NaverMarginMap) => void
   setManual: (manual: NaverManualInput) => void
   recompute: () => void
@@ -156,13 +160,15 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   diagnosis: null,
   marginLoading: false,
   marginMissing: false,
+  marginSavedAt: null,
+  settlementFileName: '',
   snapshots: [],
   snapshotsLoading: false,
 
-  setSettlement: (data) => {
+  setSettlement: (data, fileName) => {
     const period = periodFromDate(data.dateRange?.min)
     const manual = loadManual(period)
-    set({ settlement: data, manual })
+    set({ settlement: data, manual, settlementFileName: fileName ?? '' })
     get().recompute()
   },
 
@@ -202,8 +208,9 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
 
       const matchData = matchJson?.data
       const marginData = marginJson?.data
+      const marginSavedAt = (matchJson?.savedAt ?? marginJson?.savedAt ?? null) as string | null
       if (!matchData || !marginData) {
-        set({ marginLoading: false, marginMissing: true })
+        set({ marginLoading: false, marginMissing: true, marginSavedAt })
         return
       }
 
@@ -219,7 +226,14 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
         unitPrice: cpmData?.unitPrice ?? DEFAULT_CPM.unitPrice,
         baseDays: cpmData?.baseDays ?? DEFAULT_CPM.baseDays,
       }
-      set({ productMatch, marginMap, cpmConfig, marginLoading: false, marginMissing: false })
+      set({
+        productMatch,
+        marginMap,
+        cpmConfig,
+        marginLoading: false,
+        marginMissing: false,
+        marginSavedAt,
+      })
       get().recompute()
     } catch (e) {
       console.warn('네이버 마진마스터 자동 로드 실패:', e)
@@ -243,8 +257,16 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
         (trendType === 'weekly' && s.weekKey === key),
     )
 
+    const stateAuto = get()
     const snapshot = {
-      ...buildSnapshot(diagnosis, settlement),
+      ...buildSnapshot(
+        diagnosis,
+        settlement,
+        stateAuto.manual,
+        stateAuto.cpmConfig,
+        stateAuto.marginSavedAt,
+        stateAuto.settlementFileName,
+      ),
       label,
       monthKey: trendType === 'monthly' ? key : null,
       weekKey: trendType === 'weekly' ? key : null,
@@ -291,9 +313,16 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   },
 
   saveLast: async () => {
-    const { diagnosis, settlement } = get()
-    if (!diagnosis) return
-    const snapshot = buildSnapshot(diagnosis, settlement)
+    const s = get()
+    if (!s.diagnosis) return
+    const snapshot = buildSnapshot(
+      s.diagnosis,
+      s.settlement,
+      s.manual,
+      s.cpmConfig,
+      s.marginSavedAt,
+      s.settlementFileName,
+    )
     try {
       await fetch('/api/naver-diagnoses', {
         method: 'POST',
@@ -306,10 +335,17 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   },
 
   saveExplicit: async (label, extra) => {
-    const { diagnosis, settlement } = get()
-    if (!diagnosis) return null
+    const s = get()
+    if (!s.diagnosis) return null
     const snapshot = {
-      ...buildSnapshot(diagnosis, settlement),
+      ...buildSnapshot(
+        s.diagnosis,
+        s.settlement,
+        s.manual,
+        s.cpmConfig,
+        s.marginSavedAt,
+        s.settlementFileName,
+      ),
       label: label.trim() || undefined,
       monthKey: extra?.monthKey ?? null,
       weekKey: extra?.weekKey ?? null,
@@ -372,6 +408,8 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
       diagnosis: null,
       marginLoading: false,
       marginMissing: false,
+      marginSavedAt: null,
+      settlementFileName: '',
       snapshots: [],
       snapshotsLoading: false,
     })
@@ -381,6 +419,10 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
 function buildSnapshot(
   diagnosis: NaverDiagnosisResult,
   settlement: NaverSettlementData | null,
+  manual: NaverManualInput,
+  cpmConfig: NaverCpmConfig,
+  marginSavedAt: string | null,
+  settlementFileName: string,
 ) {
   return {
     period: diagnosis.period,
@@ -411,5 +453,13 @@ function buildSnapshot(
       profit: p.profit,
       matched: p.matched,
     })),
+    // Raw — frozen view 재계산용 (마진마스터 최신 버전 + 그 시점 manual/cpm 결합)
+    raw: {
+      settlementRows: settlement?.rows ?? [],
+      manual,
+      cpmConfig,
+      marginFingerprint: marginSavedAt ?? '',
+      fileName: settlementFileName,
+    },
   }
 }

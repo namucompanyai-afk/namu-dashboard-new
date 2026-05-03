@@ -13,7 +13,13 @@ import {
 } from 'recharts'
 import { useNaverStore, type NaverSnapshotMeta } from '@/lib/naver/store'
 import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
-import { computeAliasTrend, type NaverAliasTrendPoint } from '@/lib/naver/diagnosis'
+import {
+  computeAliasTrend,
+  computeNaverDiagnosis,
+  type NaverAliasTrendPoint,
+  type NaverManualInput,
+} from '@/lib/naver/diagnosis'
+import type { NaverSettlementData, NaverSettlementRow } from '@/lib/naver/parsers/settlement'
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
 
@@ -150,6 +156,7 @@ export default function NaverDiagnosisPage() {
     marginLoading,
     marginMissing,
     snapshots,
+    marginSavedAt,
     setSettlement,
     setManual,
     loadFromApi,
@@ -164,8 +171,68 @@ export default function NaverDiagnosisPage() {
   const [loadedSnapshot, setLoadedSnapshot] = useState<NaverSnapshotMeta | null>(null)
   const exitSnapshotView = () => setLoadedSnapshot(null)
 
+  // raw 가 있는 snapshot + 현재 마진마스터 결합 → frozen view 재계산
+  const recomputedFromSnapshot = useMemo(() => {
+    if (!loadedSnapshot) return null
+    const raw = (loadedSnapshot as unknown as {
+      raw?: {
+        settlementRows?: NaverSettlementRow[]
+        manual?: NaverManualInput
+        cpmConfig?: { unitPrice: number; baseDays: number }
+        marginFingerprint?: string
+        fileName?: string
+      }
+    }).raw
+    if (!raw?.settlementRows || raw.settlementRows.length === 0) return null
+    if (!productMatch || !marginMap) return null
+    if (!raw.manual) return null
+
+    const rows = raw.settlementRows
+    const minD = rows.reduce((m, r) => (!m || r.settleDate < m ? r.settleDate : m), '')
+    const maxD = rows.reduce((m, r) => (!m || r.settleDate > m ? r.settleDate : m), '')
+    const subSettlement: NaverSettlementData = {
+      rows,
+      dateRange: minD && maxD ? { min: minD, max: maxD } : null,
+      totalRevenue: rows
+        .filter((r) => r.kind === '상품주문')
+        .reduce((s, r) => s + r.basePrice, 0),
+      totalFee: rows
+        .filter((r) => r.kind === '상품주문')
+        .reduce((s, r) => s + r.feeSum, 0),
+      shipRevenue: rows
+        .filter((r) => r.kind === '배송비')
+        .reduce((s, r) => s + r.basePrice, 0),
+      shipFee: rows
+        .filter((r) => r.kind === '배송비')
+        .reduce((s, r) => s + r.feeSum, 0),
+      productOrderCount: rows.filter((r) => r.kind === '상품주문').length,
+    }
+
+    try {
+      return computeNaverDiagnosis(subSettlement, productMatch, marginMap, raw.manual)
+    } catch (e) {
+      console.warn('frozen view 재계산 실패:', e)
+      return null
+    }
+  }, [loadedSnapshot, productMatch, marginMap])
+
+  const fingerprintMismatch =
+    !!loadedSnapshot &&
+    !!recomputedFromSnapshot &&
+    !!marginSavedAt &&
+    !!(loadedSnapshot as unknown as { raw?: { marginFingerprint?: string } }).raw?.marginFingerprint &&
+    (loadedSnapshot as unknown as { raw?: { marginFingerprint?: string } }).raw!.marginFingerprint !==
+      marginSavedAt
+
   // KPI/표 표시용 — loaded 우선, 없으면 라이브
   const displayDiagnosis = useMemo(() => {
+    // raw + 현재 마진마스터 결합 재계산 결과 우선 (마진마스터 변경 자동 반영)
+    if (recomputedFromSnapshot) {
+      return {
+        ...recomputedFromSnapshot,
+        _productOrderCount: recomputedFromSnapshot.products.reduce((s, p) => s + p.count, 0),
+      }
+    }
     if (loadedSnapshot?.summary) {
       const s = loadedSnapshot.summary as unknown as {
         revenue: number
@@ -220,7 +287,7 @@ export default function NaverDiagnosisPage() {
       ...diagnosis,
       _productOrderCount: settlement?.productOrderCount ?? 0,
     }
-  }, [loadedSnapshot, diagnosis, settlement])
+  }, [recomputedFromSnapshot, loadedSnapshot, diagnosis, settlement])
 
   // 히스토리 패널
   const [showHistoryPanel, setShowHistoryPanel] = useState(false)
@@ -415,7 +482,7 @@ export default function NaverDiagnosisPage() {
       const buf = await file.arrayBuffer()
       const data = await parseNaverSettlement(buf)
       setSettleFile(file.name)
-      setSettlement(data)
+      setSettlement(data, file.name)
       // 새 정산파일 업로드 → frozen view 해제, 라이브 모드
       setLoadedSnapshot(null)
     } catch (e) {
@@ -510,6 +577,13 @@ export default function NaverDiagnosisPage() {
           </div>
         </div>
       </div>
+
+      {/* 마진마스터 변경 안내 (frozen view 재계산 시) */}
+      {fingerprintMismatch && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+          📌 저장 시점 이후 마진마스터가 갱신되었습니다 — 최신 매칭/원가 기준으로 재계산된 결과를 표시합니다
+        </div>
+      )}
 
       {/* 저장된 분석 히스토리 패널 */}
       {showHistoryPanel && (

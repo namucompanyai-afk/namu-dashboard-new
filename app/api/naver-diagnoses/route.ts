@@ -53,6 +53,15 @@ interface NaverSnapshot {
     profit: number
     matched: boolean
   }>
+  /** Raw 데이터 — frozen view 재계산용 (마진마스터 최신 버전과 결합) */
+  raw?: {
+    settlementRows?: unknown[]
+    manual?: unknown
+    cpmConfig?: { unitPrice: number; baseDays: number }
+    /** 마진마스터 fingerprint (savedAt timestamp) — 변경 감지 */
+    marginFingerprint?: string
+    fileName?: string
+  }
   createdAt?: string
 }
 
@@ -71,10 +80,11 @@ export async function GET(request: Request) {
       const diagnoses = rows
         .map((r: { data: unknown }) => r.data as NaverSnapshot)
         .filter(Boolean)
-        // products 는 목록 응답에서 제거 (가벼움 유지)
+        // products + raw 는 목록 응답에서 제거 (가벼움 유지)
         .map((d: NaverSnapshot) => {
-          const { products: _products, ...meta } = d
+          const { products: _products, raw: _raw, ...meta } = d
           void _products
+          void _raw
           return meta
         })
       return NextResponse.json({ diagnoses })
