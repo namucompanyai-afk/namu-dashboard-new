@@ -16,6 +16,7 @@ import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
 import {
   computeAliasTrend,
   computeNaverDiagnosis,
+  BOX_UNIT_PRICE,
   type NaverAliasTrendPoint,
   type NaverManualInput,
 } from '@/lib/naver/diagnosis'
@@ -250,6 +251,9 @@ export default function NaverDiagnosisPage() {
         matched: number
         unmatched: number
         unmatchedRevenue?: number
+        totalBags?: number
+        productFeeRate?: number
+        shipFeeRate?: number
       }
       const products =
         ((loadedSnapshot as unknown as { products?: Array<{
@@ -278,6 +282,9 @@ export default function NaverDiagnosisPage() {
         matched: s.matched ?? 0,
         unmatched: s.unmatched ?? 0,
         unmatchedRevenue: s.unmatchedRevenue ?? 0,
+        totalBags: s.totalBags ?? 0,
+        productFeeRate: s.productFeeRate ?? 0,
+        shipFeeRate: s.shipFeeRate ?? 0,
         products,
         _productOrderCount: s.productOrderCount ?? 0,
       }
@@ -517,10 +524,6 @@ export default function NaverDiagnosisPage() {
     return Math.round((cnt * cpmConfig.unitPrice * days) / cpmConfig.baseDays)
   })()
 
-  const shipTotal =
-    (Number(shipDraft.s.unit) || 0) * (Number(shipDraft.s.count) || 0) +
-    (Number(shipDraft.m.unit) || 0) * (Number(shipDraft.m.count) || 0) +
-    (Number(shipDraft.l.unit) || 0) * (Number(shipDraft.l.count) || 0)
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -805,7 +808,7 @@ export default function NaverDiagnosisPage() {
       <div className="bg-white border rounded-lg p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">
-            {manual.period || '기간 미정'} CPM + 택배비 입력
+            {manual.period || '기간 미정'} CPM + 택배비 / 박스비 입력
           </h2>
           <button
             onClick={onSaveManual}
@@ -862,25 +865,11 @@ export default function NaverDiagnosisPage() {
           </div>
 
           <div className="border-t pt-4">
-            <div className="text-sm text-gray-700 mb-2">택배비</div>
-            <ShipRow
-              label="소"
-              draft={shipDraft.s}
-              onChange={(d) => setShipDraft((p) => ({ ...p, s: d }))}
+            <div className="text-sm text-gray-700 mb-2">택배비 / 박스비</div>
+            <ShipBoxTable
+              shipDraft={shipDraft}
+              setShipDraft={setShipDraft}
             />
-            <ShipRow
-              label="중"
-              draft={shipDraft.m}
-              onChange={(d) => setShipDraft((p) => ({ ...p, m: d }))}
-            />
-            <ShipRow
-              label="대"
-              draft={shipDraft.l}
-              onChange={(d) => setShipDraft((p) => ({ ...p, l: d }))}
-            />
-            <div className="text-right text-sm text-gray-600 mt-2">
-              합계: <span className="font-semibold">{fmtKRW(shipTotal)}</span>
-            </div>
           </div>
         </div>
       </div>
@@ -891,13 +880,7 @@ export default function NaverDiagnosisPage() {
           {(() => {
             const d = displayDiagnosis
             const totalCost = d.cost + d.bag + d.box + d.pack + d.shipReal
-            const feePct = d.revenue > 0
-              ? ((Math.abs(d.settleFee) / d.revenue) * 100).toFixed(1)
-              : '0.0'
             const marginPct = d.revenue > 0 ? fmtPct(d.netProfit / d.revenue) : ''
-            const productCountSub = loadedSnapshot
-              ? `매칭 ${d.matched}/${d.matched + d.unmatched}`
-              : `${d.productCount}종`
             const totalRows = d.matched + d.unmatched
             const unmatchedPct = totalRows > 0 ? ((d.unmatched / totalRows) * 100).toFixed(1) : '0'
             const unmatchedRevPct = d.revenue > 0
@@ -925,20 +908,28 @@ export default function NaverDiagnosisPage() {
 
                 {/* 행1: 매출 / 매출건수 / 배송비매출 / 정산금 */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  <KpiCard label="매출" value={fmtMan(d.revenue)} sub={productCountSub} />
+                  <KpiCard
+                    label="매출"
+                    value={fmtMan(d.revenue)}
+                    sub={`총 ${(d.totalBags ?? 0).toLocaleString()}봉`}
+                  />
                   <KpiCard
                     label="매출 건수"
-                    value={(d.matched + d.unmatched).toLocaleString()}
+                    value={`${(d.matched + d.unmatched).toLocaleString()}건`}
                     sub="상품주문"
                   />
-                  <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
+                  <KpiCard
+                    label="배송비 매출"
+                    value={fmtMan(d.shipRevenue)}
+                    sub={`수수료 ${((d.shipFeeRate ?? 0) * 100).toFixed(1)}% 반영`}
+                  />
                   <KpiCard
                     label="정산금"
                     value={fmtMan(d.settleAmount)}
-                    sub={`수수료 ${fmtMan(d.settleFee)} (${feePct}%)`}
+                    sub={`수수료 ${((d.productFeeRate ?? 0) * 100).toFixed(1)}% 반영`}
                   />
                 </div>
-                {/* 행2: 총비용 / 택배비 / 박스비 / CPM */}
+                {/* 행2: 총비용 / 원곡가 / 택배비+박스비 / 봉투비 */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard
                     label="총 비용"
@@ -947,15 +938,29 @@ export default function NaverDiagnosisPage() {
                     sub={`원가 ${fmtMan(d.cost)} · 매칭 ${d.matched}건 / 미매칭 ${d.unmatched}건 (${fmtMan(d.unmatchedRevenue)}, ${unmatchedPct}%)`}
                   />
                   <KpiCard
-                    label="택배비"
-                    value={fmtMan(-d.shipReal)}
-                    sub={`소 ${manual.shipSmall.count} + 중 ${manual.shipMedium.count} + 대 ${manual.shipLarge.count}`}
+                    label="원곡가"
+                    value={fmtMan(-d.cost)}
+                    sub={`총 ${(d.totalBags ?? 0).toLocaleString()}봉`}
                   />
+                  <div className="rounded-lg border border-gray-200 bg-white p-4">
+                    <div className="text-xs text-gray-500 mb-1">택배비 / 박스비</div>
+                    <div className="flex items-baseline gap-2 text-xl font-bold font-mono text-gray-900">
+                      <span>{fmtMan(-d.shipReal)}</span>
+                      <span className="text-gray-300 text-base">|</span>
+                      <span>{fmtMan(-d.box)}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      소 {manual.shipSmall.count} · 중 {manual.shipMedium.count} · 대 {manual.shipLarge.count}
+                    </div>
+                  </div>
                   <KpiCard
-                    label="박스비"
-                    value={fmtMan(-d.box)}
-                    sub={`소 ${manual.shipSmall.count} + 중 ${manual.shipMedium.count} + 대 ${manual.shipLarge.count}`}
+                    label="봉투비"
+                    value={fmtMan(-d.bag)}
+                    sub={`총 ${(d.totalBags ?? 0).toLocaleString()}봉`}
                   />
+                </div>
+                {/* 행3: CPM / 취소율 / 반품율 / 순이익 */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard
                     label="CPM"
                     value={fmtMan(-d.adCost)}
@@ -965,10 +970,6 @@ export default function NaverDiagnosisPage() {
                         : '수기 입력'
                     }
                   />
-                </div>
-                {/* 행3: 봉투비 / 취소율 / 반품율 / 순이익 */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
-                  <KpiCard label="봉투비" value={fmtMan(-d.bag)} sub="옵션 봉수 × 단가" />
                   <KpiCard label="취소율" value="—" sub="다음 단계" />
                   <KpiCard label="반품율" value="—" sub="다음 단계" />
                   <KpiCard
@@ -1062,37 +1063,94 @@ function UploadCard({
   )
 }
 
-function ShipRow({
-  label,
-  draft,
-  onChange,
+type ShipDraftRow = { unit: string; count: string }
+type ShipDraft = { s: ShipDraftRow; m: ShipDraftRow; l: ShipDraftRow }
+
+function ShipBoxTable({
+  shipDraft,
+  setShipDraft,
 }: {
-  label: string
-  draft: { unit: string; count: string }
-  onChange: (d: { unit: string; count: string }) => void
+  shipDraft: ShipDraft
+  setShipDraft: React.Dispatch<React.SetStateAction<ShipDraft>>
 }) {
-  const total = (Number(draft.unit) || 0) * (Number(draft.count) || 0)
+  const rows: Array<{ key: 'small' | 'medium' | 'large'; label: string; draftKey: 's' | 'm' | 'l' }> = [
+    { key: 'small', label: '소', draftKey: 's' },
+    { key: 'medium', label: '중', draftKey: 'm' },
+    { key: 'large', label: '대', draftKey: 'l' },
+  ]
+  const shipTotal = rows.reduce((sum, r) => {
+    const d = shipDraft[r.draftKey]
+    return sum + (Number(d.unit) || 0) * (Number(d.count) || 0)
+  }, 0)
+  const boxTotal = rows.reduce((sum, r) => {
+    const d = shipDraft[r.draftKey]
+    return sum + BOX_UNIT_PRICE[r.key] * (Number(d.count) || 0)
+  }, 0)
+
   return (
-    <div className="flex items-center gap-2 mb-1.5 text-sm">
-      <span className="w-6 text-gray-600">{label}</span>
-      <span className="text-xs text-gray-500">단가</span>
-      <input
-        type="number"
-        value={draft.unit}
-        onChange={(e) => onChange({ ...draft, unit: e.target.value })}
-        className="w-24 px-2 py-1 border rounded text-sm text-right"
-      />
-      <span className="text-xs text-gray-400">×</span>
-      <span className="text-xs text-gray-500">수량</span>
-      <input
-        type="number"
-        value={draft.count}
-        onChange={(e) => onChange({ ...draft, count: e.target.value })}
-        className="w-20 px-2 py-1 border rounded text-sm text-right"
-        placeholder="0"
-      />
-      <span className="text-xs text-gray-400">=</span>
-      <span className="text-xs text-gray-700 w-24 text-right">{fmtKRW(total)}</span>
+    <div className="text-sm">
+      {/* 그룹 헤더 */}
+      <div className="grid grid-cols-[3rem_repeat(3,1fr)_repeat(2,1fr)] gap-2 text-xs text-gray-500 mb-1">
+        <div></div>
+        <div className="col-span-3 text-center font-medium text-gray-700">택배비</div>
+        <div className="col-span-2 text-center font-medium text-gray-700">박스비</div>
+      </div>
+      {/* 컬럼 헤더 */}
+      <div className="grid grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] gap-2 text-[11px] text-gray-500 mb-1 border-b pb-1">
+        <div></div>
+        <div className="text-right">단가</div>
+        <div className="text-right">수량</div>
+        <div className="text-right">금액</div>
+        <div className="text-right">단가</div>
+        <div className="text-right">금액</div>
+      </div>
+      {rows.map((r) => {
+        const draft = shipDraft[r.draftKey]
+        const cnt = Number(draft.count) || 0
+        const unit = Number(draft.unit) || 0
+        const shipAmt = unit * cnt
+        const boxUnit = BOX_UNIT_PRICE[r.key]
+        const boxAmt = boxUnit * cnt
+        return (
+          <div
+            key={r.key}
+            className="grid grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] gap-2 items-center py-1"
+          >
+            <span className="text-gray-700">{r.label}</span>
+            <input
+              type="number"
+              value={draft.unit}
+              onChange={(e) => {
+                const v = e.target.value
+                setShipDraft((p) => ({ ...p, [r.draftKey]: { ...p[r.draftKey], unit: v } }))
+              }}
+              className="px-2 py-1 border rounded text-right"
+            />
+            <input
+              type="number"
+              value={draft.count}
+              placeholder="0"
+              onChange={(e) => {
+                const v = e.target.value
+                setShipDraft((p) => ({ ...p, [r.draftKey]: { ...p[r.draftKey], count: v } }))
+              }}
+              className="px-2 py-1 border rounded text-right"
+            />
+            <span className="text-right text-gray-700">{fmtKRW(shipAmt)}</span>
+            <span className="text-right text-gray-500">{boxUnit.toLocaleString()}</span>
+            <span className="text-right text-gray-700">{fmtKRW(boxAmt)}</span>
+          </div>
+        )
+      })}
+      {/* 합계 */}
+      <div className="grid grid-cols-[3rem_1fr_1fr_1fr_1fr_1fr] gap-2 items-center pt-2 mt-1 border-t text-sm">
+        <span className="text-xs text-gray-500">합계</span>
+        <span></span>
+        <span></span>
+        <span className="text-right font-semibold">{fmtKRW(shipTotal)}</span>
+        <span></span>
+        <span className="text-right font-semibold">{fmtKRW(boxTotal)}</span>
+      </div>
     </div>
   )
 }

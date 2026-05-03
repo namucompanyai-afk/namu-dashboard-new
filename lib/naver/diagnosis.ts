@@ -63,11 +63,18 @@ export interface NaverDiagnosisResult {
   /** 매칭 실패 row 의 매출 합계 (basePrice). 마진율 신뢰도 판단용 */
   unmatchedRevenue: number
 
+  /** 매칭된 옵션의 봉수 합 (1주문 = 1옵션 bagCount) — 매출/원곡가/봉투비 검증용 */
+  totalBags: number
+  /** 상품주문 수수료율 = sum(상품주문 fee) / sum(상품주문 basePrice) — 음수/양수 부호 보존 */
+  productFeeRate: number
+  /** 배송비 수수료율 = sum(배송비 fee) / sum(배송비 basePrice) — 보통 Npay 만 ~2.7% */
+  shipFeeRate: number
+
   products: NaverProductBreakdown[]
 }
 
 /** 박스 단가 (VAT 포함) — 비용테이블 윙 박스/택배 매트릭스 A35:E37 기본값 */
-const BOX_UNIT_PRICE = {
+export const BOX_UNIT_PRICE = {
   small: 371,
   medium: 1123,
   large: 1300,
@@ -183,6 +190,7 @@ export function computeNaverDiagnosis(
   let matched = 0
   let unmatched = 0
   let unmatchedRevenue = 0
+  let totalBags = 0
 
   for (const r of settlement.rows) {
     if (r.kind !== '상품주문') continue
@@ -202,6 +210,7 @@ export function computeNaverDiagnosis(
         bag += opt.bag
         // box: 옵션별 합산 X (아래 manual.ship*.count × 박스 단가 로 계산)
         pack += opt.pack
+        totalBags += opt.bagCount || 0
         acc.cost += opt.cost
         acc.matched = true
         if (!acc.alias) acc.alias = opt.alias
@@ -234,6 +243,11 @@ export function computeNaverDiagnosis(
 
   const shipRevenue = settlement.shipRevenue + settlement.shipFee
   const adCost = manual.adCost || 0
+
+  // 수수료율 분리 — 상품주문 vs 배송비
+  const productFeeRate = revenue > 0 ? Math.abs(settleFee) / revenue : 0
+  const shipFeeRate =
+    settlement.shipRevenue > 0 ? Math.abs(settlement.shipFee) / settlement.shipRevenue : 0
 
   const netProfit =
     settleAmount - cost - bag - box - shipReal - pack + shipRevenue - adCost
@@ -271,6 +285,9 @@ export function computeNaverDiagnosis(
     matched,
     unmatched,
     unmatchedRevenue,
+    totalBags,
+    productFeeRate,
+    shipFeeRate,
     products: productList,
   }
 }
