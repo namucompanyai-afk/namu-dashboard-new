@@ -1620,6 +1620,16 @@ function NaverAliasTable({ products, settlement, productMatch, marginMap }: Nave
       .sort((a, b) => b.revenue - a.revenue)
   }, [products])
 
+  // 미매칭 상품 상세 — 매출 내림차순
+  const unmatchedProducts = useMemo(
+    () =>
+      products
+        .filter((p) => !p.matched)
+        .map((p) => ({ productName: p.productName, count: p.count, revenue: p.revenue }))
+        .sort((a, b) => b.revenue - a.revenue),
+    [products],
+  )
+
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
   return (
@@ -1644,7 +1654,10 @@ function NaverAliasTable({ products, settlement, productMatch, marginMap }: Nave
             )}
             {aliasRows.map((r) => {
               const isExpanded = expandedKey === r.key
-              const canExpand = r.matched && r.alias && r.alias !== '미매칭'
+              const isUnmatchedRow = !r.matched
+              const canExpand = isUnmatchedRow
+                ? unmatchedProducts.length > 0
+                : !!(r.alias && r.alias !== '미매칭')
               return (
                 <React.Fragment key={r.key}>
                   <tr
@@ -1659,7 +1672,7 @@ function NaverAliasTable({ products, settlement, productMatch, marginMap }: Nave
                     }}
                   >
                     <td className="px-3 py-2">
-                      <span className={canExpand ? 'text-blue-700 hover:underline' : ''}>
+                      <span className={canExpand && r.matched ? 'text-blue-700 hover:underline' : ''}>
                         {r.alias}
                       </span>
                       {!r.matched && <span className="ml-2 text-xs text-gray-400">❌ 미매칭</span>}
@@ -1673,19 +1686,83 @@ function NaverAliasTable({ products, settlement, productMatch, marginMap }: Nave
                   {isExpanded && canExpand && (
                     <tr className="bg-gray-50">
                       <td colSpan={4} className="px-3 py-3">
-                        <NaverAliasTrendChart
-                          alias={r.alias}
-                          settlement={settlement}
-                          productMatch={productMatch}
-                          marginMap={marginMap}
-                          onClose={() => setExpandedKey(null)}
-                        />
+                        {r.matched ? (
+                          <NaverAliasTrendChart
+                            alias={r.alias}
+                            settlement={settlement}
+                            productMatch={productMatch}
+                            marginMap={marginMap}
+                            onClose={() => setExpandedKey(null)}
+                          />
+                        ) : (
+                          <NaverUnmatchedList
+                            items={unmatchedProducts}
+                            onClose={() => setExpandedKey(null)}
+                          />
+                        )}
                       </td>
                     </tr>
                   )}
                 </React.Fragment>
               )
             })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// 미매칭 상품 상세 리스트 — 매출 내림차순
+// ─────────────────────────────────────────────────────────────
+
+function NaverUnmatchedList({
+  items,
+  onClose,
+}: {
+  items: Array<{ productName: string; count: number; revenue: number }>
+  onClose: () => void
+}) {
+  const total = items.reduce((s, p) => s + p.revenue, 0)
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h4 className="text-sm font-medium text-gray-700">
+          미매칭 상품 <span className="text-gray-400">({items.length}개 · 매출 {fmtKRW(total)})</span>
+        </h4>
+        <button
+          onClick={onClose}
+          className="text-xs text-gray-400 hover:text-gray-600"
+          type="button"
+        >
+          ✕ 닫기
+        </button>
+      </div>
+      <div className="bg-white border rounded overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-gray-50">
+            <tr className="text-gray-500">
+              <th className="px-2 py-1.5 text-left">상품명</th>
+              <th className="px-2 py-1.5 text-right w-16">건수</th>
+              <th className="px-2 py-1.5 text-right w-28">매출</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={3} className="px-2 py-3 text-center text-gray-400">
+                  미매칭 상품 없음
+                </td>
+              </tr>
+            )}
+            {items.map((p) => (
+              <tr key={p.productName} className="border-t border-gray-100">
+                <td className="px-2 py-1.5">{p.productName}</td>
+                <td className="px-2 py-1.5 text-right">{p.count}</td>
+                <td className="px-2 py-1.5 text-right">{fmtKRW(p.revenue)}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
