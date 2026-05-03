@@ -772,7 +772,7 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
     })
 
   const cpcLabel = cpcEntries.length > 0
-    ? cpcEntries.map((e) => `${e.label} ${Math.round(e.cpc).toLocaleString('ko-KR')}원`).join(', ')
+    ? cpcEntries.map((e) => `${e.label} ${Math.round(e.bepPct)}% [${Math.round(e.cpc).toLocaleString('ko-KR')}원]`).join(', ')
     : '—'
   const bepRoasLabel = campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'
 
@@ -786,8 +786,8 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {cpcEntries.length > 0 && (
             <div style={{ fontSize: 11.5, color: '#64748B' }}>
-              <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}— ROAS{' '}
-              <strong className="mono" style={{ color: '#1F2937' }}>{bepRoasLabel}</strong>{' '}/ CPC{' '}
+              <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}—{' '}
+              <strong className="mono" style={{ color: '#1F2937' }}>{bepRoasLabel}</strong>{' '}/{' '}
               <span className="mono">{cpcLabel}</span>{' '}
               <span style={{ color: '#EF4444' }}>(VAT 별도)</span>
             </div>

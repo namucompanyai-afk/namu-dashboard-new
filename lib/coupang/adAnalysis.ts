@@ -588,9 +588,10 @@ export function buildManualReviewRows(
  *  - 작은 옵션(낮은 봉수) 우선 정렬
  */
 export interface BepCpcEntry {
-  optionId: string
-  label: string  // 표시용 ("1봉" / "2봉" / "0.8kg 1봉" 등)
-  cpc: number    // VAT 별도
+  optionId: string  // 같은 라벨에 옵션 여러 개면 첫 옵션 ID (참고용)
+  label: string     // 표시용 ("1봉" / "2봉" / "0.8kg 1봉" 등)
+  cpc: number       // BEP CPC (VAT 별도) — 같은 라벨 내 광고비 가중평균
+  bepPct: number    // BEP ROAS (%) — 같은 라벨 내 광고비 가중평균
   bagCount: number
   kgPerBag: number
 }
@@ -609,29 +610,67 @@ export function buildBepCpcForCampaign(
   const avgCvr = totalClicks > 0 ? totalOrders / totalClicks : null
   if (avgCvr == null || avgCvr <= 0) return []
 
-  const seen = new Set<string>()
+  // 옵션별 광고비 합산 (가중치)
+  const adCostByOpt = new Map<string, number>()
   for (const r of campaign.rows) {
-    if (r.adOptionId) seen.add(String(r.adOptionId).trim())
+    const id = r.adOptionId ? String(r.adOptionId).trim() : ''
+    if (!id) continue
+    adCostByOpt.set(id, (adCostByOpt.get(id) ?? 0) + (r.adCost || 0))
   }
 
-  const out: BepCpcEntry[] = []
-  for (const optId of seen) {
+  // 라벨 단위 그룹 — 같은 봉수(또는 옵션명) 옵션 묶기
+  interface LabelGroup {
+    label: string
+    bagCount: number
+    kgPerBag: number
+    firstOptionId: string
+    /** 광고비 가중 합 — Σ (adCost × bep), Σ (adCost × cpc), Σ adCost */
+    bepNum: number
+    cpcNum: number
+    den: number
+  }
+  const groups = new Map<string, LabelGroup>()
+  for (const optId of adCostByOpt.keys()) {
     const price = priceMap.get(optId)
     const bep = bepMap.get(optId)
     const row = rowMap.get(optId)
     if (!price || !bep || !row) continue
-    const cpc = (price * avgCvr) / (bep / 100 * 1.21)
+    const cpc = (price * avgCvr) / ((bep / 100) * 1.21)
     if (!Number.isFinite(cpc) || cpc <= 0) continue
     const label =
       row.bagCount > 0 && row.kgPerBag > 0
         ? `${row.bagCount}봉`
         : (row.optionName || `${optId.slice(-4)}`)
+    // 가중치: 광고비 — 0 이면 가중치 1 (단순 평균 효과, 신규 옵션 케이스)
+    const w = Math.max(adCostByOpt.get(optId) ?? 0, 1)
+    const g = groups.get(label)
+    if (g) {
+      g.bepNum += bep * w
+      g.cpcNum += cpc * w
+      g.den += w
+    } else {
+      groups.set(label, {
+        label,
+        bagCount: row.bagCount,
+        kgPerBag: row.kgPerBag,
+        firstOptionId: optId,
+        bepNum: bep * w,
+        cpcNum: cpc * w,
+        den: w,
+      })
+    }
+  }
+
+  const out: BepCpcEntry[] = []
+  for (const g of groups.values()) {
+    if (g.den <= 0) continue
     out.push({
-      optionId: optId,
-      label,
-      cpc,
-      bagCount: row.bagCount,
-      kgPerBag: row.kgPerBag,
+      optionId: g.firstOptionId,
+      label: g.label,
+      cpc: g.cpcNum / g.den,
+      bepPct: g.bepNum / g.den,
+      bagCount: g.bagCount,
+      kgPerBag: g.kgPerBag,
     })
   }
 
@@ -641,11 +680,5 @@ export function buildBepCpcForCampaign(
     return a.kgPerBag - b.kgPerBag
   })
 
-  // 같은 라벨 dedupe (1봉 여러 옵션이면 첫 1개만)
-  const seenLabel = new Set<string>()
-  return out.filter((e) => {
-    if (seenLabel.has(e.label)) return false
-    seenLabel.add(e.label)
-    return true
-  })
+  return out
 }
