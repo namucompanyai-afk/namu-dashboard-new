@@ -76,13 +76,23 @@ function pickClosestOption(
   return best
 }
 
-/** YYYY-MM-DD → 그 주의 월요일(YYYY-MM-DD) — ISO week 기준 */
-function startOfWeek(dateStr: string): string {
+/** YYYY-MM-DD → 그 주의 일요일(YYYY-MM-DD) — 쿠팡과 동일 일~토 주차 */
+export function startOfWeek(dateStr: string): string {
   const d = new Date(dateStr)
   if (!Number.isFinite(d.getTime())) return dateStr
   const dow = d.getDay() // 0=일, 1=월, ..., 6=토
-  const diff = dow === 0 ? -6 : 1 - dow // 월요일까지 며칠 빼야 하는지
-  d.setDate(d.getDate() + diff)
+  d.setDate(d.getDate() - dow) // 일요일까지
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** YYYY-MM-DD → 그 주의 토요일(YYYY-MM-DD) — 일~토 주차 끝 */
+export function endOfWeek(dateStr: string): string {
+  const start = startOfWeek(dateStr)
+  const d = new Date(start)
+  d.setDate(d.getDate() + 6)
   const y = d.getFullYear()
   const m = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
@@ -138,6 +148,7 @@ export function computeAliasTrend(
     }))
   return out
 }
+
 
 export function computeNaverDiagnosis(
   settlement: NaverSettlementData,

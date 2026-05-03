@@ -242,6 +242,66 @@ export default function NaverDiagnosisPage() {
     return () => clearTimeout(t)
   }, [diagnosis, saveLast])
 
+  // 정산파일 업로드 시 period 길이로 자동 weekly/monthly snapshot 저장 (라이브 모드만)
+  //   6~8일 → weekly (weekKey = period.start)
+  //   28~31일 → monthly (monthKey = YYYY-MM of period.start)
+  //   그 외 → 자동 저장 X
+  //   같은 키 있으면 id 재사용 (덮어쓰기)
+  const autoSavedKeyRef = useRef<string>('')
+  const adCostKey = manual.adCost
+  const shipSmallKey = `${manual.shipSmall.unit}|${manual.shipSmall.count}`
+  const shipMediumKey = `${manual.shipMedium.unit}|${manual.shipMedium.count}`
+  const shipLargeKey = `${manual.shipLarge.unit}|${manual.shipLarge.count}`
+
+  useEffect(() => {
+    if (loadedSnapshot) return // frozen view 시 스킵
+    if (!diagnosis) return
+    const start = diagnosis.period.start
+    const end = diagnosis.period.end
+    if (!start || !end) return
+    const days = Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1
+
+    let trendType: 'weekly' | 'monthly' | null = null
+    let weekKey: string | null = null
+    let monthKey: string | null = null
+    let label = ''
+    if (days >= 6 && days <= 8) {
+      trendType = 'weekly'
+      weekKey = start
+      label = `주별: ${start} ~ ${end} (${days}일)`
+    } else if (days >= 28 && days <= 31) {
+      trendType = 'monthly'
+      monthKey = start.slice(0, 7)
+      label = `${start.slice(0, 7)} 월별`
+    } else {
+      return
+    }
+
+    // 가드: 같은 (key + adCost + ship) 조합 한 번만 저장
+    const guardKey = `${trendType}|${weekKey ?? monthKey}|${adCostKey}|${shipSmallKey}|${shipMediumKey}|${shipLargeKey}|${diagnosis.netProfit}`
+    if (autoSavedKeyRef.current === guardKey) return
+
+    const t = setTimeout(async () => {
+      const cur = useNaverStore.getState().snapshots
+      const existing = cur.find(
+        (s) =>
+          s.includeInTrend &&
+          ((trendType === 'weekly' && s.weekKey === weekKey) ||
+            (trendType === 'monthly' && s.monthKey === monthKey)),
+      )
+      autoSavedKeyRef.current = guardKey
+      await useNaverStore.getState().saveExplicit(label, {
+        weekKey,
+        monthKey,
+        trendType,
+        includeInTrend: true,
+        id: existing?.id,
+      })
+    }, 1200)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagnosis, adCostKey, shipSmallKey, shipMediumKey, shipLargeKey, loadedSnapshot])
+
   const onResetAll = async () => {
     if (!confirm('정말 모든 분석을 초기화하시겠습니까?\n저장된 분석도 모두 삭제됩니다 (마진마스터는 유지).')) return
     await purgeAll()
@@ -994,9 +1054,33 @@ function NaverTrendChart({
       })
   }, [snapshots])
 
+  // 월별 데이터:
+  //   1) trendType='monthly' snapshot 우선 사용
+  //   2) 같은 monthKey 의 monthly 가 없으면 weekly snapshot 들 합산해서 1개 점 생성
   const monthlyData = useMemo<TrendDatum[]>(() => {
-    return snapshots
-      .filter((a) => a.includeInTrend && a.trendType === 'monthly' && a.monthKey)
+    const monthlyDirect = snapshots.filter(
+      (a) => a.includeInTrend && a.trendType === 'monthly' && a.monthKey,
+    )
+    const monthlyKeys = new Set(monthlyDirect.map((a) => a.monthKey).filter(Boolean) as string[])
+
+    // weekly snapshot 들을 monthKey(=weekKey 의 YYYY-MM)로 그룹 합산
+    const weeklyByMonth = new Map<
+      string,
+      { revenue: number; netProfit: number; analyses: NaverSnapshotMeta[] }
+    >()
+    for (const a of snapshots) {
+      if (!a.includeInTrend || a.trendType !== 'weekly' || !a.weekKey) continue
+      const mk = a.weekKey.slice(0, 7)
+      if (monthlyKeys.has(mk)) continue // monthly 직접 저장이 있으면 건너뜀
+      const s = a.summary as unknown as { revenue?: number; netProfit?: number }
+      const acc = weeklyByMonth.get(mk) ?? { revenue: 0, netProfit: 0, analyses: [] }
+      acc.revenue += s.revenue ?? 0
+      acc.netProfit += s.netProfit ?? 0
+      acc.analyses.push(a)
+      weeklyByMonth.set(mk, acc)
+    }
+
+    const fromMonthly: TrendDatum[] = monthlyDirect
       .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
       .map((a) => {
         const s = a.summary as unknown as { revenue?: number; netProfit?: number }
@@ -1008,6 +1092,21 @@ function NaverTrendChart({
           _analysis: a,
         }
       })
+
+    const fromWeekly: TrendDatum[] = Array.from(weeklyByMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([mk, v]) => ({
+        key: mk,
+        label: formatMonthLabel(mk),
+        매출: Math.round(v.revenue / 10000),
+        순이익: Math.round(v.netProfit / 10000),
+        // 클릭 시 가장 최근 weekly 분석을 frozen view 로 (대표값)
+        _analysis: v.analyses.sort((x, y) =>
+          (y.weekKey || '').localeCompare(x.weekKey || ''),
+        )[0],
+      }))
+
+    return [...fromMonthly, ...fromWeekly].sort((a, b) => a.key.localeCompare(b.key))
   }, [snapshots])
 
   const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
