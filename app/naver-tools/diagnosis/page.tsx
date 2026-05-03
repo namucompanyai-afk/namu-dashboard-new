@@ -923,20 +923,22 @@ export default function NaverDiagnosisPage() {
                   </div>
                 )}
 
+                {/* 행1: 매출 / 매출건수 / 배송비매출 / 정산금 */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard label="매출" value={fmtMan(d.revenue)} sub={productCountSub} />
+                  <KpiCard
+                    label="매출 건수"
+                    value={(d.matched + d.unmatched).toLocaleString()}
+                    sub="상품주문"
+                  />
+                  <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
                   <KpiCard
                     label="정산금"
                     value={fmtMan(d.settleAmount)}
                     sub={`수수료 ${fmtMan(d.settleFee)} (${feePct}%)`}
                   />
-                  <KpiCard
-                    label="매출 건수"
-                    value={(d._productOrderCount ?? 0).toLocaleString()}
-                    sub="상품주문"
-                  />
-                  <KpiCard label="기간" value={fmtPeriod(d.period.start, d.period.end)} />
                 </div>
+                {/* 행2: 총비용 / 택배비 / 박스비 / CPM */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   <KpiCard
                     label="총 비용"
@@ -944,7 +946,16 @@ export default function NaverDiagnosisPage() {
                     formula="원가 + 봉투 + 박스 + 택배 + 포장비"
                     sub={`원가 ${fmtMan(d.cost)} · 매칭 ${d.matched}건 / 미매칭 ${d.unmatched}건 (${fmtMan(d.unmatchedRevenue)}, ${unmatchedPct}%)`}
                   />
-                  <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
+                  <KpiCard
+                    label="택배비"
+                    value={fmtMan(-d.shipReal)}
+                    sub={`소 ${manual.shipSmall.count} + 중 ${manual.shipMedium.count} + 대 ${manual.shipLarge.count}`}
+                  />
+                  <KpiCard
+                    label="박스비"
+                    value={fmtMan(-d.box)}
+                    sub={`소 ${manual.shipSmall.count} + 중 ${manual.shipMedium.count} + 대 ${manual.shipLarge.count}`}
+                  />
                   <KpiCard
                     label="CPM"
                     value={fmtMan(-d.adCost)}
@@ -954,6 +965,12 @@ export default function NaverDiagnosisPage() {
                         : '수기 입력'
                     }
                   />
+                </div>
+                {/* 행3: 봉투비 / 취소율 / 반품율 / 순이익 */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                  <KpiCard label="봉투비" value={fmtMan(-d.bag)} sub="옵션 봉수 × 단가" />
+                  <KpiCard label="취소율" value="—" sub="다음 단계" />
+                  <KpiCard label="반품율" value="—" sub="다음 단계" />
                   <KpiCard
                     label="순이익"
                     value={fmtMan(d.netProfit)}

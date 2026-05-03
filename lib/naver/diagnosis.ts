@@ -66,6 +66,13 @@ export interface NaverDiagnosisResult {
   products: NaverProductBreakdown[]
 }
 
+/** 박스 단가 (VAT 포함) — 비용테이블 윙 박스/택배 매트릭스 A35:E37 기본값 */
+const BOX_UNIT_PRICE = {
+  small: 371,
+  medium: 1123,
+  large: 1300,
+} as const
+
 function pickClosestOption(
   options: NaverMarginOption[],
   basePrice: number,
@@ -170,6 +177,7 @@ export function computeNaverDiagnosis(
 
   let cost = 0
   let bag = 0
+  // box: 택배 수량(소/중/대) × 박스 단가 — 옵션 무게 기반 X (사용자 입력 기반)
   let box = 0
   let pack = 0
   let matched = 0
@@ -192,7 +200,7 @@ export function computeNaverDiagnosis(
       if (opt) {
         cost += opt.cost
         bag += opt.bag
-        box += opt.box
+        // box: 옵션별 합산 X (아래 manual.ship*.count × 박스 단가 로 계산)
         pack += opt.pack
         acc.cost += opt.cost
         acc.matched = true
@@ -208,6 +216,12 @@ export function computeNaverDiagnosis(
     }
     products.set(name, acc)
   }
+
+  // 박스비 = 택배 수량 × 박스 단가 (사용자 입력 기반)
+  box =
+    manual.shipSmall.count * BOX_UNIT_PRICE.small +
+    manual.shipMedium.count * BOX_UNIT_PRICE.medium +
+    manual.shipLarge.count * BOX_UNIT_PRICE.large
 
   const shipReal =
     manual.shipSmall.unit * manual.shipSmall.count +
