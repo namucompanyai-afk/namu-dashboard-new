@@ -12,7 +12,6 @@ import {
   YAxis,
 } from 'recharts'
 import { useNaverStore, type NaverSnapshotMeta } from '@/lib/naver/store'
-import { parseNaverSettlement } from '@/lib/naver/parsers/settlement'
 import {
   computeAliasTrend,
   computeNaverDiagnosis,
@@ -23,6 +22,7 @@ import {
 import type { NaverSettlementData, NaverSettlementRow } from '@/lib/naver/parsers/settlement'
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
+import SettlementUploadModal from '@/components/naver/SettlementUploadModal'
 
 /** 원 단위 그대로 (음수 보존). 1만 미만 또는 정확한 값 표시 필요할 때 사용. */
 function fmtKRW(n: number): string {
@@ -158,7 +158,6 @@ export default function NaverDiagnosisPage() {
     marginMissing,
     snapshots,
     marginSavedAt,
-    setSettlement,
     setManual,
     loadFromApi,
     saveLast,
@@ -320,10 +319,7 @@ export default function NaverDiagnosisPage() {
     if (loadedSnapshot?.id === id) setLoadedSnapshot(null)
   }
 
-  const settleInputRef = useRef<HTMLInputElement>(null)
-
-  const [settleFile, setSettleFile] = useState<string>('')
-  const [parseError, setParseError] = useState<string>('')
+  const [uploadModalOpen, setUploadModalOpen] = useState(false)
 
   useEffect(() => {
     loadFromApi()
@@ -367,6 +363,13 @@ export default function NaverDiagnosisPage() {
     }, 1000)
     return () => clearTimeout(t)
   }, [diagnosis, saveLast])
+
+  // 새 정산내역 업로드(modal 적용) → frozen view 해제
+  const settlementId = settlement?.dateRange ? `${settlement.dateRange.min}|${settlement.dateRange.max}|${settlement.productOrderCount}` : ''
+  useEffect(() => {
+    if (settlementId && loadedSnapshot) setLoadedSnapshot(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settlementId])
 
 
   const onResetAll = async () => {
@@ -483,19 +486,6 @@ export default function NaverDiagnosisPage() {
     })
   }, [manual])
 
-  const onPickSettlement = async (file: File) => {
-    try {
-      setParseError('')
-      const buf = await file.arrayBuffer()
-      const data = await parseNaverSettlement(buf)
-      setSettleFile(file.name)
-      setSettlement(data, file.name)
-      // 새 정산파일 업로드 → frozen view 해제, 라이브 모드
-      setLoadedSnapshot(null)
-    } catch (e) {
-      setParseError('정산파일 파싱 실패: ' + (e instanceof Error ? e.message : String(e)))
-    }
-  }
 
   const onSaveManual = () => {
     if (!settlement) return
@@ -754,21 +744,11 @@ export default function NaverDiagnosisPage() {
         </div>
       )}
 
-      {/* 업로드 영역 — 정산파일만 (마진마스터는 데이터 관리에서 자동 로드) */}
-      <div className="grid grid-cols-1 gap-4 mb-4">
-        <UploadCard
-          label="정산파일 (.xlsx)"
-          desc="네이버 정산내역 — 수수료상세-건별 시트"
-          fileName={settleFile}
-          inputRef={settleInputRef}
-          onPick={onPickSettlement}
-          summary={
-            settlement
-              ? `${settlement.productOrderCount}건 / ${settlement.dateRange?.min ?? '?'} ~ ${settlement.dateRange?.max ?? '?'}`
-              : ''
-          }
-        />
+      {/* 업로드 카드 — 정산내역 + 주문조회 (모달) */}
+      <div className="mb-4">
+        <SettlementUploadCard onClickUpload={() => setUploadModalOpen(true)} />
       </div>
+      <SettlementUploadModal open={uploadModalOpen} onOpenChange={setUploadModalOpen} />
 
       {/* 마진마스터 자동 로드 상태 */}
       {marginLoading && (
@@ -795,12 +775,6 @@ export default function NaverDiagnosisPage() {
         <div className="mb-4 text-xs text-gray-500">
           마진마스터 자동 로드: 매칭 {productMatch.size}개 / 옵션{' '}
           {Array.from(marginMap.values()).reduce((s, a) => s + a.length, 0)}개
-        </div>
-      )}
-
-      {parseError && (
-        <div className="mb-6 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded">
-          {parseError}
         </div>
       )}
 
@@ -1010,6 +984,69 @@ export default function NaverDiagnosisPage() {
           정산파일 + 마진마스터를 모두 업로드하면 진단 결과가 표시됩니다.
         </div>
       )}
+    </div>
+  )
+}
+
+function SettlementUploadCard({ onClickUpload }: { onClickUpload: () => void }) {
+  const settlement = useNaverStore((s) => s.settlement)
+  const settlementFileName = useNaverStore((s) => s.settlementFileName)
+  const orderQuery = useNaverStore((s) => s.orderQuery)
+  const orderQueryFileName = useNaverStore((s) => s.orderQueryFileName)
+  const orderQuerySavedAt = useNaverStore((s) => s.orderQuerySavedAt)
+
+  const settleSummary = settlement
+    ? `${settlement.productOrderCount.toLocaleString()}건 / ${settlement.dateRange?.min ?? '?'} ~ ${settlement.dateRange?.max ?? '?'}`
+    : null
+  const orderSummary = orderQuery
+    ? `${orderQuery.rows.length.toLocaleString()}건 / ${
+        orderQuery.periodStart
+          ? `${orderQuery.periodStart.toISOString().slice(0, 10)} ~ ${orderQuery.periodEnd?.toISOString().slice(0, 10) ?? '?'}`
+          : '?'
+      }`
+    : null
+  const updatedAt = orderQuerySavedAt
+    ? new Date(orderQuerySavedAt).toLocaleString('ko-KR')
+    : null
+  const both = !!settlement && !!orderQuery
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-4 flex items-center justify-between gap-4">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 text-sm font-semibold mb-1">
+          <span>🛒</span>
+          <span>스마트스토어 매출 연결</span>
+        </div>
+        {!both ? (
+          <div className="text-xs text-gray-500">
+            정산내역 + 주문조회 파일을 업로드하세요 (옵션·수량 매칭으로 정확 마진)
+          </div>
+        ) : (
+          <div className="space-y-0.5 text-xs text-gray-700">
+            <div>
+              ✓ <span className="font-medium">정산내역</span>{' '}
+              <span className="text-gray-500" title={settlementFileName}>
+                {settlementFileName}
+              </span>{' '}
+              · {settleSummary}
+            </div>
+            <div>
+              ✓ <span className="font-medium">주문조회</span>{' '}
+              <span className="text-gray-500" title={orderQueryFileName}>
+                {orderQueryFileName}
+              </span>{' '}
+              · {orderSummary}
+            </div>
+            {updatedAt && <div className="text-gray-400">업로드 일시: {updatedAt}</div>}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={onClickUpload}
+        className="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 whitespace-nowrap"
+      >
+        {both ? '재업로드' : '📤 파일 업로드'}
+      </button>
     </div>
   )
 }
