@@ -1268,6 +1268,9 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
           <>
             <span className="bid-recommend">{Math.round(r.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
             <span className="bid-vat-incl">(+VAT) {Math.round(r.recommendedBidVatExcl * 1.1).toLocaleString('ko-KR')}원</span>
+            {r.bidSource === 'bep' && (
+              <span style={{ display: 'block', fontSize: 10, color: '#94A3B8', marginTop: 2 }}>(BEP 기준)</span>
+            )}
           </>
         ) : <span className="text-muted" style={{ fontSize: 11 }}>—</span>}
       </td>
