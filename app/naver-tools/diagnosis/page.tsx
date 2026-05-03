@@ -40,6 +40,56 @@ function fmtPeriodWithDays(start: string, end: string): string {
   return `${start} ~ ${end} (${days}일)`
 }
 
+/** "2026-01-01 ~ 01-31" — 앞 YYYY-MM-DD 풀, 뒤는 같은 연·월일 때 MM-DD 만 */
+function fmtPeriodCompact(start: string, end: string): string {
+  if (!start || !end) return '—'
+  const [sy, sm] = start.split('-')
+  const [ey, em, ed] = end.split('-')
+  if (sy === ey && sm === em) return `${start} ~ ${ed}`
+  if (sy === ey) return `${start} ~ ${em}-${ed}`
+  return `${start} ~ ${end}`
+}
+
+/** YYYY-MM 의 1일/말일 반환 ("2026-01" → ["2026-01-01","2026-01-31"]) */
+function monthRange(monthKey: string): { start: string; end: string } | null {
+  const m = monthKey.match(/^(\d{4})-(\d{2})$/)
+  if (!m) return null
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const lastDay = new Date(y, mo, 0).getDate() // mo는 1-base, 0일 = 전월 말일 = 해당월 말일
+  const start = `${m[1]}-${m[2]}-01`
+  const end = `${m[1]}-${m[2]}-${String(lastDay).padStart(2, '0')}`
+  return { start, end }
+}
+
+/** weekKey + 6일 = 토요일 */
+function weekRange(weekKey: string): { start: string; end: string } | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekKey)) return null
+  const d = new Date(weekKey)
+  if (!Number.isFinite(d.getTime())) return null
+  d.setDate(d.getDate() + 6)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return { start: weekKey, end: `${y}-${m}-${day}` }
+}
+
+/** 헤더 기간 표기 — frozen view 의 trendType 에 따라 분기 */
+function fmtPeriodSmart(
+  loaded: { trendType?: 'weekly' | 'monthly' | null; monthKey?: string | null; weekKey?: string | null } | null,
+  fallback: { start: string; end: string },
+): string {
+  if (loaded?.trendType === 'monthly' && loaded.monthKey) {
+    const r = monthRange(loaded.monthKey)
+    if (r) return fmtPeriodCompact(r.start, r.end)
+  }
+  if (loaded?.trendType === 'weekly' && loaded.weekKey) {
+    const r = weekRange(loaded.weekKey)
+    if (r) return fmtPeriodCompact(r.start, r.end)
+  }
+  return fmtPeriodWithDays(fallback.start, fallback.end)
+}
+
 /** 짧은 기간 표기 (KPI 카드 1줄 유지)
  *   같은 월: "MM-DD ~ DD"  (연도 생략)
  *   같은 연도 다른 월: "MM-DD ~ MM-DD"
@@ -452,7 +502,7 @@ export default function NaverDiagnosisPage() {
                 마지막 업데이트 데이터
               </div>
               <div className="text-sm font-mono font-medium text-gray-800 mt-0.5">
-                {fmtPeriodWithDays(displayDiagnosis.period.start, displayDiagnosis.period.end)}
+                {fmtPeriodSmart(loadedSnapshot, displayDiagnosis.period)}
               </div>
               <div className={'text-[10px] ' + (loadedSnapshot ? 'text-blue-600 font-medium' : 'text-gray-400')}>
                 {loadedSnapshot
@@ -1111,6 +1161,20 @@ function NaverTrendChart({
 
   const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
   const periodLabel = chartMode === 'weekly' ? '주' : '월'
+
+  // 토글 클릭 시 가장 최근 점 자동 frozen view (초기 마운트는 page-level autoLoad 가 처리하므로 스킵)
+  const didInitToggleRef = useRef(false)
+  useEffect(() => {
+    if (!didInitToggleRef.current) {
+      didInitToggleRef.current = true
+      return
+    }
+    if (!onPointClick) return
+    if (trendData.length === 0) return
+    const latest = trendData[trendData.length - 1]
+    if (latest?._analysis) onPointClick(latest._analysis)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartMode])
 
   const ToggleHeader = () => (
     <div className="flex items-center justify-between mb-3">
