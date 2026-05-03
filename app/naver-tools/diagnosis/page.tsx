@@ -392,27 +392,22 @@ export default function NaverDiagnosisPage() {
     l: { unit: '', count: '' },
   })
 
-  // 정산파일 기간 일수 (운영일수 디폴트)
-  const settlementDays = (() => {
-    const s = settlement?.dateRange?.min
-    const e = settlement?.dateRange?.max
-    if (!s || !e) return 0
-    return Math.round((Date.parse(e) - Date.parse(s)) / 86400000) + 1
-  })()
+  // CPM 운영일수 디폴트 (1주일 = 7일 고정)
+  const DEFAULT_CPM_DAYS = 7
 
   React.useEffect(() => {
     // 0/빈값은 ''로 둬서 화면에 빈칸으로 표시. 단가는 0이어도 그대로(고정 디폴트).
     const blankIfZero = (n: number) => (n ? String(n) : '')
     setCpmCountDraft(blankIfZero(manual.cpmCount ?? 0))
-    // 운영일수 디폴트: manual 에 저장된 값 우선, 없으면 정산파일 기간 일수
+    // 운영일수 디폴트: manual 에 저장된 값 우선, 없으면 7일 고정
     const days = manual.cpmDays ?? 0
-    setCpmDaysDraft(days ? String(days) : settlementDays ? String(settlementDays) : '')
+    setCpmDaysDraft(days ? String(days) : String(DEFAULT_CPM_DAYS))
     setShipDraft({
       s: { unit: String(manual.shipSmall.unit), count: blankIfZero(manual.shipSmall.count) },
       m: { unit: String(manual.shipMedium.unit), count: blankIfZero(manual.shipMedium.count) },
       l: { unit: String(manual.shipLarge.unit), count: blankIfZero(manual.shipLarge.count) },
     })
-  }, [manual, settlementDays])
+  }, [manual])
 
   const onPickSettlement = async (file: File) => {
     try {
@@ -776,7 +771,7 @@ export default function NaverDiagnosisPage() {
                 value={cpmDaysDraft}
                 onChange={(e) => setCpmDaysDraft(e.target.value.replace(/[^0-9]/g, ''))}
                 className="w-20 px-2 py-1 border rounded text-sm text-right"
-                placeholder={settlementDays ? String(settlementDays) : '0'}
+                placeholder={String(DEFAULT_CPM_DAYS)}
               />
               <span className="text-xs text-gray-400">일</span>
               <span className="text-xs text-gray-400">=</span>
@@ -788,7 +783,7 @@ export default function NaverDiagnosisPage() {
               </span>
             </div>
             <div className="text-[10px] text-gray-400 ml-[5.5rem] mt-1">
-              총 비용 = 단가 × 건수 / {cpmConfig.baseDays}일 × 운영일수 (운영일수 디폴트=정산기간 {settlementDays || 0}일)
+              총 비용 = 단가 × 건수 / {cpmConfig.baseDays}일 × 운영일수 (운영일수 디폴트=7일)
             </div>
           </div>
 
