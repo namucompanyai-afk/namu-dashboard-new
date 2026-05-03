@@ -18,7 +18,7 @@ import { parseMarginMaster } from '@/lib/coupang/parsers/marginMaster'
 import { parsePriceInventory } from '@/lib/coupang/parsers/priceInventory'
 import { parseSettlement } from '@/lib/coupang/parsers/settlement'
 import { parseNaverProductMatch } from '@/lib/naver/parsers/productMatch'
-import { parseNaverMarginMaster } from '@/lib/naver/marginNaver'
+import { parseNaverMarginMaster, parseNaverCpmConfig } from '@/lib/naver/marginNaver'
 
 type LoadingState = 'idle' | 'loading' | 'saving' | 'success' | 'error'
 
@@ -110,17 +110,19 @@ export default function DataManagementPage() {
 
       await saveToSupabase('margin_master', r.master, file.name)
 
-      // 네이버 시트 2개 동시 파싱+저장 (Map → object 직렬화)
+      // 네이버 시트 2개 + CPM 단가 동시 파싱+저장 (Map → object 직렬화)
       try {
-        const [naverMatch, naverMargin] = await Promise.all([
+        const [naverMatch, naverMargin, cpmConfig] = await Promise.all([
           parseNaverProductMatch(buf),
           parseNaverMarginMaster(buf),
+          parseNaverCpmConfig(buf),
         ])
         const matchObj = Object.fromEntries(naverMatch)
         const marginObj: Record<string, unknown[]> = {}
         for (const [k, v] of naverMargin) marginObj[k] = v
         await saveToSupabase('naver_match', matchObj, file.name)
         await saveToSupabase('naver_margin', marginObj, file.name)
+        await saveToSupabase('naver_cpm', cpmConfig, file.name)
       } catch (e) {
         console.warn('네이버 시트 파싱/저장 건너뜀:', e)
       }

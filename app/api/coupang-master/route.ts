@@ -22,6 +22,7 @@ const VALID_TYPES = [
   'price_inventory',
   'naver_match',
   'naver_margin',
+  'naver_cpm',
 ] as const;
 type DataType = typeof VALID_TYPES[number];
 

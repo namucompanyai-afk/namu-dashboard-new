@@ -26,6 +26,14 @@ export interface NaverMarginOption {
 
 export type NaverMarginMap = Map<string, NaverMarginOption[]>
 
+/** 스스 CPM 단가 (비용테이블 시트 'CPM 단가 (스스)' 영역) */
+export interface NaverCpmConfig {
+  unitPrice: number // VAT 포함 (예: 40700)
+  baseDays: number  // 단가 기준 일수 (예: 10)
+}
+
+const DEFAULT_CPM: NaverCpmConfig = { unitPrice: 40700, baseDays: 10 }
+
 function toStr(v: unknown): string {
   return v == null ? '' : String(v).trim()
 }
@@ -51,6 +59,24 @@ function findSheet(wb: XLSX.WorkBook, candidates: string[]): unknown[][] | null 
     }
   }
   return null
+}
+
+/** 비용테이블 시트에서 'CPM 단가 (스스)' 행 찾아 unitPrice/baseDays 파싱 */
+export async function parseNaverCpmConfig(buffer: ArrayBuffer): Promise<NaverCpmConfig> {
+  const wb = XLSX.read(buffer, { type: 'array', cellFormula: false })
+  const aoa = findSheet(wb, ['비용테이블', '비용 테이블'])
+  if (!aoa) return { ...DEFAULT_CPM }
+  for (let i = 0; i < aoa.length; i++) {
+    const row = aoa[i]
+    if (!Array.isArray(row)) continue
+    const a = toStr(row[0])
+    if (a.includes('스스 CPM') || a.includes('네이버 CPM') || a === 'CPM') {
+      const unitPrice = toNum(row[1]) || DEFAULT_CPM.unitPrice
+      const baseDays = toNum(row[2]) || DEFAULT_CPM.baseDays
+      return { unitPrice, baseDays }
+    }
+  }
+  return { ...DEFAULT_CPM }
 }
 
 export async function parseNaverMarginMaster(buffer: ArrayBuffer): Promise<NaverMarginMap> {

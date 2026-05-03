@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { NaverSettlementData } from './parsers/settlement'
 import type { NaverProductMatch } from './parsers/productMatch'
-import type { NaverMarginMap, NaverMarginOption } from './marginNaver'
+import type { NaverMarginMap, NaverMarginOption, NaverCpmConfig } from './marginNaver'
 import {
   computeNaverDiagnosis,
   type NaverDiagnosisResult,
@@ -11,10 +11,14 @@ import {
 const DEFAULT_MANUAL: NaverManualInput = {
   period: '',
   adCost: 0,
+  cpmCount: 0,
+  cpmDays: 0,
   shipSmall: { unit: 2243, count: 0 },
   shipMedium: { unit: 2943, count: 0 },
   shipLarge: { unit: 3443, count: 0 },
 }
+
+const DEFAULT_CPM: NaverCpmConfig = { unitPrice: 40700, baseDays: 10 }
 
 function manualKey(period: string): string {
   return `naver-manual-${period || 'default'}`
@@ -71,6 +75,7 @@ interface NaverStore {
   settlement: NaverSettlementData | null
   productMatch: Map<string, NaverProductMatch> | null
   marginMap: NaverMarginMap | null
+  cpmConfig: NaverCpmConfig
   manual: NaverManualInput
   diagnosis: NaverDiagnosisResult | null
   /** 마진마스터 자동 fetch 진행 상태 */
@@ -146,6 +151,7 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
   settlement: null,
   productMatch: null,
   marginMap: null,
+  cpmConfig: { ...DEFAULT_CPM },
   manual: { ...DEFAULT_MANUAL },
   diagnosis: null,
   marginLoading: false,
@@ -185,12 +191,14 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
     if (get().productMatch && get().marginMap) return
     set({ marginLoading: true, marginMissing: false })
     try {
-      const [matchRes, marginRes] = await Promise.all([
+      const [matchRes, marginRes, cpmRes] = await Promise.all([
         fetch('/api/coupang-master?type=naver_match'),
         fetch('/api/coupang-master?type=naver_margin'),
+        fetch('/api/coupang-master?type=naver_cpm'),
       ])
       const matchJson = await matchRes.json()
       const marginJson = await marginRes.json()
+      const cpmJson = await cpmRes.json().catch(() => null)
 
       const matchData = matchJson?.data
       const marginData = marginJson?.data
@@ -206,7 +214,12 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
       for (const [k, v] of Object.entries(marginData)) {
         if (Array.isArray(v)) marginMap.set(k, v as NaverMarginOption[])
       }
-      set({ productMatch, marginMap, marginLoading: false, marginMissing: false })
+      const cpmData = cpmJson?.data as Partial<NaverCpmConfig> | null
+      const cpmConfig: NaverCpmConfig = {
+        unitPrice: cpmData?.unitPrice ?? DEFAULT_CPM.unitPrice,
+        baseDays: cpmData?.baseDays ?? DEFAULT_CPM.baseDays,
+      }
+      set({ productMatch, marginMap, cpmConfig, marginLoading: false, marginMissing: false })
       get().recompute()
     } catch (e) {
       console.warn('네이버 마진마스터 자동 로드 실패:', e)
@@ -354,6 +367,7 @@ export const useNaverStore = create<NaverStore>((set, get) => ({
       settlement: null,
       productMatch: null,
       marginMap: null,
+      cpmConfig: { ...DEFAULT_CPM },
       manual: { ...DEFAULT_MANUAL },
       diagnosis: null,
       marginLoading: false,

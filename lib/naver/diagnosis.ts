@@ -18,7 +18,12 @@ import type { NaverMarginMap, NaverMarginOption } from './marginNaver'
 
 export interface NaverManualInput {
   period: string
+  /** CPM 비용 합계 (계산 결과: cpmCount × unitPrice / baseDays × cpmDays). 호환 유지용 필드명. */
   adCost: number
+  /** CPM 건수 */
+  cpmCount?: number
+  /** CPM 운영 일수 (디폴트 = period 일수) */
+  cpmDays?: number
   shipSmall: { unit: number; count: number }
   shipMedium: { unit: number; count: number }
   shipLarge: { unit: number; count: number }

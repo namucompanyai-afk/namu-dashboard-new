@@ -379,7 +379,9 @@ export default function NaverDiagnosisPage() {
   }
 
   // 수기 입력 폼 로컬 상태 (저장 버튼 누를 때만 store에 반영)
-  const [adCostDraft, setAdCostDraft] = useState<string>('')
+  const cpmConfig = useNaverStore((s) => s.cpmConfig)
+  const [cpmCountDraft, setCpmCountDraft] = useState<string>('')
+  const [cpmDaysDraft, setCpmDaysDraft] = useState<string>('')
   const [shipDraft, setShipDraft] = useState<{
     s: { unit: string; count: string }
     m: { unit: string; count: string }
@@ -390,16 +392,27 @@ export default function NaverDiagnosisPage() {
     l: { unit: '', count: '' },
   })
 
+  // 정산파일 기간 일수 (운영일수 디폴트)
+  const settlementDays = (() => {
+    const s = settlement?.dateRange?.min
+    const e = settlement?.dateRange?.max
+    if (!s || !e) return 0
+    return Math.round((Date.parse(e) - Date.parse(s)) / 86400000) + 1
+  })()
+
   React.useEffect(() => {
     // 0/빈값은 ''로 둬서 화면에 빈칸으로 표시. 단가는 0이어도 그대로(고정 디폴트).
     const blankIfZero = (n: number) => (n ? String(n) : '')
-    setAdCostDraft(blankIfZero(manual.adCost ?? 0))
+    setCpmCountDraft(blankIfZero(manual.cpmCount ?? 0))
+    // 운영일수 디폴트: manual 에 저장된 값 우선, 없으면 정산파일 기간 일수
+    const days = manual.cpmDays ?? 0
+    setCpmDaysDraft(days ? String(days) : settlementDays ? String(settlementDays) : '')
     setShipDraft({
       s: { unit: String(manual.shipSmall.unit), count: blankIfZero(manual.shipSmall.count) },
       m: { unit: String(manual.shipMedium.unit), count: blankIfZero(manual.shipMedium.count) },
       l: { unit: String(manual.shipLarge.unit), count: blankIfZero(manual.shipLarge.count) },
     })
-  }, [manual])
+  }, [manual, settlementDays])
 
   const onPickSettlement = async (file: File) => {
     try {
@@ -417,14 +430,30 @@ export default function NaverDiagnosisPage() {
 
   const onSaveManual = () => {
     if (!settlement) return
+    const cpmCount = Number(cpmCountDraft) || 0
+    const cpmDays = Number(cpmDaysDraft) || 0
+    const adCost =
+      cpmConfig.baseDays > 0
+        ? Math.round((cpmCount * cpmConfig.unitPrice * cpmDays) / cpmConfig.baseDays)
+        : 0
     setManual({
       period: manual.period,
-      adCost: Number(adCostDraft) || 0,
+      adCost,
+      cpmCount,
+      cpmDays,
       shipSmall: { unit: Number(shipDraft.s.unit) || 0, count: Number(shipDraft.s.count) || 0 },
       shipMedium: { unit: Number(shipDraft.m.unit) || 0, count: Number(shipDraft.m.count) || 0 },
       shipLarge: { unit: Number(shipDraft.l.unit) || 0, count: Number(shipDraft.l.count) || 0 },
     })
   }
+
+  // 미리보기용 CPM 비용
+  const cpmCostPreview = (() => {
+    const cnt = Number(cpmCountDraft) || 0
+    const days = Number(cpmDaysDraft) || 0
+    if (!cpmConfig.baseDays) return 0
+    return Math.round((cnt * cpmConfig.unitPrice * days) / cpmConfig.baseDays)
+  })()
 
   const shipTotal =
     (Number(shipDraft.s.unit) || 0) * (Number(shipDraft.s.count) || 0) +
@@ -707,7 +736,7 @@ export default function NaverDiagnosisPage() {
       <div className="bg-white border rounded-lg p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">
-            {manual.period || '기간 미정'} 광고비 + 택배비 입력
+            {manual.period || '기간 미정'} CPM + 택배비 입력
           </h2>
           <button
             onClick={onSaveManual}
@@ -719,24 +748,48 @@ export default function NaverDiagnosisPage() {
         </div>
 
         <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <label className="text-sm w-20 text-gray-700">광고비</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9,]*"
-              value={adCostDraft === '' ? '' : Number(adCostDraft).toLocaleString('ko-KR')}
-              onChange={(e) => {
-                const raw = e.target.value.replace(/[^0-9]/g, '')
-                setAdCostDraft(raw)
-              }}
-              className="flex-1 max-w-xs px-3 py-1.5 border rounded text-sm text-right"
-              placeholder="0"
-            />
-            <span className="text-sm text-gray-500">원</span>
-            <span className="text-sm text-gray-500 min-w-[8rem]">
-              {adCostDraft === '' ? '' : numToKorean(Number(adCostDraft) || 0)}
-            </span>
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <label className="text-sm w-20 text-gray-700">CPM</label>
+              <span className="text-xs text-gray-500">
+                단가 {cpmConfig.unitPrice.toLocaleString('ko-KR')}원 (VAT 포함, 1건/{cpmConfig.baseDays}일)
+              </span>
+            </div>
+            <div className="flex items-center gap-2 ml-[5.5rem] flex-wrap">
+              <span className="text-xs text-gray-500">건수</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9,]*"
+                value={cpmCountDraft === '' ? '' : Number(cpmCountDraft).toLocaleString('ko-KR')}
+                onChange={(e) => {
+                  const raw = e.target.value.replace(/[^0-9]/g, '')
+                  setCpmCountDraft(raw)
+                }}
+                className="w-24 px-2 py-1 border rounded text-sm text-right"
+                placeholder="0"
+              />
+              <span className="text-xs text-gray-400">×</span>
+              <span className="text-xs text-gray-500">운영일수</span>
+              <input
+                type="number"
+                value={cpmDaysDraft}
+                onChange={(e) => setCpmDaysDraft(e.target.value.replace(/[^0-9]/g, ''))}
+                className="w-20 px-2 py-1 border rounded text-sm text-right"
+                placeholder={settlementDays ? String(settlementDays) : '0'}
+              />
+              <span className="text-xs text-gray-400">일</span>
+              <span className="text-xs text-gray-400">=</span>
+              <span className="text-sm font-semibold text-gray-700">
+                {fmtKRW(cpmCostPreview)}
+              </span>
+              <span className="text-xs text-gray-500">
+                {cpmCostPreview ? `(${numToKorean(cpmCostPreview)})` : ''}
+              </span>
+            </div>
+            <div className="text-[10px] text-gray-400 ml-[5.5rem] mt-1">
+              총 비용 = 단가 × 건수 / {cpmConfig.baseDays}일 × 운영일수 (운영일수 디폴트=정산기간 {settlementDays || 0}일)
+            </div>
           </div>
 
           <div className="border-t pt-4">
@@ -823,7 +876,15 @@ export default function NaverDiagnosisPage() {
                     sub={`원가 ${fmtMan(d.cost)} · 매칭 ${d.matched}건 / 미매칭 ${d.unmatched}건 (${fmtMan(d.unmatchedRevenue)}, ${unmatchedPct}%)`}
                   />
                   <KpiCard label="배송비 매출" value={fmtMan(d.shipRevenue)} sub="구매자부담−수수료" />
-                  <KpiCard label="광고비" value={fmtMan(-d.adCost)} sub="수기 입력" />
+                  <KpiCard
+                    label="CPM"
+                    value={fmtMan(-d.adCost)}
+                    sub={
+                      manual.cpmCount && manual.cpmDays
+                        ? `${cpmConfig.unitPrice.toLocaleString()}원 × ${manual.cpmCount}건 / ${cpmConfig.baseDays}일 × ${manual.cpmDays}일`
+                        : '수기 입력'
+                    }
+                  />
                   <KpiCard
                     label="순이익"
                     value={fmtMan(d.netProfit)}
