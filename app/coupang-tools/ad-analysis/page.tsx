@@ -270,6 +270,7 @@ export default function AdAnalysisPage() {
         {uploadError && <div style={errorBox}>{uploadError}</div>}
         <KpiSection view={view} />
         <HintBanner />
+        <HistoryNotesSection />
         <CampaignSection
           view={view}
           master={marginMaster as any}
@@ -321,6 +322,7 @@ export default function AdAnalysisPage() {
       {headerNode}
       <KpiSection view={view} />
       <HintBanner />
+      <HistoryNotesSection />
       <CampaignSection
         view={view}
         master={marginMaster as any}
@@ -525,6 +527,159 @@ function HintBanner() {
   return (
     <div className="aa-hint-banner">
       💡 캠페인을 클릭하면 키워드 분석(AI) 또는 입찰가 점검(수동)이 펼쳐집니다. AI 캠페인의 "수동 이동 후보" 키워드 옆에 추천 입찰가가 표시됩니다.
+    </div>
+  )
+}
+
+// ── 운영 메모 (영구 저장) ─────────────────────────────────────
+type HistoryNote = { id: string; ts: string; text: string }
+
+function fmtNoteTs(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function HistoryNotesSection() {
+  const [items, setItems] = useState<HistoryNote[]>([])
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetch('/api/coupang-ad-history')
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return
+        const list = Array.isArray(j?.items) ? (j.items as HistoryNote[]) : []
+        setItems(list)
+      })
+      .catch(() => { if (!cancelled) setItems([]) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const sorted = useMemo(
+    () => [...items].sort((a, b) => (a.ts < b.ts ? 1 : -1)),
+    [items],
+  )
+
+  async function add() {
+    const t = text.trim()
+    if (!t || busy) return
+    setBusy(true)
+    try {
+      const res = await fetch('/api/coupang-ad-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: t }),
+      })
+      const j = await res.json()
+      if (j?.item) {
+        setItems((prev) => [...prev, j.item as HistoryNote])
+        setText('')
+      } else {
+        alert(`저장 실패: ${j?.error ?? '알 수 없는 오류'}`)
+      }
+    } catch (e) {
+      alert(`저장 실패: ${String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id: string) {
+    if (!confirm('이 메모를 삭제할까요?')) return
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/coupang-ad-history?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const j = await res.json()
+      if (j?.ok) {
+        setItems((prev) => prev.filter((it) => it.id !== id))
+      } else {
+        alert(`삭제 실패: ${j?.error ?? '알 수 없는 오류'}`)
+      }
+    } catch (e) {
+      alert(`삭제 실패: ${String(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="aa-sub-section" style={{ marginTop: 16 }}>
+      <div className="aa-sub-section-title" style={{ cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
+        <span>📝 운영 메모 ({loading ? '…' : `${sorted.length}건`})</span>
+        <span style={{ fontSize: 12, color: '#64748B' }}>{open ? '▾ 접기' : '▸ 펼치기'}</span>
+      </div>
+      {open && (
+        <div style={{ padding: 12 }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+            <input
+              type="text"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) add() }}
+              placeholder="예: 5.5일 제외 키워드 셋팅"
+              disabled={busy}
+              style={{ flex: 1, padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, fontFamily: 'inherit' }}
+            />
+            <button
+              className="aa-btn btn-sm"
+              onClick={add}
+              disabled={busy || !text.trim()}
+              style={{ opacity: busy || !text.trim() ? 0.5 : 1 }}
+            >
+              추가
+            </button>
+          </div>
+          {sorted.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#94A3B8', padding: '8px 4px' }}>
+              {loading ? '불러오는 중…' : '등록된 메모가 없습니다.'}
+            </div>
+          ) : (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {sorted.map((it) => (
+                <li
+                  key={it.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    padding: '6px 8px',
+                    borderBottom: '1px solid #F1F5F9',
+                    fontSize: 13,
+                  }}
+                >
+                  <span className="mono" style={{ color: '#64748B', fontSize: 11, minWidth: 110, paddingTop: 2 }}>
+                    {fmtNoteTs(it.ts)}
+                  </span>
+                  <span style={{ flex: 1, whiteSpace: 'pre-wrap', color: '#1F2937' }}>{it.text}</span>
+                  <button
+                    onClick={() => remove(it.id)}
+                    disabled={busy}
+                    title="삭제"
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#94A3B8',
+                      cursor: 'pointer',
+                      fontSize: 14,
+                      padding: '0 4px',
+                    }}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   )
 }
