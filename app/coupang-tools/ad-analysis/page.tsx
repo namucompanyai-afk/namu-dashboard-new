@@ -46,6 +46,8 @@ const fmtRoas = (n: number | null | undefined): string =>
   (n == null || !Number.isFinite(n)) ? '—' : `${Math.round(n)}%`
 const fmtBid = (n: number | null | undefined): string =>
   (n == null || !Number.isFinite(n)) ? '—' : `${Math.round(n).toLocaleString('ko-KR')}원`
+// 쿠팡 입찰가 10원 단위 정책 — 추천 입찰가 노출 우선 올림
+const ceilToTen = (v: number): number => Math.ceil(v / 10) * 10
 
 // ── Generic sort ──────────────────────────────────────────────
 type SortDir = 'asc' | 'desc'
@@ -1055,7 +1057,7 @@ function KeywordOptionRow({ entry }: { entry: KeywordOption }) {
           <span className="aa-kw-opt-metric">전환율 <strong className="mono">{entry.cvrPct != null ? `${entry.cvrPct.toFixed(1)}%` : '—'}</strong></span>
           <span className="aa-kw-opt-metric">BEP CPC <strong className="mono">{entry.bepCpcVatExcl != null ? `${Math.round(entry.bepCpcVatExcl).toLocaleString('ko-KR')}원` : '—'}</strong></span>
           <span className="aa-kw-opt-metric">추천 입찰가 {entry.recommendedBidVatExcl != null
-            ? <span className="bid-recommend">{Math.round(entry.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
+            ? <span className="bid-recommend">{ceilToTen(entry.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
             : <span className="text-muted">—</span>}
             {entry.cvrSource === 'campaign' && (
               <span style={{ marginLeft: 4, fontSize: 10, color: '#94A3B8' }}>(캠페인 평균 CVR)</span>
@@ -1300,8 +1302,8 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
       <td className="num">
         {r.recommendedBidVatExcl != null ? (
           <>
-            <span className="bid-recommend">{Math.round(r.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
-            <span className="bid-vat-incl">(+VAT) {Math.round(r.recommendedBidVatExcl * 1.1).toLocaleString('ko-KR')}원</span>
+            <span className="bid-recommend">{ceilToTen(r.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
+            <span className="bid-vat-incl">(+VAT) {ceilToTen(r.recommendedBidVatExcl * 1.1).toLocaleString('ko-KR')}원</span>
             {r.bidSource === 'bep' && (
               <span style={{ display: 'block', fontSize: 10, color: '#94A3B8', marginTop: 2 }}>(BEP 기준)</span>
             )}
