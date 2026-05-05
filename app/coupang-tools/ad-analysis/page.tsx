@@ -1156,7 +1156,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
       '광고비 (+VAT)': r.adCostVat,
       '광고 매출': r.revenue,
       '추천 액션': r.action === 'keep' ? '유지' : r.action === 'move' ? '수동 이동' : '제외',
-      '추천 입찰가 (VAT 별도, 5% 안전마진)': r.recommendedBidVatExcl,
+      '추천 입찰가 (VAT 별도, 5% 안전마진)': r.recommendedBidVatExcl != null ? ceilToTen(r.recommendedBidVatExcl) : null,
     }))
     const filename = `광고분석_검색키워드_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
     exportXlsx(data, filename, '검색키워드')
