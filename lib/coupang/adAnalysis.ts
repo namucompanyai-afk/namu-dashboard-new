@@ -27,7 +27,15 @@ import type { AdCampaignRow } from './parsers/adCampaign'
 import type { CostMaster, MarginCalcRow } from './parsers/marginMaster'
 
 export type CampaignType = 'ai' | 'manual' | 'unknown'
-export type KeywordAction = 'keep' | 'move' | 'exclude'
+/** 추천 액션 6단:
+ *  - growing      : 클릭 < 100 + ROAS ≥ BEP (성장 중)
+ *  - low_sample   : 클릭 < 100 + ROAS < BEP / 또는 BEP·ROAS 미산정 (모수 부족)
+ *  - enhance      : 클릭 ≥ 100 + ROAS ≥ BEP × 2 (강화)
+ *  - maintain     : 클릭 ≥ 100 + BEP ≤ ROAS < BEP × 2 (유지)
+ *  - lower_bid    : 클릭 ≥ 100 + 0 < ROAS < BEP (입찰가 ↓)
+ *  - exclude      : 클릭 ≥ 100 + ROAS = 0 (제외, 100원 강제)
+ */
+export type KeywordAction = 'enhance' | 'maintain' | 'lower_bid' | 'exclude' | 'growing' | 'low_sample'
 
 /** 캠페인 이름 → AI/수동/미분류 */
 export function classifyCampaign(name: string): CampaignType {
@@ -98,50 +106,6 @@ function weightedBep(
   return num / den
 }
 
-/** 광고비 가중 — 매출 0 키워드용 fallback 단가/BEP 산출.
- *  weightedBep 는 매출 가중이라 매출 0 키워드에서 null 반환 → 광고비(adCost) 가중으로 보강. */
-function weightedByAdCost(
-  rows: AdCampaignRow[],
-  bepByOptionId: Map<string, number>,
-  priceMap: Map<string, number>,
-): { price: number | null; bep: number | null } {
-  let priceN = 0, priceD = 0
-  let bepN = 0, bepD = 0
-  for (const r of rows) {
-    const price = priceMap.get(r.adOptionId)
-    const bep = bepByOptionId.get(r.adOptionId)
-    const w = Math.max(r.adCost || 0, 1)  // 광고비 0이어도 가중치 1 (단순 평균 효과)
-    if (price && price > 0) {
-      priceN += price * w
-      priceD += w
-    }
-    if (bep && bep > 0 && Number.isFinite(bep)) {
-      bepN += bep * w
-      bepD += w
-    }
-  }
-  return {
-    price: priceD > 0 ? priceN / priceD : null,
-    bep: bepD > 0 ? bepN / bepD : null,
-  }
-}
-
-/** BEP CPC fallback — 옵션 단가 + 캠페인 평균 CVR + 옵션 BEP 만으로 입찰가 산출.
- *  공식: (CVR × 단가) / (BEP × 1.1) × 0.95 (옵션 표 BEP CPC 공식과 일관, 5% 안전마진).
- *  매출 0 또는 클릭 <20 인 키워드에 적용. */
-function bepFallbackBid(
-  unitPrice: number | null,
-  avgCvr: number | null,
-  optBepPct: number | null,
-): number | null {
-  if (!unitPrice || unitPrice <= 0) return null
-  if (!avgCvr || avgCvr <= 0) return null
-  if (!optBepPct || optBepPct <= 0) return null
-  const bid = (avgCvr * unitPrice) / ((optBepPct / 100) * 1.1) * 0.95
-  if (!Number.isFinite(bid) || bid <= 0) return null
-  return bid
-}
-
 /** 추천 입찰가 (VAT 별도). 클릭 < 20 또는 BEP 없음이면 null.
  *  공식: 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) — BEP 대비 5% 여유 + VAT 환산. */
 export function recommendedBid(revenue: number, clicks: number, bepPct: number | null): number | null {
@@ -154,19 +118,53 @@ export function recommendedBid(revenue: number, clicks: number, bepPct: number |
   return bid
 }
 
-/** 추천 액션 분류 */
-export function classifyKeywordAction(
+/** 추천 액션 6단 분류 + 입찰가 산출 (page.tsx 키워드 row 용).
+ *  반환값:
+ *    action     — 6단 분류 결과
+ *    bid        — 추천 입찰가 (VAT 별도). null = 노출 안 함 ("—")
+ *    bidSource  — 입찰가 산출 근거 ('revenue' | 'fixed_100' | 'low_sample' | null)
+ *
+ *  매출 역산 공식: 매출 ÷ (클릭수 × BEP × 1.155) — BEP 5% 여유 + VAT 환산
+ *  ※ 'growing' 케이스는 클릭 <100 이라도 매출 역산 입찰가를 노출 (참고용 라벨은 페이지에서)
+ */
+export function classifyKeyword(
+  clicks: number,
+  revenue: number,
   roasPct: number | null,
   bepPct: number | null,
-  adCost: number,
-): KeywordAction {
-  if (roasPct == null || bepPct == null) {
-    return adCost >= 500_000 ? 'move' : 'exclude'
+): { action: KeywordAction; bid: number | null; bidSource: KeywordRow['bidSource'] } {
+  const revenueBid = (): number | null => {
+    if (!bepPct || bepPct <= 0) return null
+    if (clicks <= 0) return null
+    if (revenue <= 0) return null
+    const v = revenue / (clicks * (bepPct / 100) * 1.155)
+    return Number.isFinite(v) && v > 0 ? v : null
   }
-  if (roasPct >= bepPct) return 'keep'
-  if (roasPct < bepPct * 0.5) return 'exclude'
-  if (adCost >= 500_000) return 'move'
-  return 'exclude'
+
+  // BEP 또는 ROAS 미산정 → 모수 부족
+  if (roasPct == null || bepPct == null) {
+    return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
+  }
+
+  if (clicks < 100) {
+    if (roasPct >= bepPct) {
+      return { action: 'growing', bid: revenueBid(), bidSource: 'revenue' }
+    }
+    return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
+  }
+
+  // clicks >= 100
+  if (roasPct <= 0) {
+    return { action: 'exclude', bid: 100, bidSource: 'fixed_100' }
+  }
+  if (roasPct >= bepPct * 2) {
+    return { action: 'enhance', bid: revenueBid(), bidSource: 'revenue' }
+  }
+  if (roasPct >= bepPct) {
+    return { action: 'maintain', bid: revenueBid(), bidSource: 'revenue' }
+  }
+  // 0 < roasPct < bepPct
+  return { action: 'lower_bid', bid: revenueBid(), bidSource: 'revenue' }
 }
 
 export interface CampaignDiag {
@@ -217,10 +215,15 @@ export interface KeywordRow {
   currentCpcVatIncl: number | null
   /** 추천 액션 — 검색 키워드만 의미 있음 */
   action: KeywordAction
-  /** 추천 입찰가 (VAT 별도). null = 데이터 부족 */
+  /** 추천 입찰가 (VAT 별도). null = 노출 안 함 (모수 부족 등) */
   recommendedBidVatExcl: number | null
-  /** 입찰가 산출 방식. 'revenue' = 매출 역산 / 'bep' = BEP CPC fallback (매출 0 또는 클릭<20). null = 산출 불가 */
-  bidSource: 'revenue' | 'bep' | null
+  /** 입찰가 산출 방식.
+   *  'revenue'    = 매출 역산 (성장 중/강화/유지/입찰가 ↓)
+   *  'fixed_100'  = 제외 키워드 강제 100원
+   *  'low_sample' = 모수 부족 (입찰가 노출 안 함)
+   *  'bep'        = BEP CPC fallback (옵션 row 등 호환, 키워드 row 신규 흐름에서는 미사용)
+   *  null         = 산출 불가 */
+  bidSource: 'revenue' | 'bep' | 'low_sample' | 'fixed_100' | null
 }
 
 export interface ManualKeywordRow extends KeywordRow {
@@ -260,7 +263,7 @@ export interface AdAnalysisView {
 /** 마진 마스터 marginRows → optionId 별 BEP(%) 맵.
  * 마진 마스터 bepRoas 는 배율 (예: 3.06). 페이지 전반에서 ROAS(%) 와 같은 단위로 다루기 위해
  * 여기서 ×100 해서 % 단위 (예: 306) 로 저장. 후속 함수 (weightedBep / recommendedBid /
- * classifyKeywordAction / buildBepCpcForCampaign) 는 모두 % 단위 가정. */
+ * classifyKeyword / buildBepCpcForCampaign) 는 모두 % 단위 가정. */
 export function buildBepMap(master: CostMaster | null): Map<string, number> {
   const m = new Map<string, number>()
   if (!master) return m
@@ -478,10 +481,6 @@ export function buildKeywordRows(
     target.set(key, arr)
   }
 
-  // 캠페인 평균 CVR — fallback 입찰가 공식의 입력 (옵션 표 BEP CPC 와 동일 정의)
-  const campaignAvgCvr =
-    campaign.clicks > 0 ? campaign.orders / campaign.clicks : null
-
   const aggregate = (key: string, rows: AdCampaignRow[]): KeywordRow => {
     const impressions = rows.reduce((s, r) => s + (r.impressions || 0), 0)
     const clicks = rows.reduce((s, r) => s + (r.clicks || 0), 0)
@@ -496,19 +495,7 @@ export function buildKeywordRows(
     const roas = safeDiv(revenue, adCostVat)
     const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId)
     const roasPct = roas != null ? roas * 100 : null
-    let bid = recommendedBid(revenue, clicks, bep)
-    let bidSource: 'revenue' | 'bep' | null = bid != null ? 'revenue' : null
-    // BEP CPC fallback — 매출 0 또는 클릭 <20 키워드에 가상 입찰가 산출
-    if (bid == null) {
-      const w = weightedByAdCost(rows, bepMap, priceMap)
-      const optBep = w.bep ?? bep ?? null
-      const fbBid = bepFallbackBid(w.price, campaignAvgCvr, optBep)
-      if (fbBid != null) {
-        bid = fbBid
-        bidSource = 'bep'
-      }
-    }
-    const action: KeywordAction = classifyKeywordAction(roasPct, bep, adCostVat)
+    const cls = classifyKeyword(clicks, revenue, roasPct, bep)
     return {
       keyword: key,
       impressions,
@@ -522,9 +509,9 @@ export function buildKeywordRows(
       roasPct,
       bepPct: bep,
       currentCpcVatIncl: clicks > 0 ? adCostVat / clicks : null,
-      action,
-      recommendedBidVatExcl: bid,
-      bidSource,
+      action: cls.action,
+      recommendedBidVatExcl: cls.bid,
+      bidSource: cls.bidSource,
     }
   }
 

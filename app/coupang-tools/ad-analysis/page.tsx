@@ -1310,8 +1310,13 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
       '현재 CPC (+VAT)': r.currentCpcVatIncl,
       '광고비 (+VAT)': r.adCostVat,
       '광고 매출': r.revenue,
-      '추천 액션': r.action === 'keep' ? '유지' : r.action === 'move' ? '수동 이동' : '제외',
-      '추천 입찰가 (VAT 별도, 5% 안전마진)': r.recommendedBidVatExcl != null ? ceilToTen(r.recommendedBidVatExcl) : null,
+      '추천 액션': ACTION_LABEL[r.action],
+      '추천 입찰가 (VAT 별도, 5% 안전마진)':
+        r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
+          ? null
+          : r.bidSource === 'fixed_100'
+            ? 100
+            : ceilToTen(r.recommendedBidVatExcl),
     }))
     const filename = `광고분석_검색키워드_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
     exportXlsx(data, filename, '검색키워드')
@@ -1355,7 +1360,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
               <TH label={<>현재 CPC<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(+VAT)</span></>} k="currentCpcVatIncl" num minWidth={100} />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
               <TH label="광고 매출" k="revenue" num />
-              <th>추천 액션</th>
+              <th><ActionGuideHeader /></th>
               <TH label={<>추천 입찰가<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />
             </tr>
           </thead>
@@ -1416,12 +1421,85 @@ function currentCpcColorClass(r: KeywordRow): string {
   return 'text-bad'
 }
 
-function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { r: KeywordRow; checked: boolean; onToggle: () => void; isExpanded: boolean; onToggleExpand: () => void }) {
-  const action =
-    r.action === 'keep' ? <span className="aa-action-chip action-keep">유지</span> :
-    r.action === 'move' ? <span className="aa-action-chip action-move">➡️ 수동 이동</span> :
-    <span className="aa-action-chip action-exclude">🚫 제외</span>
+// 추천 액션 컬럼 헤더 — ⓘ hover 시 가이드 팝업 (320px, 다크 #1F2937)
+function ActionGuideHeader() {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      추천 액션
+      <span
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 14, height: 14, borderRadius: '50%',
+          background: '#94A3B8', color: '#FFFFFF',
+          fontSize: 10, fontWeight: 700, fontStyle: 'italic',
+          cursor: 'help', userSelect: 'none',
+        }}
+        aria-label="추천 액션 가이드"
+      >i</span>
+      {hovered && (
+        <div
+          style={{
+            position: 'absolute', top: '100%', left: 0, marginTop: 6,
+            zIndex: 1000, width: 320, padding: '12px 14px',
+            background: '#1F2937', color: '#FFFFFF',
+            borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            fontSize: 12, lineHeight: 1.6, fontFamily: 'inherit', fontWeight: 400,
+            whiteSpace: 'pre-line', textAlign: 'left',
+            pointerEvents: 'none',
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>추천 액션 가이드</div>
+          <div style={{ borderTop: '1px solid #374151', margin: '4px 0 8px' }} />
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ color: '#FCD34D', fontWeight: 600, marginBottom: 2 }}>클릭 &lt; 100</div>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
+              ROAS ≥ BEP    → 성장 중 ⭐<br />
+              그 외          → 모수 부족
+            </div>
+          </div>
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ color: '#FCD34D', fontWeight: 600, marginBottom: 2 }}>클릭 ≥ 100</div>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
+              ROAS ≥ BEP×2  → 강화<br />
+              BEP ≤ ROAS&lt;×2 → 유지<br />
+              0 &lt; ROAS &lt; BEP → 입찰가 ↓<br />
+              ROAS = 0      → 제외 (입찰가 100원)
+            </div>
+          </div>
+          <div style={{ borderTop: '1px solid #374151', margin: '4px 0 6px' }} />
+          <div style={{ fontSize: 11.5, color: '#D1D5DB' }}>
+            💡 클릭 100 미만은 AI 캠페인에서 모수 쌓는 중. 제외 추천 X.
+          </div>
+        </div>
+      )}
+    </span>
+  )
+}
 
+// 추천 액션 6단 → 배지 렌더 (테이블 셀 + 엑셀 라벨 공통)
+const ACTION_LABEL: Record<KeywordRow['action'], string> = {
+  growing: '성장 중',
+  low_sample: '모수 부족',
+  enhance: '강화',
+  maintain: '유지',
+  lower_bid: '입찰가 ↓',
+  exclude: '제외',
+}
+function actionBadge(action: KeywordRow['action']): React.ReactElement {
+  switch (action) {
+    case 'growing':    return <span className="aa-action-chip action-growing">⭐ 성장 중</span>
+    case 'low_sample': return <span className="aa-action-chip action-low-sample">모수 부족</span>
+    case 'enhance':    return <span className="aa-action-chip action-enhance">강화</span>
+    case 'maintain':   return <span className="aa-action-chip action-maintain">유지</span>
+    case 'lower_bid':  return <span className="aa-action-chip action-lower-bid">입찰가 ↓</span>
+    case 'exclude':    return <span className="aa-action-chip action-exclude">🚫 제외</span>
+  }
+}
+
+function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { r: KeywordRow; checked: boolean; onToggle: () => void; isExpanded: boolean; onToggleExpand: () => void }) {
   const roasClass =
     r.roasPct == null || r.bepPct == null ? '' :
     r.roasPct < r.bepPct ? 'text-bad' :
@@ -1430,6 +1508,28 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
     r.cvrPct == null ? '' :
     r.cvrPct >= 10 ? 'text-good' :
     r.cvrPct < 6 ? 'text-bad' : 'text-warn'
+
+  // 입찰가 셀 — bidSource 별 분기.
+  //   low_sample        : "—"
+  //   fixed_100         : "100원" (제외 권장)
+  //   revenue + growing : 매출 역산 + "(참고용)" 라벨
+  //   revenue + 그 외   : 매출 역산
+  let bidCell: React.ReactNode
+  if (r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null) {
+    bidCell = <span className="text-muted" style={{ fontSize: 11 }}>—</span>
+  } else if (r.bidSource === 'fixed_100') {
+    bidCell = <span className="bid-recommend">100원</span>
+  } else {
+    bidCell = (
+      <>
+        <span className="bid-recommend">{ceilToTen(r.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
+        <span className="bid-vat-incl">(+VAT) {ceilToTen(r.recommendedBidVatExcl * 1.1).toLocaleString('ko-KR')}원</span>
+        {r.action === 'growing' && (
+          <span style={{ display: 'block', fontSize: 10, color: '#94A3B8', marginTop: 2 }}>(참고용)</span>
+        )}
+      </>
+    )
+  }
 
   return (
     <tr>
@@ -1453,18 +1553,8 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
       <td className={`num ${currentCpcColorClass(r)}`}>{r.currentCpcVatIncl != null ? `${Math.round(r.currentCpcVatIncl).toLocaleString('ko-KR')}원` : '—'}</td>
       <td className="num">{fmtNum(r.adCostVat)}</td>
       <td className="num">{fmtNum(r.revenue)}</td>
-      <td>{action}</td>
-      <td className="num">
-        {r.recommendedBidVatExcl != null ? (
-          <>
-            <span className="bid-recommend">{ceilToTen(r.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
-            <span className="bid-vat-incl">(+VAT) {ceilToTen(r.recommendedBidVatExcl * 1.1).toLocaleString('ko-KR')}원</span>
-            {r.bidSource === 'bep' && (
-              <span style={{ display: 'block', fontSize: 10, color: '#94A3B8', marginTop: 2 }}>(BEP 기준)</span>
-            )}
-          </>
-        ) : <span className="text-muted" style={{ fontSize: 11 }}>—</span>}
-      </td>
+      <td>{actionBadge(r.action)}</td>
+      <td className="num">{bidCell}</td>
     </tr>
   )
 }
@@ -1600,13 +1690,18 @@ function sanitizeFile(s: string): string {
 function ActionLegend() {
   return (
     <div style={{ fontSize: 11.5, color: '#64748B', padding: '10px 12px', background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7, marginTop: 8 }}>
-      <strong style={{ color: '#1F2937' }}>추천 액션 기준:</strong>
-      <br />• <span className="aa-action-chip action-keep">유지</span> ROAS ≥ BEP
-      <br />• <span className="aa-action-chip action-move">➡️ 수동 이동</span> ROAS &lt; BEP 이면서 광고비 50만원 이상 (빅키워드 후보)
-      <br />• <span className="aa-action-chip action-exclude">🚫 제외</span> ROAS &lt; BEP 이면서 광고비 50만원 미만 또는 ROAS &lt; BEP × 0.5
+      <strong style={{ color: '#1F2937' }}>추천 액션 기준 (클릭 기준 6단):</strong>
+      <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 &lt; 100</span>
+      <br />• <span className="aa-action-chip action-growing">⭐ 성장 중</span> ROAS ≥ BEP — AI 캠페인에서 모수 쌓는 중 (참고용 입찰가)
+      <br />• <span className="aa-action-chip action-low-sample">모수 부족</span> 그 외 — 입찰가 노출 안 함
+      <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 ≥ 100</span>
+      <br />• <span className="aa-action-chip action-enhance">강화</span> ROAS ≥ BEP × 2
+      <br />• <span className="aa-action-chip action-maintain">유지</span> BEP ≤ ROAS &lt; BEP × 2
+      <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> 0 &lt; ROAS &lt; BEP — 매출 역산값으로 인하
+      <br />• <span className="aa-action-chip action-exclude">🚫 제외</span> ROAS = 0 — 입찰가 100원 강제
       <br /><br />
-      <strong style={{ color: '#1F2937' }}>추천 입찰가 공식:</strong> 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) = 매출 ÷ (클릭수 × BEP × 1.155){' '}
-      <span style={{ fontSize: 11 }}>— BEP 대비 5% 여유 / VAT 별도 = 쿠팡 광고센터 입력값 / 클릭 &lt; 20 → 데이터 부족</span>
+      <strong style={{ color: '#1F2937' }}>추천 입찰가 공식 (매출 역산):</strong> 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) = 매출 ÷ (클릭수 × BEP × 1.155){' '}
+      <span style={{ fontSize: 11 }}>— BEP 대비 5% 여유 / VAT 별도 = 쿠팡 광고센터 입력값</span>
     </div>
   )
 }
@@ -1814,8 +1909,11 @@ function Style() {
       .aa-search-bar-fill { height: 100%; background: #3B82F6; border-radius: 3px; }
       .aa-action-chip { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; }
       .aa-action-chip.action-exclude { background: #FEE2E2; color: #991B1B; }
-      .aa-action-chip.action-move { background: #DBEAFE; color: #1E40AF; }
-      .aa-action-chip.action-keep { background: #D1FAE5; color: #065F46; }
+      .aa-action-chip.action-growing { background: #D1FAE5; color: #065F46; }
+      .aa-action-chip.action-enhance { background: #D1FAE5; color: #065F46; }
+      .aa-action-chip.action-maintain { background: #F1F5F9; color: #475569; }
+      .aa-action-chip.action-lower-bid { background: #FFEDD5; color: #9A3412; }
+      .aa-action-chip.action-low-sample { background: #F3F4F6; color: #6B7280; }
       .aa-btn { padding: 8px 14px; border: 1px solid #E2E8F0; background: #FFFFFF; color: #1F2937; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
       .aa-btn:hover { background: #F8FAFC; }
       .aa-btn.btn-sm { padding: 5px 10px; font-size: 12px; }
