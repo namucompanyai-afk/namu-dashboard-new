@@ -1454,14 +1454,18 @@ function ActionGuideHeader() {
           <div style={{ fontWeight: 700, marginBottom: 6 }}>추천 액션 가이드</div>
           <div style={{ borderTop: '1px solid #374151', margin: '4px 0 8px' }} />
           <div style={{ marginBottom: 6 }}>
-            <div style={{ color: '#FCD34D', fontWeight: 600, marginBottom: 2 }}>클릭 &lt; 100</div>
+            <div style={{ color: '#FCD34D', fontWeight: 600, marginBottom: 2 }}>
+              클릭 &lt; 20 <span style={{ color: '#9CA3AF', fontWeight: 400, fontSize: 11 }}>(모수 쌓는 중)</span>
+            </div>
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
               ROAS ≥ BEP    → 성장 중 ⭐<br />
               그 외          → 모수 부족
             </div>
           </div>
           <div style={{ marginBottom: 8 }}>
-            <div style={{ color: '#FCD34D', fontWeight: 600, marginBottom: 2 }}>클릭 ≥ 100</div>
+            <div style={{ color: '#FCD34D', fontWeight: 600, marginBottom: 2 }}>
+              클릭 ≥ 20 <span style={{ color: '#9CA3AF', fontWeight: 400, fontSize: 11 }}>(판단 가능)</span>
+            </div>
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
               ROAS ≥ BEP×2  → 강화<br />
               BEP ≤ ROAS&lt;×2 → 유지<br />
@@ -1471,7 +1475,7 @@ function ActionGuideHeader() {
           </div>
           <div style={{ borderTop: '1px solid #374151', margin: '4px 0 6px' }} />
           <div style={{ fontSize: 11.5, color: '#D1D5DB' }}>
-            💡 클릭 100 미만은 AI 캠페인에서 모수 쌓는 중. 제외 추천 X.
+            💡 클릭 20 미만은 AI 캠페인이 모수 쌓는 중. 제외 추천 X.
           </div>
         </div>
       )}
@@ -1691,10 +1695,10 @@ function ActionLegend() {
   return (
     <div style={{ fontSize: 11.5, color: '#64748B', padding: '10px 12px', background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7, marginTop: 8 }}>
       <strong style={{ color: '#1F2937' }}>추천 액션 기준 (클릭 기준 6단):</strong>
-      <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 &lt; 100</span>
+      <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 &lt; 20 (모수 쌓는 중)</span>
       <br />• <span className="aa-action-chip action-growing">⭐ 성장 중</span> ROAS ≥ BEP — AI 캠페인에서 모수 쌓는 중 (참고용 입찰가)
       <br />• <span className="aa-action-chip action-low-sample">모수 부족</span> 그 외 — 입찰가 노출 안 함
-      <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 ≥ 100</span>
+      <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 ≥ 20 (판단 가능)</span>
       <br />• <span className="aa-action-chip action-enhance">강화</span> ROAS ≥ BEP × 2
       <br />• <span className="aa-action-chip action-maintain">유지</span> BEP ≤ ROAS &lt; BEP × 2
       <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> 0 &lt; ROAS &lt; BEP — 매출 역산값으로 인하

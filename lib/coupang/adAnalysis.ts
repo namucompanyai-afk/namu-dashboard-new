@@ -125,7 +125,7 @@ export function recommendedBid(revenue: number, clicks: number, bepPct: number |
  *    bidSource  — 입찰가 산출 근거 ('revenue' | 'fixed_100' | 'low_sample' | null)
  *
  *  매출 역산 공식: 매출 ÷ (클릭수 × BEP × 1.155) — BEP 5% 여유 + VAT 환산
- *  ※ 'growing' 케이스는 클릭 <100 이라도 매출 역산 입찰가를 노출 (참고용 라벨은 페이지에서)
+ *  ※ 'growing' 케이스는 클릭 <20 이라도 매출 역산 입찰가를 노출 (참고용 라벨은 페이지에서)
  */
 export function classifyKeyword(
   clicks: number,
@@ -146,14 +146,14 @@ export function classifyKeyword(
     return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
   }
 
-  if (clicks < 100) {
+  if (clicks < 20) {
     if (roasPct >= bepPct) {
       return { action: 'growing', bid: revenueBid(), bidSource: 'revenue' }
     }
     return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
   }
 
-  // clicks >= 100
+  // clicks >= 20
   if (roasPct <= 0) {
     return { action: 'exclude', bid: 100, bidSource: 'fixed_100' }
   }
