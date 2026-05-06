@@ -986,6 +986,7 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
           bepMap={bepMap}
           priceMap={priceMap}
           rowMap={rowMap}
+          selectedOptionName={selectedOptionName}
         />
         <NonSearchKeywordTable
           rows={nonSearch}
@@ -1224,7 +1225,7 @@ function KeywordOptionRow({ entry }: { entry: KeywordOption }) {
   )
 }
 
-function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap }: {
+function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap, selectedOptionName }: {
   rows: KeywordRow[]
   campaignRows: AdCampaignRow[]
   campaignBep: number | null
@@ -1236,6 +1237,8 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
   bepMap: Map<string, number>
   priceMap: Map<string, number>
   rowMap: ReturnType<typeof buildMarginRowMap>
+  /** 옵션 필터 적용 시 옵션명. null = 전체 옵션 (캠페인명 사용) */
+  selectedOptionName?: string | null
 }) {
   const { sorted, key, dir, toggle } = useSort(rows, 'adCostVat' as keyof KeywordRow, 'desc')
   const [expandedKws, setExpandedKws] = useState<Set<string>>(new Set())
@@ -1301,6 +1304,12 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
     }
     const data = target.map((r) => ({
       '키워드': r.keyword,
+      '추천 입찰가 (5% 안전마진, VAT 별도)':
+        r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
+          ? null
+          : r.bidSource === 'fixed_100'
+            ? 100
+            : ceilToTen(r.recommendedBidVatExcl),
       '노출': r.impressions,
       '클릭': r.clicks,
       '클릭율(%)': r.ctrPct,
@@ -1311,14 +1320,10 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
       '광고비 (+VAT)': r.adCostVat,
       '광고 매출': r.revenue,
       '추천 액션': ACTION_LABEL[r.action],
-      '추천 입찰가 (VAT 별도, 5% 안전마진)':
-        r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
-          ? null
-          : r.bidSource === 'fixed_100'
-            ? 100
-            : ceilToTen(r.recommendedBidVatExcl),
     }))
-    const filename = `광고분석_검색키워드_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
+    // 파일명: 옵션 필터 적용 시 옵션명, 미적용 시 캠페인명
+    const fileLabel = selectedOptionName ? selectedOptionName : campaignName
+    const filename = `광고분석_검색키워드_${sanitizeFile(fileLabel)}_${periodLabel}.xlsx`
     exportXlsx(data, filename, '검색키워드')
   }
 
