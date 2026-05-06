@@ -1551,8 +1551,8 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
       <td className={`num ${cvrClass}`}>{fmtPctVal(r.cvrPct, 2)}</td>
       <td className={`num ${roasClass}`}>{fmtRoas(r.roasPct)}</td>
       <td className={`num ${currentCpcColorClass(r)}`}>{r.currentCpcVatIncl != null ? `${Math.round(r.currentCpcVatIncl).toLocaleString('ko-KR')}원` : '—'}</td>
-      <td className="num">{fmtNum(r.adCostVat)}</td>
-      <td className="num">{fmtNum(r.revenue)}</td>
+      <td className="num">{fmtMan(r.adCostVat)}</td>
+      <td className="num">{fmtMan(r.revenue)}</td>
       <td>{actionBadge(r.action)}</td>
       <td className="num">{bidCell}</td>
     </tr>
