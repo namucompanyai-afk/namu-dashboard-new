@@ -227,11 +227,14 @@ export interface KeywordRow {
 }
 
 export interface ManualKeywordRow extends KeywordRow {
-  /** 현재 입찰가 (VAT 별도) — 광고 엑셀에 없으므로 사용자 수동 입력 또는 null */
+  /** 현재 입찰가 (VAT 별도) — 사용자가 명시적으로 덮어쓴 값. 없으면 자동값 avgCpcVatExcl 사용. */
   currentBidVatExcl: number | null
-  /** 차이 = 추천 - 현재 */
+  /** 평균 CPC (VAT 별도) = adCostRaw / clicks (반올림). 클릭 0이면 null.
+   *  광고비/클릭수로 자동 추정한 현재 입찰가 기본값. */
+  avgCpcVatExcl: number | null
+  /** 차이 = 추천 - effective(=현재 ?? 평균CPC) */
   bidDiff: number | null
-  /** 점검 결과 */
+  /** 점검 결과 — effective(=현재 ?? 평균CPC) 기준 */
   bidVerdict: 'ok' | 'high' | 'too_high' | 'unknown'
   /** 신뢰도 (별 갯수 1~3) */
   confidence: 1 | 2 | 3
@@ -528,13 +531,14 @@ export function buildKeywordRows(
   return { search: searchRows, nonSearch: nonSearchRows }
 }
 
-/** 수동 캠페인 점검 row — 현재 입찰가는 광고 엑셀에 없으므로 별도 입력 받음.
- *  점검 룰:
- *    - 클릭 < 20 → unknown (평가 보류)
- *    - 추천 없음(BEP 또는 클릭 부족) → unknown
- *    - 현재 ≤ 추천 → ok
- *    - 추천 < 현재 ≤ 추천 × 1.5 → high
- *    - 현재 > 추천 × 1.5 → too_high
+/** 수동 캠페인 점검 row — "현재 입찰가"는 광고비/클릭수(평균 CPC)로 자동 추정. 사용자가 덮어쓸 수 있음.
+ *  effective = 사용자 override(currentBidByKeyword)가 있으면 그것, 없으면 avgCpcVatExcl.
+ *  점검 룰 (effective 기준):
+ *    - 클릭 < 20         → unknown (평가 보류, 회색)
+ *    - 추천 없음          → unknown
+ *    - effective ≤ 추천   → ok          (여유, 녹색)
+ *    - 추천 < effective ≤ 추천 × 1.5 → high     (살짝 높음, 노랑)
+ *    - effective > 추천 × 1.5         → too_high (너무 높음, 빨강)
  *  신뢰도: 클릭 50+ ★★★ / 20~49 ★★ / <20 ★
  */
 export function buildManualReviewRows(
@@ -548,11 +552,13 @@ export function buildManualReviewRows(
   return search.map<ManualKeywordRow>((k) => {
     const bid = recommendedBid(k.revenue, k.clicks, k.bepPct)
     const cur = currentBidByKeyword.get(k.keyword) ?? null
+    const avgCpc = k.clicks > 0 ? Math.round(k.adCostRaw / k.clicks) : null
+    const effective = cur ?? avgCpc
     const conf: 1 | 2 | 3 = k.clicks >= 50 ? 3 : k.clicks >= 20 ? 2 : 1
     let verdict: ManualKeywordRow['bidVerdict'] = 'unknown'
-    if (k.clicks >= 20 && bid != null && cur != null) {
-      if (cur <= bid) verdict = 'ok'
-      else if (cur <= bid * 1.5) verdict = 'high'
+    if (k.clicks >= 20 && bid != null && effective != null) {
+      if (effective <= bid) verdict = 'ok'
+      else if (effective <= bid * 1.5) verdict = 'high'
       else verdict = 'too_high'
     }
     return {
@@ -561,7 +567,8 @@ export function buildManualReviewRows(
       // ManualReview 는 매출 역산만 사용 (기존 동작) — bidSource 도 일관 유지
       bidSource: bid != null ? 'revenue' : null,
       currentBidVatExcl: cur,
-      bidDiff: bid != null && cur != null ? bid - cur : null,
+      avgCpcVatExcl: avgCpc,
+      bidDiff: bid != null && effective != null ? bid - effective : null,
       bidVerdict: verdict,
       confidence: conf,
     }

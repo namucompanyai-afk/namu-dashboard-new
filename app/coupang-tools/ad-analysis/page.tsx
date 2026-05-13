@@ -1769,7 +1769,7 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
       <div className="aa-section-header" style={{ background: '#FAF5FF' }}>
         <div>
           <div className="aa-section-title">▼ {campaign.campaignName} · 입찰가 점검</div>
-          <div className="aa-section-desc">현재 입찰가는 광고 엑셀에 없어 직접 입력합니다 · 추천 대비 너무 높으면 빨강</div>
+          <div className="aa-section-desc">현재 입찰가 = 광고비/클릭수 (평균 CPC, VAT 별도) · 편집 가능</div>
         </div>
         <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
       </div>
@@ -1838,11 +1838,13 @@ function ManualKeywordRowComp({ r, onChangeBid }: { r: ManualKeywordRow; onChang
       <td className="num">{fmtNum(r.revenue)}</td>
       <td className="num">
         <input
+          key={`${r.keyword}|${r.avgCpcVatExcl ?? ''}`}
           type="text"
           inputMode="numeric"
-          placeholder="—"
-          defaultValue={r.currentBidVatExcl ?? ''}
+          placeholder={r.avgCpcVatExcl != null ? r.avgCpcVatExcl.toLocaleString('ko-KR') : '—'}
+          defaultValue={r.currentBidVatExcl ?? r.avgCpcVatExcl ?? ''}
           onBlur={(e) => onChangeBid(r.keyword, e.target.value)}
+          title="평균 CPC = 광고비/클릭수 (VAT 별도) · 비우면 자동값으로 복귀"
           style={{ width: 64, textAlign: 'right', padding: '2px 6px', border: '1px solid #E2E8F0', borderRadius: 4, fontFamily: 'JetBrains Mono, monospace', fontSize: 12 }}
         />
       </td>
