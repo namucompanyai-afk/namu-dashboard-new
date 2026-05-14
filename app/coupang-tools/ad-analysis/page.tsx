@@ -322,7 +322,7 @@ export default function AdAnalysisPage() {
         <PairWarnings view={view} master={marginMaster as any} />
         <WeeklyTrendChart onPointClick={handleTrendPointClick} />
         <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
-        <KeywordParetoChart view={view} />
+        <KeywordParetoChart view={view} master={marginMaster as any} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -378,7 +378,7 @@ export default function AdAnalysisPage() {
       <PairWarnings view={view} master={marginMaster as any} />
       <WeeklyTrendChart onPointClick={handleTrendPointClick} />
       <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
-      <KeywordParetoChart view={view} />
+      <KeywordParetoChart view={view} master={marginMaster as any} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -1143,9 +1143,10 @@ function CampaignScatterChart({
 }
 
 // ── 키워드별 누적 광고비 파레토 (Top 30) ───────────────────────
-// view.campaigns 모든 row 의 keyword 광고비 합산 → Top 30 + 누적 비율. 80% 라인 점선.
-// 광고비는 VAT 포함(×1.1). NON_SEARCH_KEYWORD_TOKENS 제외 (검색 키워드만).
-function KeywordParetoChart({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
+// view.campaigns 모든 row 의 keyword 광고비 합산 → Top 30 + 누적 비율 (색구분·80% 라인용).
+// 툴팁은 키워드 / 광고비 / ROAS. ROAS = self 매출 / 광고비(VAT 포함) × 100, KPI 카드와 동일 정의.
+// NON_SEARCH_KEYWORD_TOKENS 제외 (검색 키워드만).
+function KeywordParetoChart({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
   const [expanded, setExpanded] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
     const v = window.localStorage.getItem('aa-chart-3-expanded')
@@ -1159,18 +1160,24 @@ function KeywordParetoChart({ view }: { view: ReturnType<typeof buildAdAnalysisV
   }, [expanded])
 
   const data = useMemo(() => {
-    const sumByKw = new Map<string, number>()
+    const priceMap = buildActualPriceMapById(master)
+    const exposureMap = buildExposureMapByOptionId(master)
+    const agg = new Map<string, { adCostVat: number; revenue: number }>()
     for (const c of view.campaigns) {
       for (const r of c.rows) {
         const kw = (r.keyword || '').trim()
         if (NON_SEARCH_KEYWORD_TOKENS.has(kw)) continue
         const cost = (r.adCost || 0) * 1.1  // VAT 포함
         if (cost <= 0) continue
-        sumByKw.set(kw, (sumByKw.get(kw) ?? 0) + cost)
+        const rev = splitRowRevenue(r, priceMap, exposureMap).self
+        const prev = agg.get(kw) ?? { adCostVat: 0, revenue: 0 }
+        prev.adCostVat += cost
+        prev.revenue += rev
+        agg.set(kw, prev)
       }
     }
-    const arr = Array.from(sumByKw.entries())
-      .map(([keyword, adCostVat]) => ({ keyword, adCostVat }))
+    const arr = Array.from(agg.entries())
+      .map(([keyword, v]) => ({ keyword, adCostVat: v.adCostVat, revenue: v.revenue }))
       .sort((a, b) => b.adCostVat - a.adCostVat)
       .slice(0, 30)
     const total = arr.reduce((s, x) => s + x.adCostVat, 0)
@@ -1178,6 +1185,7 @@ function KeywordParetoChart({ view }: { view: ReturnType<typeof buildAdAnalysisV
     return arr.map((x) => {
       cum += x.adCostVat
       const cumPct = total > 0 ? (cum / total) * 100 : 0
+      const roasPct = x.adCostVat > 0 && x.revenue > 0 ? (x.revenue / x.adCostVat) * 100 : null
       // 라벨 truncate — 10자 초과 시 ...
       const labelShort = x.keyword.length > 10 ? `${x.keyword.slice(0, 10)}…` : x.keyword
       return {
@@ -1185,9 +1193,10 @@ function KeywordParetoChart({ view }: { view: ReturnType<typeof buildAdAnalysisV
         labelShort,
         adCostVat: Math.round(x.adCostVat),
         cumPct: Math.round(cumPct * 10) / 10,
+        roasPct,
       }
     })
-  }, [view.campaigns])
+  }, [view.campaigns, master])
 
   const ParetoTooltip = ({ active, payload }: any) => {
     if (!active || !payload?.length) return null
@@ -1202,7 +1211,7 @@ function KeywordParetoChart({ view }: { view: ReturnType<typeof buildAdAnalysisV
         <div style={{ fontWeight: 600, marginBottom: 2 }}>{p.keyword}</div>
         <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5 }}>
           <div>광고비: {p.adCostVat.toLocaleString('ko-KR')}원</div>
-          <div>누적: {p.cumPct.toFixed(1)}%</div>
+          <div>ROAS: {p.roasPct != null ? `${Math.round(p.roasPct).toLocaleString('ko-KR')}%` : '—'}</div>
         </div>
       </div>
     )
