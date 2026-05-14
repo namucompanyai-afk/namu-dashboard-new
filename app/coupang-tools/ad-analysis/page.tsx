@@ -1952,7 +1952,7 @@ function ManualKeywordRowComp({ r, checked, onToggle, onChangeBid }: { r: Manual
       </td>
       <td className="num">
         {r.recommendedBidVatExcl != null
-          ? <span className="bid-recommend">{Math.round(r.recommendedBidVatExcl).toLocaleString('ko-KR')}</span>
+          ? <span className="bid-recommend">{ceilToTen(r.recommendedBidVatExcl).toLocaleString('ko-KR')}</span>
           : <span className="text-muted">데이터 부족</span>}
       </td>
       <td className={`num ${diffClass}`}>{r.bidDiff != null ? `${r.bidDiff > 0 ? '+' : ''}${Math.round(r.bidDiff).toLocaleString('ko-KR')}` : '—'}</td>

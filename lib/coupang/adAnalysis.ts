@@ -28,12 +28,12 @@ import type { CostMaster, MarginCalcRow } from './parsers/marginMaster'
 
 export type CampaignType = 'ai' | 'manual' | 'unknown'
 /** 추천 액션 6단:
- *  - growing      : 클릭 < 100 + ROAS ≥ BEP (성장 중)
- *  - low_sample   : 클릭 < 100 + ROAS < BEP / 또는 BEP·ROAS 미산정 (모수 부족)
- *  - enhance      : 클릭 ≥ 100 + ROAS ≥ BEP × 2 (강화)
- *  - maintain     : 클릭 ≥ 100 + BEP ≤ ROAS < BEP × 2 (유지)
- *  - lower_bid    : 클릭 ≥ 100 + 0 < ROAS < BEP (입찰가 ↓)
- *  - exclude      : 클릭 ≥ 100 + ROAS = 0 (제외, 100원 강제)
+ *  - growing      : 클릭 < 20 + ROAS ≥ BEP (성장 중)
+ *  - low_sample   : 클릭 < 20 + ROAS < BEP / 또는 BEP·ROAS 미산정 (모수 부족)
+ *  - enhance      : 클릭 ≥ 20 + ROAS ≥ BEP × 2 (강화)
+ *  - maintain     : 클릭 ≥ 20 + BEP ≤ ROAS < BEP × 2 (유지)
+ *  - lower_bid    : 클릭 ≥ 20 + 0 < ROAS < BEP (입찰가 ↓)
+ *  - exclude      : 클릭 ≥ 20 + ROAS = 0 (제외, 100원 강제)
  */
 export type KeywordAction = 'enhance' | 'maintain' | 'lower_bid' | 'exclude' | 'growing' | 'low_sample'
 
@@ -561,6 +561,8 @@ export function buildManualReviewRows(
   const { search } = buildKeywordRows(campaign, bepMap, priceMap, exposureByOptionId)
   return search.map<ManualKeywordRow>((k) => {
     const bid = recommendedBid(k.revenue, k.clicks, k.bepPct)
+    // UI/다운로드 표시 단위와 동일하게 10원 단위 올림 (쿠팡 광고센터 정책). bidDiff 계산도 이 값 기준.
+    const bidCeiled = bid != null ? Math.ceil(bid / 10) * 10 : null
     const cur = currentBidByKeyword.get(k.keyword) ?? null
     const avgCpc = k.clicks > 0 ? Math.round(k.adCostRaw / k.clicks) : null
     const effective = cur ?? avgCpc
@@ -578,7 +580,7 @@ export function buildManualReviewRows(
       bidSource: bid != null ? 'revenue' : null,
       currentBidVatExcl: cur,
       avgCpcVatExcl: avgCpc,
-      bidDiff: bid != null && effective != null ? bid - effective : null,
+      bidDiff: bidCeiled != null && effective != null ? bidCeiled - effective : null,
       bidVerdict: verdict,
       confidence: conf,
     }
