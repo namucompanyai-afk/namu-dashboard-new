@@ -202,6 +202,45 @@ export default function AdAnalysisPage() {
     [sourceRows, marginMaster],
   )
 
+  // 추이 차트 점 클릭 → 해당 시점 raw 광고 데이터로 view swap.
+  //   saved 모드 → store.rawAdCampaign 갱신 (수익 진단 mount 자동 로드와 동일 경로)
+  //   live 모드  → adAnalysisLive 갱신 (라이브 탭 유지하면서 데이터만 swap)
+  const handleTrendPointClick = async (a: any) => {
+    if (!a?.id) { alert('이 분석은 ID가 없어 로드할 수 없습니다.'); return }
+    try {
+      const [itemRes, rawRes] = await Promise.all([
+        fetch(`/api/coupang-diagnoses?type=item&id=${a.id}`),
+        fetch(`/api/coupang-diagnoses?type=raw&id=${a.id}`),
+      ])
+      const target = await itemRes.json()
+      const raw = rawRes.ok ? await rawRes.json().catch(() => null) : null
+      const adRows = raw?.adRows?.length ? raw.adRows : target?.adRows
+      if (!adRows?.length) { alert('이 분석엔 raw 광고 데이터가 없어 로드할 수 없습니다.'); return }
+      const period = target?.periodStartDate && target?.periodEndDate ? {
+        startDate: target.periodStartDate,
+        endDate: target.periodEndDate,
+        days: target.periodDays || 7,
+      } : null
+      const meta = {
+        fileName: target?.adFileName || '저장된 분석',
+        uploadedAt: target?.createdAt || new Date().toISOString(),
+        rowCount: adRows.length,
+      }
+      if (mode === 'live') {
+        if (!period) { alert('이 분석엔 기간 정보가 없어 라이브 모드로 로드할 수 없습니다.'); return }
+        setAdAnalysisLive(adRows, meta, period)
+      } else {
+        setAdCampaign(adRows, meta, period)
+      }
+      // 열려있던 캠페인/옵션 필터 리셋
+      setOpenCampId(null)
+      setSelectedOptionId(null)
+    } catch (e) {
+      console.error('[ad-analysis] 추이 점 클릭 로드 실패:', e)
+      alert('해당 시점 데이터를 불러오지 못했습니다.')
+    }
+  }
+
   // 라이브 광고 엑셀 업로드 핸들러 — store 의 rawAdCampaign 안 건드림.
   async function handleLiveUpload(file: File) {
     setUploadError(null)
@@ -275,7 +314,7 @@ export default function AdAnalysisPage() {
         <KpiSection view={view} />
         <HintBanner />
         <PairWarnings view={view} master={marginMaster as any} />
-        <WeeklyTrendChart />
+        <WeeklyTrendChart onPointClick={handleTrendPointClick} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -329,7 +368,7 @@ export default function AdAnalysisPage() {
       <KpiSection view={view} />
       <HintBanner />
       <PairWarnings view={view} master={marginMaster as any} />
-      <WeeklyTrendChart />
+      <WeeklyTrendChart onPointClick={handleTrendPointClick} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -725,7 +764,56 @@ function formatAdMonthLabel(monthKey: string): string {
   return `${yyyy.slice(2)}.${mm}`
 }
 
-function WeeklyTrendChart() {
+// 큰 hit-area 점 — 수익 진단 BigHitDot 와 동일. 14px 투명 hitbox + 3px 표시 점.
+const AdBigHitDot = (props: any) => {
+  const { cx, cy, stroke, onPointClick, payload } = props
+  if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null
+  const color = stroke || '#666'
+  const handleClick = (e: any) => {
+    if (onPointClick && payload?._analysis) onPointClick(payload._analysis)
+    try { (e?.currentTarget as any)?.blur?.() } catch {}
+    try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
+  }
+  return (
+    <g tabIndex={-1} style={{ outline: 'none' }}>
+      <circle
+        cx={cx} cy={cy} r={14}
+        fill="transparent"
+        style={{ cursor: onPointClick ? 'pointer' : 'default', outline: 'none' }}
+        tabIndex={-1}
+        onClick={onPointClick ? handleClick : undefined}
+      />
+      <circle cx={cx} cy={cy} r={3} fill="#fff" stroke={color} strokeWidth={2} style={{ outline: 'none' }} tabIndex={-1} />
+    </g>
+  )
+}
+
+// 컴팩트 툴팁 — 광고매출 / 광고비 / ROAS 순서. ROAS 는 % 단위, 나머지는 만원.
+const AdCompactTrendTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null
+  const order: Record<string, number> = { '광고매출': 1, '광고비': 2, 'ROAS': 3 }
+  const items = [...payload]
+    .filter((p) => p.dataKey in order)
+    .sort((a, b) => (order[a.dataKey] ?? 9) - (order[b.dataKey] ?? 9))
+  return (
+    <div className="rounded border border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm px-2 py-1.5 text-[11px]">
+      <div className="font-medium text-gray-700 mb-0.5">{label}</div>
+      {items.map((p: any) => {
+        const v = p.value ?? 0
+        const isRoas = p.dataKey === 'ROAS'
+        return (
+          <div key={p.dataKey} className="flex items-center gap-1.5 leading-tight">
+            <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
+            <span className="text-gray-500 w-12">{p.dataKey}</span>
+            <span className="font-mono text-gray-900">{v.toLocaleString()}{isRoas ? '%' : '만원'}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void }) {
   const [analyses, setAnalyses] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly')
@@ -767,28 +855,43 @@ function WeeklyTrendChart() {
       광고매출: Math.round(((s.totalAdRevenue || 0) * scale) / 10000),
       광고비: Math.round(((s.totalAdCost || 0) * scale) / 10000),
       ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
+      _analysis: a,
     }
   }
 
   const weeklyData = useMemo(() => analyses
-    .filter((a) => a.includeInTrend && a.trendType === 'weekly' && a.weekKey)
+    .filter((a) => a.includeInTrend && a.trendType === 'weekly' && a.weekKey && a._hasRaw)
     .sort((a, b) => (a.weekKey || '').localeCompare(b.weekKey || ''))
     .map((a) => mapPoint(a, 7, 'weekKey', formatAdWeekLabel)), [analyses])
 
   const monthlyData = useMemo(() => analyses
-    .filter((a) => a.includeInTrend && (a.trendType === 'monthly' || (!a.trendType && a.monthKey)) && a.monthKey)
+    .filter((a) => a.includeInTrend && (a.trendType === 'monthly' || (!a.trendType && a.monthKey)) && a.monthKey && a._hasRaw)
     .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
     .map((a) => mapPoint(a, 30, 'monthKey', formatAdMonthLabel)), [analyses])
 
   const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
   const periodLabel = chartMode === 'weekly' ? '주' : '월'
 
+  // recharts activeDot onClick 헬퍼 (수익 진단과 동일 패턴)
+  const makeActiveDotClick = () => onPointClick ? {
+    r: 10, cursor: 'pointer' as const,
+    onClick: (_: any, ev: any) => {
+      const idx = ev?.index
+      if (idx != null && trendData[idx]?._analysis) onPointClick(trendData[idx]._analysis)
+      try { (ev?.currentTarget as any)?.blur?.() } catch {}
+      try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
+    },
+  } : { r: 6 }
+
   return (
     <div className="aa-section" style={{ marginBottom: 16 }}>
       <div className="aa-section-header">
         <div>
           <div className="aa-section-title">📈 주간 광고 추이</div>
-          <div className="aa-section-desc">광고매출 / 광고비 / ROAS · 저장된 분석 히스토리 기준 ({chartMode === 'weekly' ? '주' : '월'} 환산)</div>
+          <div className="aa-section-desc">
+            광고매출 / 광고비 / ROAS · 저장된 분석 히스토리 기준 ({chartMode === 'weekly' ? '주' : '월'} 환산)
+            {onPointClick && <span style={{ marginLeft: 8, color: '#EA580C' }}>· 점 클릭 시 해당 시점 데이터로 분석</span>}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <div style={{ display: 'flex', borderRadius: 6, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
@@ -826,24 +929,38 @@ function WeeklyTrendChart() {
               <div style={{ fontSize: 11, color: '#CBD5E1', marginTop: 4 }}>현재 {trendData.length}{periodLabel} 데이터 — 수익 진단 페이지에서 분석 저장 시 자동 누적</div>
             </div>
           ) : (
+            <div
+              tabIndex={-1}
+              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+              style={{ outline: 'none' }}
+            >
             <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={trendData} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+              <LineChart data={trendData} margin={{ top: 8, right: 16, bottom: 4, left: 0 }} tabIndex={-1} style={{ outline: 'none' }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis dataKey="label" tick={{ fontSize: 12 }} />
                 <YAxis yAxisId="left" tick={{ fontSize: 11 }} tickFormatter={(v) => v < 0 ? '' : `${v.toLocaleString()}만`} />
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
                 <Tooltip
-                  formatter={(value: any, name: any) => {
-                    if (name === 'ROAS') return [`${(value as number).toLocaleString('ko-KR')}%`, name]
-                    return [`${(value as number).toLocaleString('ko-KR')}만`, name]
-                  }}
+                  content={<AdCompactTrendTooltip />}
+                  offset={20}
+                  cursor={{ stroke: '#f97316', strokeWidth: 24, strokeOpacity: 0.10 }}
                 />
                 <Legend />
-                <Line yAxisId="left" type="monotone" dataKey="광고매출" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
-                <Line yAxisId="left" type="monotone" dataKey="광고비" stroke="#dc2626" strokeWidth={2} dot={{ r: 3 }} />
-                <Line yAxisId="right" type="monotone" dataKey="ROAS" stroke="#059669" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="left" type="monotone" dataKey="광고매출" stroke="#2563eb" strokeWidth={2}
+                  dot={<AdBigHitDot onPointClick={onPointClick} />}
+                  activeDot={makeActiveDotClick()}
+                />
+                <Line yAxisId="left" type="monotone" dataKey="광고비" stroke="#dc2626" strokeWidth={2}
+                  dot={<AdBigHitDot onPointClick={onPointClick} />}
+                  activeDot={makeActiveDotClick()}
+                />
+                <Line yAxisId="right" type="monotone" dataKey="ROAS" stroke="#059669" strokeWidth={2}
+                  dot={<AdBigHitDot onPointClick={onPointClick} />}
+                  activeDot={makeActiveDotClick()}
+                />
               </LineChart>
             </ResponsiveContainer>
+            </div>
           )}
         </div>
       )}
