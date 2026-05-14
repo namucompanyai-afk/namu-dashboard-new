@@ -37,12 +37,38 @@ export type CampaignType = 'ai' | 'manual' | 'unknown'
  */
 export type KeywordAction = 'enhance' | 'maintain' | 'lower_bid' | 'exclude' | 'growing' | 'low_sample'
 
-/** 캠페인 이름 → AI/수동/미분류 */
+/** 캠페인 네이밍 컨벤션 파서 — [브랜드]_상품명_(AI|수동)_옵션ID/옵션ID/...
+ *  greedy `.+` 가 prefix 마지막 `_(AI|수동)_` 토큰을 잡아 prefix 내 동일 토큰 우연 일치를 피함. */
+const CAMPAIGN_NAME_RE = /^(.+)_(AI|수동)_(.+)$/
+
+export interface CampaignNameParse {
+  prefix: string
+  campaignType: CampaignType
+  /** "_(AI|수동)_" 뒤 옵션ID 토큰 묶음 (raw, '/' 분리 전) */
+  optionIdsRaw: string
+}
+
+export function parseCampaignName(name: string): CampaignNameParse {
+  const trimmed = (name || '').trim()
+  const m = trimmed.match(CAMPAIGN_NAME_RE)
+  if (!m) return { prefix: trimmed, campaignType: 'unknown', optionIdsRaw: '' }
+  const [, prefix, typeTok, optionIdsRaw] = m
+  return {
+    prefix: prefix.trim(),
+    campaignType: typeTok === 'AI' ? 'ai' : 'manual',
+    optionIdsRaw: optionIdsRaw.trim(),
+  }
+}
+
+/** optionIdsRaw → 옵션ID 배열 ('/' / ',' / 공백 분리) */
+export function parseOptionIds(raw: string): string[] {
+  if (!raw) return []
+  return raw.split(/[/,\s]+/).map((s) => s.trim()).filter(Boolean)
+}
+
+/** 캠페인 이름 → AI/수동/미분류 (parseCampaignName 기반) */
 export function classifyCampaign(name: string): CampaignType {
-  const n = (name || '').toLowerCase()
-  if (n.includes('수동') || /\bmanual\b/.test(n)) return 'manual'
-  if (n.includes('_ai') || /\bai\b/.test(name) || /(^|[^a-z])ai([^a-z]|$)/i.test(name)) return 'ai'
-  return 'unknown'
+  return parseCampaignName(name).campaignType
 }
 
 const SEARCH_PLACEMENT_HINTS = ['검색']
@@ -687,4 +713,118 @@ export function buildBepCpcForCampaign(
   })
 
   return out
+}
+
+// ── AI/수동 페어 분석 (자기 잠식 경고) ─────────────────────────
+/** 같은 prefix 의 AI/수동 캠페인 비교 — 활성 키워드 교집합 / 짝 없음 / 옵션 셋 불일치 검출.
+ *  활성 키워드 = 광고비 발생한 (adCost > 0) 비어있지 않은 keyword. */
+export interface DuplicateKeywordEntry {
+  prefix: string
+  aiCampaignName: string
+  manualCampaignName: string
+  /** 양 캠페인 옵션ID 합집합 (참고용 표시) */
+  optionIds: string[]
+  /** 중복(교집합) 활성 키워드 */
+  keywords: string[]
+}
+
+export interface UnpairedCampaignEntry {
+  prefix: string
+  existingType: 'ai' | 'manual'
+  campaignName: string
+}
+
+export interface OptionMismatchEntry {
+  prefix: string
+  aiOptionIds: string[]
+  manualOptionIds: string[]
+}
+
+export interface CampaignPairAnalysis {
+  duplicateKeywords: DuplicateKeywordEntry[]
+  unpairedCampaigns: UnpairedCampaignEntry[]
+  optionMismatchPairs: OptionMismatchEntry[]
+}
+
+/** 캠페인 row → 활성 키워드 Set (광고비 발생한 비어있지 않은 keyword) */
+function activeKeywordsOf(rows: AdCampaignRow[]): Set<string> {
+  const s = new Set<string>()
+  for (const r of rows) {
+    const kw = (r.keyword || '').trim()
+    if (!kw) continue
+    if ((r.adCost || 0) <= 0) continue
+    s.add(kw)
+  }
+  return s
+}
+
+export function buildCampaignPairAnalysis(view: AdAnalysisView): CampaignPairAnalysis {
+  interface Bucket {
+    prefix: string
+    ai?: { campaignName: string; rows: AdCampaignRow[]; optionIds: Set<string> }
+    manual?: { campaignName: string; rows: AdCampaignRow[]; optionIds: Set<string> }
+  }
+  const byPrefix = new Map<string, Bucket>()
+
+  for (const c of view.campaigns) {
+    const parsed = parseCampaignName(c.campaignName)
+    if (parsed.campaignType === 'unknown') continue
+    const bucket = byPrefix.get(parsed.prefix) ?? { prefix: parsed.prefix }
+    const optionIds = new Set(parseOptionIds(parsed.optionIdsRaw))
+    const slot = { campaignName: c.campaignName, rows: c.rows, optionIds }
+    if (parsed.campaignType === 'ai') {
+      // 같은 prefix·같은 type 캠페인이 둘 이상이면 rows·옵션ID 병합
+      if (bucket.ai) {
+        bucket.ai.rows = bucket.ai.rows.concat(c.rows)
+        for (const id of optionIds) bucket.ai.optionIds.add(id)
+      } else bucket.ai = slot
+    } else {
+      if (bucket.manual) {
+        bucket.manual.rows = bucket.manual.rows.concat(c.rows)
+        for (const id of optionIds) bucket.manual.optionIds.add(id)
+      } else bucket.manual = slot
+    }
+    byPrefix.set(parsed.prefix, bucket)
+  }
+
+  const duplicateKeywords: DuplicateKeywordEntry[] = []
+  const unpairedCampaigns: UnpairedCampaignEntry[] = []
+  const optionMismatchPairs: OptionMismatchEntry[] = []
+
+  for (const b of byPrefix.values()) {
+    if (b.ai && b.manual) {
+      const aiKw = activeKeywordsOf(b.ai.rows)
+      const manualKw = activeKeywordsOf(b.manual.rows)
+      const dup: string[] = []
+      for (const k of aiKw) if (manualKw.has(k)) dup.push(k)
+      if (dup.length > 0) {
+        const union = new Set<string>([...b.ai.optionIds, ...b.manual.optionIds])
+        duplicateKeywords.push({
+          prefix: b.prefix,
+          aiCampaignName: b.ai.campaignName,
+          manualCampaignName: b.manual.campaignName,
+          optionIds: Array.from(union).sort(),
+          keywords: dup.sort(),
+        })
+      }
+      // 옵션 셋 불일치 체크 (대칭차)
+      const aiOpts = Array.from(b.ai.optionIds).sort()
+      const mOpts = Array.from(b.manual.optionIds).sort()
+      const same = aiOpts.length === mOpts.length && aiOpts.every((id, i) => id === mOpts[i])
+      if (!same) {
+        optionMismatchPairs.push({ prefix: b.prefix, aiOptionIds: aiOpts, manualOptionIds: mOpts })
+      }
+    } else if (b.ai) {
+      unpairedCampaigns.push({ prefix: b.prefix, existingType: 'ai', campaignName: b.ai.campaignName })
+    } else if (b.manual) {
+      unpairedCampaigns.push({ prefix: b.prefix, existingType: 'manual', campaignName: b.manual.campaignName })
+    }
+  }
+
+  // 정렬 — 키워드 중복 많은 순 / unpaired·mismatch 는 prefix 알파벳 순
+  duplicateKeywords.sort((a, b) => b.keywords.length - a.keywords.length || a.prefix.localeCompare(b.prefix))
+  unpairedCampaigns.sort((a, b) => a.prefix.localeCompare(b.prefix))
+  optionMismatchPairs.sort((a, b) => a.prefix.localeCompare(b.prefix))
+
+  return { duplicateKeywords, unpairedCampaigns, optionMismatchPairs }
 }

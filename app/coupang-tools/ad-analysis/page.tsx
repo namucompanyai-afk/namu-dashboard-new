@@ -21,11 +21,13 @@ import {
   buildActualPriceMapById,
   buildMarginRowMap,
   buildExposureMapByOptionId,
+  buildCampaignPairAnalysis,
   splitRowRevenue,
   isSearchPlacement,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
+  type CampaignPairAnalysis,
 } from '@/lib/coupang/adAnalysis'
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
@@ -270,6 +272,7 @@ export default function AdAnalysisPage() {
         {uploadError && <div style={errorBox}>{uploadError}</div>}
         <KpiSection view={view} />
         <HintBanner />
+        <PairWarnings view={view} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -322,6 +325,7 @@ export default function AdAnalysisPage() {
       {headerNode}
       <KpiSection view={view} />
       <HintBanner />
+      <PairWarnings view={view} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -530,6 +534,115 @@ function HintBanner() {
     </div>
   )
 }
+
+// ── AI/수동 페어 경고 카드 ─────────────────────────────────────
+// 캠페인 네이밍 [브랜드]_상품명_(AI|수동)_옵션ID 기준 prefix 매칭.
+// 1) 중복 키워드 (자기 잠식) · 2) 짝 없는 캠페인 · 3) 옵션 셋 불일치. 3개 다 0건이면 영역 미노출.
+type PairKind = 'dup' | 'unpair' | 'mismatch'
+function PairWarnings({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
+  const [open, setOpen] = useState<PairKind | null>(null)
+  const analysis: CampaignPairAnalysis = useMemo(() => buildCampaignPairAnalysis(view), [view])
+  const dupCount = analysis.duplicateKeywords.length
+  const unpairCount = analysis.unpairedCampaigns.length
+  const mismatchCount = analysis.optionMismatchPairs.length
+  if (dupCount === 0 && unpairCount === 0 && mismatchCount === 0) return null
+
+  const toggle = (k: PairKind) => setOpen((prev) => (prev === k ? null : k))
+
+  const Card = ({ kind, count, color, title, desc }: { kind: PairKind; count: number; color: string; title: string; desc: string }) => {
+    if (count === 0) return null
+    const active = open === kind
+    return (
+      <button
+        onClick={() => toggle(kind)}
+        style={{
+          textAlign: 'left', background: '#FFFFFF',
+          border: `1px solid ${active ? color : '#E2E8F0'}`,
+          borderLeft: `4px solid ${color}`,
+          borderRadius: 8, padding: '12px 14px', cursor: 'pointer',
+          boxShadow: active ? `0 0 0 2px ${color}33` : 'none',
+          fontFamily: 'inherit',
+        }}
+      >
+        <div style={{ fontSize: 12, color: '#64748B', marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color }}>{count}건</div>
+        <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>{desc} {active ? '▲ 접기' : '▼ 펼치기'}</div>
+      </button>
+    )
+  }
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+        <Card kind="dup" count={dupCount} color="#EF4444" title="🔴 AI/수동 중복 키워드" desc="자기 잠식 — AI에서 제외 + 수동에 등록" />
+        <Card kind="unpair" count={unpairCount} color="#F59E0B" title="🟡 짝 없는 캠페인" desc="AI만 또는 수동만 존재" />
+        <Card kind="mismatch" count={mismatchCount} color="#FB923C" title="🟠 옵션 셋 불일치" desc="페어 옵션ID 다름" />
+      </div>
+      {open === 'dup' && (
+        <div style={pairDetailBox}>
+          {analysis.duplicateKeywords.map((d) => (
+            <div key={d.prefix} style={pairDetailRow}>
+              <div style={pairDetailHead}>
+                <strong>{d.prefix}</strong>
+                <span style={{ fontSize: 11, color: '#94A3B8' }}>옵션 {d.optionIds.join(' / ') || '-'}</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>
+                AI: <span style={{ color: '#3B82F6' }}>{d.aiCampaignName}</span> · 수동: <span style={{ color: '#A855F7' }}>{d.manualCampaignName}</span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {d.keywords.map((kw) => (
+                  <span key={kw} style={pairKwChip}>{kw}</span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {open === 'unpair' && (
+        <div style={pairDetailBox}>
+          {analysis.unpairedCampaigns.map((u) => (
+            <div key={`${u.prefix}::${u.existingType}`} style={pairDetailRow}>
+              <div style={pairDetailHead}>
+                <strong>{u.prefix}</strong>
+                <span style={{ fontSize: 11 }}>
+                  {u.existingType === 'ai'
+                    ? <span className="aa-badge badge-ai">🤖 AI만 존재</span>
+                    : <span className="aa-badge badge-manual">🎯 수동만 존재</span>}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: '#64748B' }}>{u.campaignName}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {open === 'mismatch' && (
+        <div style={pairDetailBox}>
+          {analysis.optionMismatchPairs.map((m) => (
+            <div key={m.prefix} style={pairDetailRow}>
+              <div style={pairDetailHead}><strong>{m.prefix}</strong></div>
+              <div style={{ fontSize: 12, color: '#64748B', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                <span>🤖 AI: <code style={pairOptCode}>{m.aiOptionIds.join(' / ') || '-'}</code></span>
+                <span>🎯 수동: <code style={pairOptCode}>{m.manualOptionIds.join(' / ') || '-'}</code></span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const pairDetailBox: React.CSSProperties = {
+  marginTop: 8, padding: '10px 12px', background: '#F8FAFC',
+  border: '1px solid #E2E8F0', borderRadius: 6, maxHeight: 320, overflow: 'auto',
+}
+const pairDetailRow: React.CSSProperties = { padding: '8px 0', borderBottom: '1px solid #E2E8F0' }
+const pairDetailHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, fontSize: 13 }
+const pairKwChip: React.CSSProperties = {
+  display: 'inline-block', padding: '2px 8px', background: '#FEE2E2', color: '#991B1B',
+  borderRadius: 4, fontSize: 11.5, fontFamily: 'JetBrains Mono, monospace',
+}
+const pairOptCode: React.CSSProperties = { background: '#FFFFFF', padding: '1px 6px', borderRadius: 3, fontSize: 11.5 }
 
 // ── 운영 메모 (영구 저장) ─────────────────────────────────────
 type HistoryNote = { id: string; ts: string; text: string }
