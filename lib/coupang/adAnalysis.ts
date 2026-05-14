@@ -835,3 +835,95 @@ export function buildCampaignPairAnalysis(view: AdAnalysisView): CampaignPairAna
 
   return { duplicateKeywords, unpairedCampaigns, optionMismatchPairs }
 }
+
+/** 중복 키워드 엑셀 다운로드용 행 — 한 행 = (페어, 키워드) 조합. AI+수동 양쪽 캠페인의 해당 키워드 raw row 모두 합산. */
+export interface DuplicateKeywordExportRow {
+  manualCampaignName: string
+  keyword: string
+  /** 제안 입찰가 (VAT 별도, 100원 floor 적용) — null = 데이터 부족 */
+  recommendedBidVatExcl: number | null
+  aiCampaignName: string
+  /** 합산 광고비 (VAT 포함) */
+  adCostVat: number
+  /** 합산 self 매출 (타상품 전환 제외) */
+  revenue: number
+  /** ROAS % (revenue / adCostVat × 100) */
+  roasPct: number | null
+  /** 옵션 가중 BEP % */
+  bepPct: number | null
+  impressions: number
+  clicks: number
+  /** 전환율 % = orders / clicks × 100 */
+  cvrPct: number | null
+  /** 합산 주문수 (sold14d) — 참고용, cvr 산출 base */
+  orders: number
+}
+
+export function buildDuplicateKeywordExportRows(
+  analysis: CampaignPairAnalysis,
+  view: AdAnalysisView,
+  master: CostMaster | null,
+): DuplicateKeywordExportRow[] {
+  const bepMap = buildBepMap(master)
+  const priceMap = buildActualPriceMapById(master)
+  const exposureMap = buildExposureMapByOptionId(master)
+
+  const campByName = new Map<string, CampaignDiag>()
+  for (const c of view.campaigns) campByName.set(c.campaignName, c)
+
+  const out: DuplicateKeywordExportRow[] = []
+  for (const dup of analysis.duplicateKeywords) {
+    const aiCamp = campByName.get(dup.aiCampaignName)
+    const manualCamp = campByName.get(dup.manualCampaignName)
+    if (!aiCamp || !manualCamp) continue
+
+    for (const kw of dup.keywords) {
+      const matched: AdCampaignRow[] = []
+      for (const r of aiCamp.rows) {
+        if ((r.keyword || '').trim() === kw && (r.adCost || 0) > 0) matched.push(r)
+      }
+      for (const r of manualCamp.rows) {
+        if ((r.keyword || '').trim() === kw && (r.adCost || 0) > 0) matched.push(r)
+      }
+      if (matched.length === 0) continue
+
+      let adCostRaw = 0, impressions = 0, clicks = 0, orders = 0, revenue = 0
+      // 옵션 가중 BEP — weightedBep 와 동일 로직 인라인 (lib 내부 함수 미공개)
+      let bepNum = 0, bepDen = 0
+      for (const r of matched) {
+        adCostRaw += r.adCost || 0
+        impressions += r.impressions || 0
+        clicks += r.clicks || 0
+        orders += r.sold14d || 0
+        const selfRev = splitRowRevenue(r, priceMap, exposureMap).self
+        revenue += selfRev
+        const bep = bepMap.get(r.adOptionId)
+        if (bep != null && Number.isFinite(bep) && bep > 0 && selfRev > 0) {
+          bepNum += selfRev * bep
+          bepDen += selfRev
+        }
+      }
+      const adCostVat = adCostRaw * 1.1
+      const bepPct = bepDen > 0 ? bepNum / bepDen : null
+      const roasPct = adCostVat > 0 ? (revenue / adCostVat) * 100 : null
+      const cvrPct = clicks > 0 ? (orders / clicks) * 100 : null
+      const bid = recommendedBid(revenue, clicks, bepPct)
+
+      out.push({
+        manualCampaignName: dup.manualCampaignName,
+        keyword: kw,
+        recommendedBidVatExcl: bid,
+        aiCampaignName: dup.aiCampaignName,
+        adCostVat,
+        revenue,
+        roasPct,
+        bepPct,
+        impressions,
+        clicks,
+        cvrPct,
+        orders,
+      })
+    }
+  }
+  return out
+}

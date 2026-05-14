@@ -22,6 +22,7 @@ import {
   buildMarginRowMap,
   buildExposureMapByOptionId,
   buildCampaignPairAnalysis,
+  buildDuplicateKeywordExportRows,
   splitRowRevenue,
   isSearchPlacement,
   type CampaignDiag,
@@ -272,7 +273,7 @@ export default function AdAnalysisPage() {
         {uploadError && <div style={errorBox}>{uploadError}</div>}
         <KpiSection view={view} />
         <HintBanner />
-        <PairWarnings view={view} />
+        <PairWarnings view={view} master={marginMaster as any} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -325,7 +326,7 @@ export default function AdAnalysisPage() {
       {headerNode}
       <KpiSection view={view} />
       <HintBanner />
-      <PairWarnings view={view} />
+      <PairWarnings view={view} master={marginMaster as any} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -539,7 +540,7 @@ function HintBanner() {
 // 캠페인 네이밍 [브랜드]_상품명_(AI|수동)_옵션ID 기준 prefix 매칭.
 // 1) 중복 키워드 (자기 잠식) · 2) 짝 없는 캠페인 · 3) 옵션 셋 불일치. 3개 다 0건이면 영역 미노출.
 type PairKind = 'dup' | 'unpair' | 'mismatch'
-function PairWarnings({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
+function PairWarnings({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
   const [open, setOpen] = useState<PairKind | null>(null)
   const analysis: CampaignPairAnalysis = useMemo(() => buildCampaignPairAnalysis(view), [view])
   const dupCount = analysis.duplicateKeywords.length
@@ -548,6 +549,60 @@ function PairWarnings({ view }: { view: ReturnType<typeof buildAdAnalysisView> }
   if (dupCount === 0 && unpairCount === 0 && mismatchCount === 0) return null
 
   const toggle = (k: PairKind) => setOpen((prev) => (prev === k ? null : k))
+
+  function downloadDupXlsx() {
+    const rows = buildDuplicateKeywordExportRows(analysis, view, master)
+    if (rows.length === 0) {
+      alert('내보낼 중복 키워드 데이터가 없습니다.')
+      return
+    }
+    const header = [
+      '수동 캠페인명', '키워드', '제안 입찰가 (VAT 별도)', 'AI 캠페인명',
+      '광고비 (VAT 포함)', '광고 매출', 'ROAS', 'BEP', '노출', '클릭', '전환율',
+    ]
+    // ROAS/BEP/CVR 은 ratio 로 저장 (Excel '0%' 포맷이 ×100 표시). bid 은 정수 KRW.
+    const aoa: (string | number | null)[][] = [header]
+    for (const r of rows) {
+      const bid = r.recommendedBidVatExcl != null ? ceilToTen(r.recommendedBidVatExcl) : null
+      aoa.push([
+        r.manualCampaignName,
+        r.keyword,
+        bid,
+        r.aiCampaignName,
+        Math.round(r.adCostVat),
+        Math.round(r.revenue),
+        r.roasPct != null ? r.roasPct / 100 : null,
+        r.bepPct != null ? r.bepPct / 100 : null,
+        r.impressions,
+        r.clicks,
+        r.cvrPct != null ? r.cvrPct / 100 : null,
+      ])
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa)
+    ws['!cols'] = [
+      { wch: 38 }, { wch: 18 }, { wch: 14 }, { wch: 38 },
+      { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 11 },
+      { wch: 10 }, { wch: 9 }, { wch: 11 },
+    ]
+    // 셀별 number format (z) — col idx 기준: C(2)/E(4)/F(5)/I(8)/J(9) = #,##0, G(6)/H(7) = 0%, K(10) = 0.0%
+    const fmtByCol: Record<number, string> = {
+      2: '#,##0', 4: '#,##0', 5: '#,##0', 8: '#,##0', 9: '#,##0',
+      6: '0%', 7: '0%', 10: '0.0%',
+    }
+    for (let row = 1; row < aoa.length; row++) {
+      for (const colStr of Object.keys(fmtByCol)) {
+        const col = Number(colStr)
+        const addr = XLSX.utils.encode_cell({ r: row, c: col })
+        const cell = ws[addr]
+        if (cell && cell.t === 'n') cell.z = fmtByCol[col]
+      }
+    }
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'AI수동 중복키워드')
+    const d = new Date()
+    const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    XLSX.writeFile(wb, `중복키워드_AI수동_${ymd}.xlsx`)
+  }
 
   const Card = ({ kind, count, color, title, desc }: { kind: PairKind; count: number; color: string; title: string; desc: string }) => {
     if (count === 0) return null
@@ -580,6 +635,14 @@ function PairWarnings({ view }: { view: ReturnType<typeof buildAdAnalysisView> }
       </div>
       {open === 'dup' && (
         <div style={pairDetailBox}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+            <button
+              className="aa-btn btn-sm"
+              onClick={downloadDupXlsx}
+              style={{ fontSize: 11, padding: '4px 10px' }}
+              title="중복 키워드 페어 합산 데이터를 엑셀로 다운로드"
+            >📥 엑셀 다운로드</button>
+          </div>
           {analysis.duplicateKeywords.map((d) => (
             <div key={d.prefix} style={pairDetailRow}>
               <div style={pairDetailHead}>
