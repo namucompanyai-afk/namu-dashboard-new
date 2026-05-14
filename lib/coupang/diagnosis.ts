@@ -37,7 +37,8 @@
  *   현재는 둘 다 30일이라 scale = 1
  */
 
-import { getCostBook, getActualPrice, getMarginRow, getOptionChannel } from './costBook'
+import { getCostBook, getActualPrice, getMarginRow, getOptionChannel, getCostMaster } from './costBook'
+import { splitRowRevenue, buildActualPriceMapById, buildExposureMapByOptionId } from './adAnalysis'
 import type { AdCampaignRow } from './parsers/adCampaign'
 import type { MarginCalcRow } from './parsers/marginMaster'
 
@@ -230,6 +231,11 @@ export interface DiagnosisResult {
     marginRate: number
     adRoasAttr: number | null
     adRoasCamp: number | null
+    /** 광고 매출 (self only) — splitRowRevenue.self 합. 타상품 전환 매출 제외.
+     *  광고 분석 페이지 라이브 KPI(view.totalRevenue) 와 동일 정의. 신규 저장부터 채워짐. */
+    totalAdRevenueSelf: number
+    /** ROAS (self only) = totalAdRevenueSelf / totalAdCost × 100. 분모는 VAT 포함 그대로. 신규 저장부터 채워짐. */
+    adRoasAttrSelf: number | null
     adDependency: number
     counts: Record<VerdictCode, number>
   }
@@ -633,6 +639,17 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   const adRoasCampOverall = totalAdCost > 0 ? (totalCampaignRevenue / totalAdCost) * 100 : null
   const adDependencyOverall = totalRevenue > 0 ? totalAdRevenue / totalRevenue : 0
 
+  // self-only 광고매출 — splitRowRevenue.self 합 (타상품 전환 제외). 광고 분석 라이브 KPI 와 일치.
+  // priceMap/exposureMap 는 getCostMaster() 에서 가져오며, master 미설정 시 maps 가 비어 totalAdRevenueSelf = 0.
+  const _master = getCostMaster()
+  const _priceMap = buildActualPriceMapById(_master)
+  const _exposureMap = buildExposureMapByOptionId(_master)
+  let totalAdRevenueSelf = 0
+  for (const r of adRows) {
+    totalAdRevenueSelf += splitRowRevenue(r, _priceMap, _exposureMap).self
+  }
+  const adRoasAttrSelfOverall = totalAdCost > 0 ? (totalAdRevenueSelf / totalAdCost) * 100 : null
+
   const counts: Record<VerdictCode, number> = {
     profitable: 0, trap: 0, structural_loss: 0, no_sales: 0,
   }
@@ -655,6 +672,8 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       marginRate: marginRateOverall,
       adRoasAttr: adRoasAttrOverall,
       adRoasCamp: adRoasCampOverall,
+      totalAdRevenueSelf,
+      adRoasAttrSelf: adRoasAttrSelfOverall,
       adDependency: adDependencyOverall,
       counts,
     },

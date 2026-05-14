@@ -849,12 +849,15 @@ function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void })
     const s = a.summary || {}
     const days = a.periodDays || defaultDays
     const scale = defaultDays / Math.max(days, 1)
+    // 신규 저장본은 self only 필드, 옛 저장본은 기존 필드로 fallback (NG 잔존).
+    const adRevenue = s.totalAdRevenueSelf ?? s.totalAdRevenue ?? 0
+    const roas = s.adRoasAttrSelf ?? s.adRoasAttr
     return {
       key: a[key],
       label: labelFn(a[key]),
-      광고매출: Math.round(((s.totalAdRevenue || 0) * scale) / 10000),
+      광고매출: Math.round((adRevenue * scale) / 10000),
       광고비: Math.round(((s.totalAdCost || 0) * scale) / 10000),
-      ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
+      ROAS: roas ? Math.round(roas) : 0,
       _analysis: a,
     }
   }
