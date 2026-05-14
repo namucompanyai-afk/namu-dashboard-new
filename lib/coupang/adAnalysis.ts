@@ -753,12 +753,16 @@ export interface CampaignPairAnalysis {
   optionMismatchPairs: OptionMismatchEntry[]
 }
 
-/** 캠페인 row → 활성 키워드 Set (광고비 발생한 비어있지 않은 keyword) */
+/** 검색 키워드로 의미 없는 토큰 — 쿠팡 광고 엑셀의 placeholder/집계 행에서 등장.
+ *  '비검색' (비검색 영역 합산 행), '(전체)' (전체 집계 행), em/en-dash/hyphen (빈 키워드 placeholder). */
+const NON_SEARCH_KEYWORD_TOKENS = new Set(['', '—', '–', '-', '비검색', '(전체)'])
+
+/** 캠페인 row → 활성 검색 키워드 Set (광고비 발생 + 의미 있는 키워드만) */
 function activeKeywordsOf(rows: AdCampaignRow[]): Set<string> {
   const s = new Set<string>()
   for (const r of rows) {
     const kw = (r.keyword || '').trim()
-    if (!kw) continue
+    if (NON_SEARCH_KEYWORD_TOKENS.has(kw)) continue
     if ((r.adCost || 0) <= 0) continue
     s.add(kw)
   }
