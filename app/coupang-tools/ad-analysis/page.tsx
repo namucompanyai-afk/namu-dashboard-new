@@ -10,7 +10,10 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
+import {
+  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  ScatterChart, Scatter, ZAxis, ReferenceLine,
+} from 'recharts'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import {
@@ -24,6 +27,7 @@ import {
   buildExposureMapByOptionId,
   buildCampaignPairAnalysis,
   buildDuplicateKeywordExportRows,
+  parseCampaignName,
   splitRowRevenue,
   isSearchPlacement,
   type CampaignDiag,
@@ -315,6 +319,7 @@ export default function AdAnalysisPage() {
         <HintBanner />
         <PairWarnings view={view} master={marginMaster as any} />
         <WeeklyTrendChart onPointClick={handleTrendPointClick} />
+        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -369,6 +374,7 @@ export default function AdAnalysisPage() {
       <HintBanner />
       <PairWarnings view={view} master={marginMaster as any} />
       <WeeklyTrendChart onPointClick={handleTrendPointClick} />
+      <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -963,6 +969,167 @@ function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void })
                 />
               </LineChart>
             </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 캠페인별 광고비 × ROAS 산점도 ──────────────────────────────
+// view.campaigns 그대로 사용 — 신규 fetch 없음. 점 클릭 → 해당 캠페인 expand 토글.
+// BEP 평균: 광고비 가중. AI/수동/미분류 3개 시리즈로 분리.
+function CampaignScatterChart({
+  view,
+  onCampaignClick,
+}: {
+  view: ReturnType<typeof buildAdAnalysisView>
+  onCampaignClick: (campaignId: string) => void
+}) {
+  const [expanded, setExpanded] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    const v = window.localStorage.getItem('aa-chart-2-expanded')
+    return v == null ? true : v === '1'
+  })
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('aa-chart-2-expanded', expanded ? '1' : '0')
+    }
+  }, [expanded])
+
+  // 점 데이터 — 광고비 0 또는 ROAS 미산정 캠페인 제외.
+  const { aiPoints, manualPoints, unknownPoints, avgBepCost } = useMemo(() => {
+    const ai: any[] = []
+    const manual: any[] = []
+    const unknown: any[] = []
+    let bepNum = 0, bepDen = 0
+    for (const c of view.campaigns) {
+      if (c.adCostVat > 0 && c.bepPct != null) {
+        bepNum += c.adCostVat * c.bepPct
+        bepDen += c.adCostVat
+      }
+      if (c.adCostVat <= 0 || c.roasPct == null) continue
+      const parsed = parseCampaignName(c.campaignName)
+      const pt = {
+        x: c.adCostVat,
+        y: c.roasPct,
+        z: Math.max(c.revenue, 1),  // ZAxis min 안전: 매출 0 도 점 표시
+        prefix: parsed.prefix || c.campaignName,
+        campaignName: c.campaignName,
+        campaignId: c.campaignId,
+        type: c.type,
+      }
+      if (c.type === 'ai') ai.push(pt)
+      else if (c.type === 'manual') manual.push(pt)
+      else unknown.push(pt)
+    }
+    return {
+      aiPoints: ai,
+      manualPoints: manual,
+      unknownPoints: unknown,
+      avgBepCost: bepDen > 0 ? bepNum / bepDen : null,
+    }
+  }, [view.campaigns])
+
+  const totalPoints = aiPoints.length + manualPoints.length + unknownPoints.length
+
+  const ScatterTooltip = ({ active, payload }: any) => {
+    if (!active || !payload?.length) return null
+    const p = payload[0]?.payload
+    if (!p) return null
+    const typeBadge =
+      p.type === 'ai' ? <span style={{ color: '#2563EB' }}>🤖 AI</span> :
+      p.type === 'manual' ? <span style={{ color: '#9333EA' }}>🎯 수동</span> :
+      <span style={{ color: '#94A3B8' }}>미분류</span>
+    return (
+      <div style={{
+        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
+        borderRadius: 6, padding: '6px 10px', fontSize: 11.5,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
+      }}>
+        <div style={{ fontWeight: 600, marginBottom: 2 }}>{typeBadge} {p.prefix}</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5 }}>
+          <div>광고비: {Math.round(p.x).toLocaleString('ko-KR')}원</div>
+          <div>ROAS: {Math.round(p.y).toLocaleString('ko-KR')}%</div>
+          <div>광고매출: {Math.round(p.z).toLocaleString('ko-KR')}원</div>
+        </div>
+      </div>
+    )
+  }
+
+  const handleDotClick = (data: any) => {
+    if (data?.campaignId) onCampaignClick(data.campaignId)
+  }
+
+  return (
+    <div className="aa-section" style={{ marginBottom: 16 }}>
+      <div className="aa-section-header">
+        <div>
+          <div className="aa-section-title">🎯 캠페인별 광고비 × ROAS</div>
+          <div className="aa-section-desc">
+            점 크기 = 광고매출 · 점 클릭 시 해당 캠페인 펼침
+            {avgBepCost != null && <span style={{ marginLeft: 8, color: '#64748B' }}>· BEP 평균 {Math.round(avgBepCost)}% (광고비 가중)</span>}
+          </div>
+        </div>
+        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
+      </div>
+      {expanded && (
+        <div className="aa-section-body">
+          {totalPoints === 0 ? (
+            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 캠페인 데이터가 없습니다.</div>
+          ) : (
+            <div
+              tabIndex={-1}
+              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+              style={{ outline: 'none' }}
+            >
+              <ResponsiveContainer width="100%" height={320}>
+                <ScatterChart margin={{ top: 12, right: 24, bottom: 12, left: 8 }} tabIndex={-1} style={{ outline: 'none' }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                  <XAxis
+                    type="number" dataKey="x" name="광고비"
+                    tickFormatter={(v) => `${Math.round((v as number) / 10000).toLocaleString()}만`}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis
+                    type="number" dataKey="y" name="ROAS"
+                    tickFormatter={(v) => `${v}%`}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <ZAxis type="number" dataKey="z" range={[60, 600]} name="광고매출" />
+                  <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<ScatterTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {avgBepCost != null && (
+                    <ReferenceLine
+                      y={avgBepCost} yAxisId={0}
+                      stroke="#94A3B8" strokeDasharray="4 4"
+                      label={{ value: `BEP 평균 ${Math.round(avgBepCost)}%`, position: 'insideTopRight', fill: '#64748B', fontSize: 11 }}
+                    />
+                  )}
+                  <Scatter
+                    name="🤖 AI" data={aiPoints}
+                    fill="rgba(37,99,235,0.5)" stroke="#2563EB" strokeWidth={1.5}
+                    onClick={handleDotClick}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <Scatter
+                    name="🎯 수동" data={manualPoints}
+                    fill="rgba(147,51,234,0.5)" stroke="#9333EA" strokeWidth={1.5}
+                    onClick={handleDotClick}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  {unknownPoints.length > 0 && (
+                    <Scatter
+                      name="미분류" data={unknownPoints}
+                      fill="rgba(148,163,184,0.5)" stroke="#94A3B8" strokeWidth={1.5}
+                      onClick={handleDotClick}
+                      style={{ cursor: 'pointer' }}
+                    />
+                  )}
+                </ScatterChart>
+              </ResponsiveContainer>
             </div>
           )}
         </div>
