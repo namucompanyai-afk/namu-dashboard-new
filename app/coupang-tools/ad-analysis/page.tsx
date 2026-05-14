@@ -1742,11 +1742,12 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
   const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap), [filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap])
   const { sorted, key, dir, toggle } = useSort(rows, 'recommendedBidVatExcl' as keyof ManualKeywordRow, 'desc')
 
-  const TH = ({ label, k, num, minWidth, sticky }: any) => (
+  const TH = ({ label, k, num, minWidth, sticky, sticky2 }: any) => (
     <th
       className={[
         'sortable', num ? 'num' : '',
         sticky ? 'sticky-left' : '',
+        sticky2 ? 'sticky-left-2' : '',
         key === k ? (dir === 'asc' ? 'sorted-asc' : 'sorted-desc') : '',
       ].filter(Boolean).join(' ')}
       style={minWidth ? { minWidth } : undefined}
@@ -1764,6 +1765,68 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
     })
   }
 
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  function onToggle(kw: string) {
+    setChecked((prev) => {
+      const next = new Set(prev)
+      if (next.has(kw)) next.delete(kw); else next.add(kw)
+      return next
+    })
+  }
+  const allChecked = sorted.length > 0 && sorted.every((r) => checked.has(r.keyword))
+  function onToggleAll() {
+    setChecked((prev) => {
+      if (sorted.every((r) => prev.has(r.keyword))) return new Set()
+      const next = new Set(prev)
+      for (const r of sorted) next.add(r.keyword)
+      return next
+    })
+  }
+
+  const VERDICT_LABEL: Record<ManualKeywordRow['bidVerdict'], string> = {
+    ok: '🟢 여유',
+    high: '🟡 살짝 높음',
+    too_high: '🔴 너무 높음',
+    unknown: '⚪ 평가 보류',
+  }
+
+  function exportRows(scope: 'all' | 'selected') {
+    const target = scope === 'selected' ? sorted.filter((r) => checked.has(r.keyword)) : sorted
+    if (target.length === 0) {
+      alert(scope === 'selected' ? '선택된 키워드가 없습니다.' : '내보낼 키워드가 없습니다.')
+      return
+    }
+    const data = target.map((r) => {
+      const effective = r.currentBidVatExcl ?? r.avgCpcVatExcl
+      const stars = r.confidence === 3 ? '⭐⭐⭐' : r.confidence === 2 ? '⭐⭐' : '⭐'
+      return {
+        '키워드': r.keyword,
+        '추천 입찰가 (5% 안전마진, VAT 별도)':
+          r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
+            ? null
+            : r.bidSource === 'fixed_100'
+              ? 100
+              : ceilToTen(r.recommendedBidVatExcl),
+        '노출': r.impressions,
+        '클릭': r.clicks,
+        '클릭율(%)': r.ctrPct,
+        '광고 판매수': r.orders,
+        '전환율(%)': r.cvrPct,
+        'ROAS(%)': r.roasPct,
+        '현재 CPC (+VAT)': r.currentCpcVatIncl,
+        '광고비 (+VAT)': r.adCostVat,
+        '광고 매출': r.revenue,
+        '현재 입찰가 (VAT 별도)': effective,
+        '차이': r.bidDiff != null ? Math.round(r.bidDiff) : null,
+        '신뢰도': stars,
+        '점검': VERDICT_LABEL[r.bidVerdict],
+      }
+    })
+    const fileLabel = selectedOptionName ? selectedOptionName : campaign.campaignName
+    const filename = `광고분석_수동키워드_${sanitizeFile(fileLabel)}_${periodLabel}.xlsx`
+    exportXlsx(data, filename, '수동키워드')
+  }
+
   return (
     <div className="aa-section" style={{ border: '2px solid #A855F7' }}>
       <div className="aa-section-header" style={{ background: '#FAF5FF' }}>
@@ -1775,11 +1838,28 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
       </div>
       <div className="aa-section-body">
         {selectedOptionName && <FilterChip label={selectedOptionName} onClear={onClearOption} />}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
+          <button
+            className="aa-btn btn-sm"
+            onClick={() => exportRows('all')}
+            style={{ fontSize: 11, padding: '4px 10px' }}
+          >⬇ 전체 다운로드</button>
+          <button
+            className="aa-btn btn-sm"
+            onClick={() => exportRows('selected')}
+            disabled={checked.size === 0}
+            style={{ fontSize: 11, padding: '4px 10px', opacity: checked.size === 0 ? 0.5 : 1 }}
+          >⬇ 선택 다운로드 ({checked.size})</button>
+        </div>
         <div className="aa-table-wrap shorter">
           <table>
             <thead>
               <tr>
-                <TH label="키워드" k="keyword" sticky minWidth={140} />
+                <th className="sticky-left" style={{ width: 32 }}>
+                  <input type="checkbox" checked={allChecked} onChange={onToggleAll} aria-label="전체 선택" />
+                </th>
+                <TH label="키워드" k="keyword" sticky2 minWidth={140} />
                 <TH label="노출" k="impressions" num />
                 <TH label="클릭" k="clicks" num />
                 <TH label="클릭율" k="ctrPct" num />
@@ -1796,9 +1876,17 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
               </tr>
             </thead>
             <tbody>
-              {sorted.map((r) => <ManualKeywordRowComp key={r.keyword} r={r} onChangeBid={setBid} />)}
+              {sorted.map((r) => (
+                <ManualKeywordRowComp
+                  key={r.keyword}
+                  r={r}
+                  checked={checked.has(r.keyword)}
+                  onToggle={() => onToggle(r.keyword)}
+                  onChangeBid={setBid}
+                />
+              ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={14} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
+                <tr><td colSpan={15} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
               )}
             </tbody>
           </table>
@@ -1816,7 +1904,7 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
   )
 }
 
-function ManualKeywordRowComp({ r, onChangeBid }: { r: ManualKeywordRow; onChangeBid: (k: string, v: string) => void }) {
+function ManualKeywordRowComp({ r, checked, onToggle, onChangeBid }: { r: ManualKeywordRow; checked: boolean; onToggle: () => void; onChangeBid: (k: string, v: string) => void }) {
   const stars = r.confidence === 3 ? '⭐⭐⭐' : r.confidence === 2 ? '⭐⭐' : '⭐'
   const starsClass = r.confidence === 3 ? 'high' : r.confidence === 2 ? 'mid' : 'low'
 
@@ -1840,7 +1928,8 @@ function ManualKeywordRowComp({ r, onChangeBid }: { r: ManualKeywordRow; onChang
 
   return (
     <tr style={isLowClick ? { opacity: 0.6 } : undefined}>
-      <td className="sticky-left"><strong>{r.keyword}</strong></td>
+      <td className="sticky-left"><input type="checkbox" checked={checked} onChange={onToggle} /></td>
+      <td className="sticky-left-2"><strong>{r.keyword}</strong></td>
       <td className="num">{fmtNum(r.impressions)}</td>
       <td className="num">{fmtNum(r.clicks)}</td>
       <td className="num">{fmtPctVal(r.ctrPct, 2)}</td>
