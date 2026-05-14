@@ -132,8 +132,12 @@ function weightedBep(
   return num / den
 }
 
+/** 쿠팡 광고센터 입찰가 최소 정책 (VAT 별도) — recommendedBid / classifyKeyword.revenueBid 공통 floor */
+const MIN_BID_VAT_EXCL = 100
+
 /** 추천 입찰가 (VAT 별도). 클릭 < 20 또는 BEP 없음이면 null.
- *  공식: 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) — BEP 대비 5% 여유 + VAT 환산. */
+ *  공식: 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) — BEP 대비 5% 여유 + VAT 환산.
+ *  최소 100원 floor 적용 (쿠팡 광고센터 정책). BEP 매우 낮은 광범위 키워드도 100원 보장. */
 export function recommendedBid(revenue: number, clicks: number, bepPct: number | null): number | null {
   if (!bepPct || bepPct <= 0) return null
   if (clicks < 20) return null
@@ -141,7 +145,7 @@ export function recommendedBid(revenue: number, clicks: number, bepPct: number |
   // BEP 는 % 단위 (예: 433 → 4.33). 1.155 = 1.05 (5% 여유) × 1.1 (VAT)
   const bid = revenue / (clicks * (bepPct / 100) * 1.155)
   if (!Number.isFinite(bid) || bid <= 0) return null
-  return bid
+  return Math.max(bid, MIN_BID_VAT_EXCL)
 }
 
 /** 추천 액션 6단 분류 + 입찰가 산출 (page.tsx 키워드 row 용).
@@ -159,12 +163,15 @@ export function classifyKeyword(
   roasPct: number | null,
   bepPct: number | null,
 ): { action: KeywordAction; bid: number | null; bidSource: KeywordRow['bidSource'] } {
+  // 자동 'growing' (클릭<20) 케이스는 매출 역산 입찰가 노출이 필요해서 recommendedBid 의 클릭<20 가드를 우회.
+  // 공식·100원 floor 는 recommendedBid 와 동일 (단일 진실: MIN_BID_VAT_EXCL).
   const revenueBid = (): number | null => {
     if (!bepPct || bepPct <= 0) return null
     if (clicks <= 0) return null
     if (revenue <= 0) return null
     const v = revenue / (clicks * (bepPct / 100) * 1.155)
-    return Number.isFinite(v) && v > 0 ? v : null
+    if (!Number.isFinite(v) || v <= 0) return null
+    return Math.max(v, MIN_BID_VAT_EXCL)
   }
 
   // BEP 또는 ROAS 미산정 → 모수 부족
