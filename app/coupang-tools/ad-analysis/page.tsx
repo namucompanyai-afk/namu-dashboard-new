@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import {
@@ -274,6 +275,7 @@ export default function AdAnalysisPage() {
         <KpiSection view={view} />
         <HintBanner />
         <PairWarnings view={view} master={marginMaster as any} />
+        <WeeklyTrendChart />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -327,6 +329,7 @@ export default function AdAnalysisPage() {
       <KpiSection view={view} />
       <HintBanner />
       <PairWarnings view={view} master={marginMaster as any} />
+      <WeeklyTrendChart />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -706,6 +709,147 @@ const pairKwChip: React.CSSProperties = {
   borderRadius: 4, fontSize: 11.5, fontFamily: 'JetBrains Mono, monospace',
 }
 const pairOptCode: React.CSSProperties = { background: '#FFFFFF', padding: '1px 6px', borderRadius: 3, fontSize: 11.5 }
+
+// ── 주간 광고 추이 (수익 진단 TrendChartSection 패턴 차용) ─────
+// 데이터 소스: GET /api/coupang-diagnoses?type=list — 수익 진단에서 저장된 분석 히스토리 그대로 재사용.
+// 광고 필드만 추출 (광고매출/광고비/ROAS) — 매출/순이익/광고의존도는 의도적으로 빠짐.
+function formatAdWeekLabel(weekStart: string): string {
+  if (!weekStart) return ''
+  const parts = weekStart.split('-')
+  if (parts.length !== 3) return weekStart
+  return `${parseInt(parts[1])}/${parseInt(parts[2])}주`
+}
+function formatAdMonthLabel(monthKey: string): string {
+  if (!monthKey) return ''
+  const [yyyy, mm] = monthKey.split('-')
+  return `${yyyy.slice(2)}.${mm}`
+}
+
+function WeeklyTrendChart() {
+  const [analyses, setAnalyses] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly')
+  const [expanded, setExpanded] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    const v = window.localStorage.getItem('aa-chart-1-expanded')
+    return v == null ? true : v === '1'
+  })
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('aa-chart-1-expanded', expanded ? '1' : '0')
+    }
+  }, [expanded])
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/coupang-diagnoses?type=list')
+        const j = await res.json()
+        if (!cancelled && j?.diagnoses) setAnalyses(j.diagnoses)
+      } catch (e) {
+        console.warn('주간 광고 추이 로드 실패:', e)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const mapPoint = (a: any, defaultDays: number, key: string, labelFn: (k: string) => string) => {
+    const s = a.summary || {}
+    const days = a.periodDays || defaultDays
+    const scale = defaultDays / Math.max(days, 1)
+    return {
+      key: a[key],
+      label: labelFn(a[key]),
+      광고매출: Math.round(((s.totalAdRevenue || 0) * scale) / 10000),
+      광고비: Math.round(((s.totalAdCost || 0) * scale) / 10000),
+      ROAS: s.adRoasAttr ? Math.round(s.adRoasAttr) : 0,
+    }
+  }
+
+  const weeklyData = useMemo(() => analyses
+    .filter((a) => a.includeInTrend && a.trendType === 'weekly' && a.weekKey)
+    .sort((a, b) => (a.weekKey || '').localeCompare(b.weekKey || ''))
+    .map((a) => mapPoint(a, 7, 'weekKey', formatAdWeekLabel)), [analyses])
+
+  const monthlyData = useMemo(() => analyses
+    .filter((a) => a.includeInTrend && (a.trendType === 'monthly' || (!a.trendType && a.monthKey)) && a.monthKey)
+    .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
+    .map((a) => mapPoint(a, 30, 'monthKey', formatAdMonthLabel)), [analyses])
+
+  const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
+  const periodLabel = chartMode === 'weekly' ? '주' : '월'
+
+  return (
+    <div className="aa-section" style={{ marginBottom: 16 }}>
+      <div className="aa-section-header">
+        <div>
+          <div className="aa-section-title">📈 주간 광고 추이</div>
+          <div className="aa-section-desc">광고매출 / 광고비 / ROAS · 저장된 분석 히스토리 기준 ({chartMode === 'weekly' ? '주' : '월'} 환산)</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', borderRadius: 6, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
+            <button
+              onClick={() => setChartMode('weekly')}
+              className="aa-btn btn-sm"
+              style={{
+                border: 'none', borderRadius: 0,
+                background: chartMode === 'weekly' ? '#1F2937' : '#FFFFFF',
+                color: chartMode === 'weekly' ? '#FFFFFF' : '#475569',
+                fontSize: 12,
+              }}
+            >주별 ({weeklyData.length})</button>
+            <button
+              onClick={() => setChartMode('monthly')}
+              className="aa-btn btn-sm"
+              style={{
+                border: 'none', borderRadius: 0, borderLeft: '1px solid #E2E8F0',
+                background: chartMode === 'monthly' ? '#1F2937' : '#FFFFFF',
+                color: chartMode === 'monthly' ? '#FFFFFF' : '#475569',
+                fontSize: 12,
+              }}
+            >월별 ({monthlyData.length})</button>
+          </div>
+          <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="aa-section-body">
+          {loading ? (
+            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>저장된 분석 히스토리 로드 중…</div>
+          ) : trendData.length < 2 ? (
+            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>
+              📈 {periodLabel}별 추이는 2{periodLabel} 이상 데이터가 누적되면 표시됩니다.
+              <div style={{ fontSize: 11, color: '#CBD5E1', marginTop: 4 }}>현재 {trendData.length}{periodLabel} 데이터 — 수익 진단 페이지에서 분석 저장 시 자동 누적</div>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={trendData} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11 }} tickFormatter={(v) => v < 0 ? '' : `${v.toLocaleString()}만`} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                <Tooltip
+                  formatter={(value: any, name: any) => {
+                    if (name === 'ROAS') return [`${(value as number).toLocaleString('ko-KR')}%`, name]
+                    return [`${(value as number).toLocaleString('ko-KR')}만`, name]
+                  }}
+                />
+                <Legend />
+                <Line yAxisId="left" type="monotone" dataKey="광고매출" stroke="#2563eb" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="left" type="monotone" dataKey="광고비" stroke="#dc2626" strokeWidth={2} dot={{ r: 3 }} />
+                <Line yAxisId="right" type="monotone" dataKey="ROAS" stroke="#059669" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── 운영 메모 (영구 저장) ─────────────────────────────────────
 type HistoryNote = { id: string; ts: string; text: string }
