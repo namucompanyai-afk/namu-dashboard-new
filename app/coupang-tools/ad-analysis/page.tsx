@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   ScatterChart, Scatter, ZAxis, ReferenceLine,
+  ComposedChart, Bar, Cell,
 } from 'recharts'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -30,6 +31,7 @@ import {
   parseCampaignName,
   splitRowRevenue,
   isSearchPlacement,
+  NON_SEARCH_KEYWORD_TOKENS,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
@@ -320,6 +322,7 @@ export default function AdAnalysisPage() {
         <PairWarnings view={view} master={marginMaster as any} />
         <WeeklyTrendChart onPointClick={handleTrendPointClick} />
         <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
+        <KeywordParetoChart view={view} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -375,6 +378,7 @@ export default function AdAnalysisPage() {
       <PairWarnings view={view} master={marginMaster as any} />
       <WeeklyTrendChart onPointClick={handleTrendPointClick} />
       <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
+      <KeywordParetoChart view={view} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -1129,6 +1133,140 @@ function CampaignScatterChart({
                     />
                   )}
                 </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 키워드별 누적 광고비 파레토 (Top 30) ───────────────────────
+// view.campaigns 모든 row 의 keyword 광고비 합산 → Top 30 + 누적 비율. 80% 라인 점선.
+// 광고비는 VAT 포함(×1.1). NON_SEARCH_KEYWORD_TOKENS 제외 (검색 키워드만).
+function KeywordParetoChart({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
+  const [expanded, setExpanded] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    const v = window.localStorage.getItem('aa-chart-3-expanded')
+    return v == null ? true : v === '1'
+  })
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('aa-chart-3-expanded', expanded ? '1' : '0')
+    }
+  }, [expanded])
+
+  const data = useMemo(() => {
+    const sumByKw = new Map<string, number>()
+    for (const c of view.campaigns) {
+      for (const r of c.rows) {
+        const kw = (r.keyword || '').trim()
+        if (NON_SEARCH_KEYWORD_TOKENS.has(kw)) continue
+        const cost = (r.adCost || 0) * 1.1  // VAT 포함
+        if (cost <= 0) continue
+        sumByKw.set(kw, (sumByKw.get(kw) ?? 0) + cost)
+      }
+    }
+    const arr = Array.from(sumByKw.entries())
+      .map(([keyword, adCostVat]) => ({ keyword, adCostVat }))
+      .sort((a, b) => b.adCostVat - a.adCostVat)
+      .slice(0, 30)
+    const total = arr.reduce((s, x) => s + x.adCostVat, 0)
+    let cum = 0
+    return arr.map((x) => {
+      cum += x.adCostVat
+      const cumPct = total > 0 ? (cum / total) * 100 : 0
+      // 라벨 truncate — 10자 초과 시 ...
+      const labelShort = x.keyword.length > 10 ? `${x.keyword.slice(0, 10)}…` : x.keyword
+      return {
+        keyword: x.keyword,
+        labelShort,
+        adCostVat: Math.round(x.adCostVat),
+        cumPct: Math.round(cumPct * 10) / 10,
+      }
+    })
+  }, [view.campaigns])
+
+  const ParetoTooltip = ({ active, payload }: any) => {
+    if (!active || !payload?.length) return null
+    const p = payload[0]?.payload
+    if (!p) return null
+    return (
+      <div style={{
+        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
+        borderRadius: 6, padding: '6px 10px', fontSize: 11.5,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
+      }}>
+        <div style={{ fontWeight: 600, marginBottom: 2 }}>{p.keyword}</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5 }}>
+          <div>광고비: {p.adCostVat.toLocaleString('ko-KR')}원</div>
+          <div>누적: {p.cumPct.toFixed(1)}%</div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="aa-section" style={{ marginBottom: 16 }}>
+      <div className="aa-section-header">
+        <div>
+          <div className="aa-section-title">📊 키워드별 누적 광고비 파레토 (Top 30)</div>
+          <div className="aa-section-desc">80/20 법칙 — 광고비 80% 차지하는 핵심 키워드 식별 · 빨강 = 80% 이하 누적</div>
+        </div>
+        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
+      </div>
+      {expanded && (
+        <div className="aa-section-body">
+          {data.length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 키워드 데이터가 없습니다.</div>
+          ) : (
+            <div
+              tabIndex={-1}
+              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+              style={{ outline: 'none' }}
+            >
+              <ResponsiveContainer width="100%" height={340}>
+                <ComposedChart data={data} margin={{ top: 12, right: 24, bottom: 40, left: 8 }} tabIndex={-1} style={{ outline: 'none' }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                  <XAxis
+                    dataKey="labelShort"
+                    angle={-45}
+                    textAnchor="end"
+                    interval={0}
+                    height={60}
+                    tick={{ fontSize: 11 }}
+                  />
+                  <YAxis
+                    yAxisId="left"
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(v) => `${Math.round((v as number) / 10000).toLocaleString()}만`}
+                  />
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    domain={[0, 100]}
+                    tick={{ fontSize: 11 }}
+                    tickFormatter={(v) => `${v}%`}
+                  />
+                  <Tooltip content={<ParetoTooltip />} />
+                  <ReferenceLine
+                    yAxisId="right" y={80}
+                    stroke="#D97706" strokeDasharray="4 4"
+                    label={{ value: '80% 라인', position: 'insideTopRight', fill: '#D97706', fontSize: 11 }}
+                  />
+                  <Bar yAxisId="left" dataKey="adCostVat" name="광고비 (VAT 포함)">
+                    {data.map((d, i) => (
+                      <Cell key={i} fill={d.cumPct <= 80 ? '#DC2626' : '#94A3B8'} />
+                    ))}
+                  </Bar>
+                  <Line
+                    yAxisId="right" type="monotone" dataKey="cumPct" name="누적 비율"
+                    stroke="#1F2937" strokeWidth={2}
+                    dot={{ r: 3, fill: '#1F2937' }}
+                  />
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
           )}
