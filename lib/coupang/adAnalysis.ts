@@ -208,9 +208,15 @@ export interface KeywordRow {
   cvrPct: number | null  // %
   adCostRaw: number
   adCostVat: number
+  /** 광고비 합 (VAT 별도, = adCostRaw). 수동 점검 표 광고비 컬럼용 alias. */
+  adCostSum: number
   revenue: number
   roasPct: number | null
+  /** ROAS (VAT 별도 기준) = revenue / adCostRaw × 100 (%). 수동 점검 표 ROAS 컬럼용. */
+  roas: number | null
   bepPct: number | null
+  /** BEP ROAS (%) — bepPct 와 동일 값. 수동 점검 표 색상/툴팁용 alias. */
+  bepRoas: number | null
   /** 평균 현재 CPC (+VAT) = adCostVat / clicks */
   currentCpcVatIncl: number | null
   /** 추천 액션 — 검색 키워드만 의미 있음 */
@@ -496,6 +502,7 @@ export function buildKeywordRows(
     const ctr = safeDiv(clicks, impressions)
     const cvr = safeDiv(orders, clicks)
     const roas = safeDiv(revenue, adCostVat)
+    const roasRaw = safeDiv(revenue, adCostRaw)
     const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId)
     const roasPct = roas != null ? roas * 100 : null
     const cls = classifyKeyword(clicks, revenue, roasPct, bep)
@@ -508,9 +515,12 @@ export function buildKeywordRows(
       cvrPct: cvr != null ? cvr * 100 : null,
       adCostRaw,
       adCostVat,
+      adCostSum: adCostRaw,
       revenue,
       roasPct,
+      roas: roasRaw != null ? roasRaw * 100 : null,
       bepPct: bep,
+      bepRoas: bep,
       currentCpcVatIncl: clicks > 0 ? adCostVat / clicks : null,
       action: cls.action,
       recommendedBidVatExcl: cls.bid,

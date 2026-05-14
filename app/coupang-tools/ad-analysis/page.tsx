@@ -1786,6 +1786,8 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
                 <TH label="광고 판매수" k="orders" num />
                 <TH label="전환율" k="cvrPct" num />
                 <TH label="매출" k="revenue" num />
+                <TH label={<>광고비<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(VAT 별도)</span></>} k="adCostSum" num />
+                <TH label="ROAS" k="roas" num />
                 <th className="num">현재 입찰가<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(VAT 별도)</span></th>
                 <TH label={<>추천 입찰가<br /><span style={{ fontWeight: 400, fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />
                 <TH label="차이" k="bidDiff" num />
@@ -1796,7 +1798,7 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
             <tbody>
               {sorted.map((r) => <ManualKeywordRowComp key={r.keyword} r={r} onChangeBid={setBid} />)}
               {sorted.length === 0 && (
-                <tr><td colSpan={12} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
+                <tr><td colSpan={14} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
               )}
             </tbody>
           </table>
@@ -1827,6 +1829,15 @@ function ManualKeywordRowComp({ r, onChangeBid }: { r: ManualKeywordRow; onChang
   const diffClass = r.bidDiff != null ? (r.bidDiff >= 0 ? 'text-good' : 'text-bad') : ''
   const isLowClick = r.clicks < 20
 
+  // ROAS 색상: BEP 미산정/매출 0 → 회색 "—". ≥ BEP 녹 · ≥ BEP×0.7 노 · 그 외 빨.
+  const roasShow = r.bepRoas != null && r.revenue > 0 && r.roas != null
+  const roasClass = roasShow
+    ? (r.roas! >= r.bepRoas! ? 'text-good'
+      : r.roas! >= r.bepRoas! * 0.7 ? 'text-warn'
+      : 'text-bad')
+    : 'text-muted'
+  const roasTitle = r.bepRoas != null ? `BEP ${Math.round(r.bepRoas)}%` : undefined
+
   return (
     <tr style={isLowClick ? { opacity: 0.6 } : undefined}>
       <td className="sticky-left"><strong>{r.keyword}</strong></td>
@@ -1836,6 +1847,8 @@ function ManualKeywordRowComp({ r, onChangeBid }: { r: ManualKeywordRow; onChang
       <td className="num">{fmtNum(r.orders)}</td>
       <td className="num">{fmtPctVal(r.cvrPct, 2)}</td>
       <td className="num">{fmtNum(r.revenue)}</td>
+      <td className="num">{fmtNum(r.adCostSum)}</td>
+      <td className={`num ${roasClass}`} title={roasTitle}>{roasShow ? fmtRoas(r.roas) : '—'}</td>
       <td className="num">
         <input
           key={`${r.keyword}|${r.avgCpcVatExcl ?? ''}`}
