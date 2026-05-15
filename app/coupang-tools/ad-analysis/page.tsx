@@ -325,7 +325,6 @@ export default function AdAnalysisPage() {
         <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
         <KeywordParetoChart view={view} master={marginMaster as any} />
         <PairRoasComparisonChart view={view} />
-        <BepDistributionChart view={view} master={marginMaster as any} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -383,7 +382,6 @@ export default function AdAnalysisPage() {
       <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
       <KeywordParetoChart view={view} master={marginMaster as any} />
       <PairRoasComparisonChart view={view} />
-      <BepDistributionChart view={view} master={marginMaster as any} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -1406,140 +1404,6 @@ function PairRoasComparisonChart({ view }: { view: ReturnType<typeof buildAdAnal
                       formatter={(v: any) => (v == null || v === 0 ? '' : `${v}%`)}
                       style={{ fontSize: 11, fontWeight: 500, fill: '#1F2937' }}
                     />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── 키워드 BEP 대비 ROAS 분포 히스토그램 (차트 ④) ──────────────
-// 각 키워드의 (ROAS / BEP × 100) 비율로 9구간 분포. 100% 경계가 적자/흑자.
-// 키워드 BEP = Σ(rowAdCostVat × campaignBep) / Σ rowAdCostVat — campaign bepPct(매출 가중) 기반의 광고비 가중평균.
-// 캠페인 BEP null 인 row 는 BEP 산출에서 제외 (해당 row 광고비/매출 합산도 함께 제외 — 비율 산출 불가 키워드 방지).
-function BepDistributionChart({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
-  // 페이지 진입 시 무조건 접힘 — localStorage 영속화 의도적 제거 (대표님 요청).
-  const [expanded, setExpanded] = useState<boolean>(false)
-
-  // 빈 정의 — 9개. 100% 미만 빨강, 100% 이상 녹색. (min, max, label, color)
-  const BINS: { label: string; min: number; max: number; color: string }[] = useMemo(() => [
-    { label: '<25%',    min: -Infinity, max: 25,       color: '#991B1B' },
-    { label: '25-50%',  min: 25,        max: 50,       color: '#DC2626' },
-    { label: '50-75%',  min: 50,        max: 75,       color: '#EF4444' },
-    { label: '75-100%', min: 75,        max: 100,      color: '#F87171' },
-    { label: '100-125%',min: 100,       max: 125,      color: '#86EFAC' },
-    { label: '125-150%',min: 125,       max: 150,      color: '#4ADE80' },
-    { label: '150-175%',min: 150,       max: 175,      color: '#22C55E' },
-    { label: '175-200%',min: 175,       max: 200,      color: '#16A34A' },
-    { label: '≥200%',   min: 200,       max: Infinity, color: '#15803D' },
-  ], [])
-
-  const data = useMemo(() => {
-    const priceMap = buildActualPriceMapById(master)
-    const exposureMap = buildExposureMapByOptionId(master)
-    interface KwAcc { adCostVat: number; revenue: number; bepNum: number; bepDen: number }
-    const agg = new Map<string, KwAcc>()
-    for (const c of view.campaigns) {
-      const campBep = c.bepPct
-      for (const r of c.rows) {
-        const kw = (r.keyword || '').trim()
-        if (NON_SEARCH_KEYWORD_TOKENS.has(kw)) continue
-        const cost = (r.adCost || 0) * 1.1
-        if (cost <= 0) continue
-        if (campBep == null || !Number.isFinite(campBep) || campBep <= 0) continue
-        const rev = splitRowRevenue(r, priceMap, exposureMap).self
-        const prev = agg.get(kw) ?? { adCostVat: 0, revenue: 0, bepNum: 0, bepDen: 0 }
-        prev.adCostVat += cost
-        prev.revenue += rev
-        prev.bepNum += cost * campBep
-        prev.bepDen += cost
-        agg.set(kw, prev)
-      }
-    }
-
-    const bins = BINS.map((b) => ({ ...b, count: 0, adCostVat: 0 }))
-    for (const [, v] of agg) {
-      if (v.adCostVat <= 0 || v.bepDen <= 0) continue
-      const kwRoas = (v.revenue / v.adCostVat) * 100
-      const kwBep = v.bepNum / v.bepDen
-      if (kwBep <= 0) continue
-      const ratio = (kwRoas / kwBep) * 100
-      // 빈 선택 — [min, max) 우반개구간 (200% 정확히는 ≥200% 빈)
-      const idx = bins.findIndex((b) => ratio >= b.min && ratio < b.max)
-      const targetIdx = idx >= 0 ? idx : bins.length - 1  // Infinity bin fallback
-      bins[targetIdx].count += 1
-      bins[targetIdx].adCostVat += v.adCostVat
-    }
-    return bins.map((b) => ({
-      label: b.label,
-      color: b.color,
-      count: b.count,
-      adCostVat: Math.round(b.adCostVat),
-    }))
-  }, [view.campaigns, master, BINS])
-
-  const totalKw = data.reduce((s, b) => s + b.count, 0)
-  const lossKw = data.slice(0, 4).reduce((s, b) => s + b.count, 0)  // < 100%
-  const profitKw = data.slice(4).reduce((s, b) => s + b.count, 0)   // ≥ 100%
-
-  const DistTooltip = ({ active, payload, label }: any) => {
-    if (!active || !payload?.length) return null
-    const p = payload[0]?.payload
-    if (!p) return null
-    return (
-      <div style={{
-        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
-        borderRadius: 6, padding: '6px 10px', fontSize: 11.5,
-        boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
-      }}>
-        <div style={{ fontWeight: 600, marginBottom: 2 }}>구간: {label}</div>
-        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5 }}>
-          <div>키워드: {p.count.toLocaleString('ko-KR')}개</div>
-          <div>광고비 합: {p.adCostVat.toLocaleString('ko-KR')}원</div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="aa-section" style={{ marginBottom: 16 }}>
-      <div className="aa-section-header">
-        <div>
-          <div className="aa-section-title">📉 BEP 대비 ROAS 분포 히스토그램</div>
-          <div className="aa-section-desc">
-            키워드별 (ROAS / BEP × 100) 비율 분포 · 100% 미만 적자(빨강) / 이상 흑자(녹색)
-            {totalKw > 0 && <span style={{ marginLeft: 8, color: '#64748B' }}>· 총 {totalKw}개 (적자 {lossKw} / 흑자 {profitKw})</span>}
-          </div>
-        </div>
-        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
-      </div>
-      {expanded && (
-        <div className="aa-section-body">
-          {totalKw === 0 ? (
-            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 키워드 분포 데이터가 없습니다.</div>
-          ) : (
-            <div
-              tabIndex={-1}
-              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
-              style={{ outline: 'none' }}
-            >
-              <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={data} margin={{ top: 12, right: 24, bottom: 8, left: 8 }} tabIndex={-1} style={{ outline: 'none' }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                  <Tooltip cursor={{ fill: '#FFF7ED', fillOpacity: 0.5 }} content={<DistTooltip />} />
-                  <ReferenceLine
-                    x="100-125%"
-                    stroke="#1F2937" strokeDasharray="4 4" strokeWidth={1.5}
-                    label={{ value: 'BEP 100%', position: 'top', fill: '#1F2937', fontSize: 11, fontWeight: 600 }}
-                  />
-                  <Bar dataKey="count" name="키워드 수">
-                    {data.map((d, i) => <Cell key={i} fill={d.color} />)}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
