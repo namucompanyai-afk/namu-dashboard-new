@@ -14,7 +14,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   ScatterChart, Scatter, ZAxis, ReferenceLine,
   ComposedChart, Bar, Cell,
-  BarChart,
+  BarChart, LabelList,
 } from 'recharts'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -1294,17 +1294,8 @@ function KeywordParetoChart({ view, master }: { view: ReturnType<typeof buildAdA
 // 같은 prefix 의 AI/수동 양쪽 캠페인 존재 → 페어. 광고비/매출 합 → ROAS 양쪽 비교.
 // 광고비·매출은 CampaignDiag 의 adCostVat·revenue 그대로 사용 (KPI·차트 ①과 동일 self-only 정의).
 function PairRoasComparisonChart({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
-  const [expanded, setExpanded] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false  // 기본 접힘
-    const v = window.localStorage.getItem('aa-chart-5-expanded')
-    return v == null ? false : v === '1'
-  })
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('aa-chart-5-expanded', expanded ? '1' : '0')
-    }
-  }, [expanded])
+  // 페이지 진입 시 무조건 접힘 — localStorage 영속화 의도적 제거 (대표님 요청).
+  const [expanded, setExpanded] = useState<boolean>(false)
 
   const data = useMemo(() => {
     interface Bucket { hasAi: boolean; hasManual: boolean; aiCost: number; aiRev: number; manualCost: number; manualRev: number }
@@ -1402,8 +1393,20 @@ function PairRoasComparisonChart({ view }: { view: ReturnType<typeof buildAdAnal
                   <YAxis type="category" dataKey="labelShort" width={180} tick={{ fontSize: 11 }} />
                   <Tooltip cursor={{ fill: '#FFF7ED', fillOpacity: 0.5 }} content={<PairTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="aiRoas" name="🤖 AI" fill="#2563EB" />
-                  <Bar dataKey="manualRoas" name="🎯 수동" fill="#9333EA" />
+                  <Bar dataKey="aiRoas" name="🤖 AI" fill="#2563EB">
+                    <LabelList
+                      dataKey="aiRoas" position="right"
+                      formatter={(v: any) => (v == null || v === 0 ? '' : `${v}%`)}
+                      style={{ fontSize: 11, fontWeight: 500, fill: '#1F2937' }}
+                    />
+                  </Bar>
+                  <Bar dataKey="manualRoas" name="🎯 수동" fill="#9333EA">
+                    <LabelList
+                      dataKey="manualRoas" position="right"
+                      formatter={(v: any) => (v == null || v === 0 ? '' : `${v}%`)}
+                      style={{ fontSize: 11, fontWeight: 500, fill: '#1F2937' }}
+                    />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -1419,17 +1422,8 @@ function PairRoasComparisonChart({ view }: { view: ReturnType<typeof buildAdAnal
 // 키워드 BEP = Σ(rowAdCostVat × campaignBep) / Σ rowAdCostVat — campaign bepPct(매출 가중) 기반의 광고비 가중평균.
 // 캠페인 BEP null 인 row 는 BEP 산출에서 제외 (해당 row 광고비/매출 합산도 함께 제외 — 비율 산출 불가 키워드 방지).
 function BepDistributionChart({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
-  const [expanded, setExpanded] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    const v = window.localStorage.getItem('aa-chart-4-expanded')
-    return v == null ? false : v === '1'
-  })
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('aa-chart-4-expanded', expanded ? '1' : '0')
-    }
-  }, [expanded])
+  // 페이지 진입 시 무조건 접힘 — localStorage 영속화 의도적 제거 (대표님 요청).
+  const [expanded, setExpanded] = useState<boolean>(false)
 
   // 빈 정의 — 9개. 100% 미만 빨강, 100% 이상 녹색. (min, max, label, color)
   const BINS: { label: string; min: number; max: number; color: string }[] = useMemo(() => [
