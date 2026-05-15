@@ -111,11 +111,11 @@ export async function GET(request: Request) {
   }
 }
 
-/** POST — 자동 저장(last) / 명시 저장(explicit, 메인 row만) / raw(별도 row, raw 만) */
+/** POST — 자동 저장(last) / 명시 저장(explicit, 메인 row만) / raw(별도 row, raw 만) / summary 부분 머지(patch-summary) */
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { type } = body as { type: 'last' | 'explicit' | 'raw' };
+    const { type } = body as { type: 'last' | 'explicit' | 'raw' | 'patch-summary' };
 
     // 1) 마지막 분석 자동 저장 (덮어쓰기)
     if (type === 'last') {
@@ -191,7 +191,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, type: 'raw', id });
     }
 
-    return NextResponse.json({ error: 'type=last|explicit|raw' }, { status: 400 });
+    // 4) summary 부분 머지 — raw 일절 건드리지 않고 메인 row 의 summary 필드만 업데이트.
+    //     4.5MB body limit 회피용 (옛 분석 backfill 시 type=explicit 가 413 나는 경우).
+    if (type === 'patch-summary') {
+      const { id, summary } = body as { id: string; summary: Record<string, any> };
+      if (!id) return NextResponse.json({ error: 'id 필요' }, { status: 400 });
+      if (!summary || typeof summary !== 'object') return NextResponse.json({ error: 'summary 객체 필요' }, { status: 400 });
+      const existing = await getData(`${KEY_ITEM_PREFIX}${id}`) as DiagnosisSnapshot | null;
+      if (!existing) return NextResponse.json({ error: 'id 없음' }, { status: 404 });
+      const merged = { ...(existing.summary || {}), ...summary };
+      const next: DiagnosisSnapshot = { ...existing, summary: merged };
+      await saveData(`${KEY_ITEM_PREFIX}${id}`, next);
+      return NextResponse.json({ ok: true, type: 'patch-summary', id, summary: merged });
+    }
+
+    return NextResponse.json({ error: 'type=last|explicit|raw|patch-summary' }, { status: 400 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
