@@ -903,7 +903,7 @@ function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void })
     <div className="aa-section" style={{ marginBottom: 16 }}>
       <div className="aa-section-header">
         <div>
-          <div className="aa-section-title">📈 주간 광고 추이</div>
+          <div className="aa-section-title">📈 광고 추이</div>
           <div className="aa-section-desc">
             광고매출 / 광고비 / ROAS · 저장된 분석 히스토리 기준 ({chartMode === 'weekly' ? '주' : '월'} 환산)
             {onPointClick && <span style={{ marginLeft: 8, color: '#EA580C' }}>· 점 클릭 시 해당 시점 데이터로 분석</span>}
