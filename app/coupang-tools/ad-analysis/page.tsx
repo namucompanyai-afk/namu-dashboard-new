@@ -14,6 +14,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   ScatterChart, Scatter, ZAxis, ReferenceLine,
   ComposedChart, Bar, Cell,
+  BarChart,
 } from 'recharts'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -323,6 +324,7 @@ export default function AdAnalysisPage() {
         <WeeklyTrendChart onPointClick={handleTrendPointClick} />
         <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
         <KeywordParetoChart view={view} master={marginMaster as any} />
+        <PairRoasComparisonChart view={view} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
@@ -379,6 +381,7 @@ export default function AdAnalysisPage() {
       <WeeklyTrendChart onPointClick={handleTrendPointClick} />
       <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
       <KeywordParetoChart view={view} master={marginMaster as any} />
+      <PairRoasComparisonChart view={view} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
@@ -1276,6 +1279,130 @@ function KeywordParetoChart({ view, master }: { view: ReturnType<typeof buildAdA
                     dot={{ r: 3, fill: '#1F2937' }}
                   />
                 </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── AI vs 수동 페어 ROAS 비교 (가로 막대, Top 20) ─────────────
+// 같은 prefix 의 AI/수동 양쪽 캠페인 존재 → 페어. 광고비/매출 합 → ROAS 양쪽 비교.
+// 광고비·매출은 CampaignDiag 의 adCostVat·revenue 그대로 사용 (KPI·차트 ①과 동일 self-only 정의).
+function PairRoasComparisonChart({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
+  const [expanded, setExpanded] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false  // 기본 접힘
+    const v = window.localStorage.getItem('aa-chart-5-expanded')
+    return v == null ? false : v === '1'
+  })
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('aa-chart-5-expanded', expanded ? '1' : '0')
+    }
+  }, [expanded])
+
+  const data = useMemo(() => {
+    interface Bucket { hasAi: boolean; hasManual: boolean; aiCost: number; aiRev: number; manualCost: number; manualRev: number }
+    const byPrefix = new Map<string, Bucket>()
+    for (const c of view.campaigns) {
+      const parsed = parseCampaignName(c.campaignName)
+      if (parsed.campaignType === 'unknown') continue
+      const b = byPrefix.get(parsed.prefix) ?? { hasAi: false, hasManual: false, aiCost: 0, aiRev: 0, manualCost: 0, manualRev: 0 }
+      if (parsed.campaignType === 'ai') {
+        b.hasAi = true
+        b.aiCost += c.adCostVat
+        b.aiRev += c.revenue
+      } else {
+        b.hasManual = true
+        b.manualCost += c.adCostVat
+        b.manualRev += c.revenue
+      }
+      byPrefix.set(parsed.prefix, b)
+    }
+    const arr: any[] = []
+    for (const [prefix, b] of byPrefix) {
+      if (!b.hasAi || !b.hasManual) continue           // 짝 없는 캠페인 제외
+      if (b.aiCost === 0 && b.manualCost === 0) continue  // 둘 다 광고비 0 제외
+      arr.push({
+        prefix,
+        labelShort: prefix.length > 22 ? prefix.slice(0, 22) + '…' : prefix,
+        aiCost: Math.round(b.aiCost),
+        aiRev: Math.round(b.aiRev),
+        aiRoas: b.aiCost > 0 ? Math.round((b.aiRev / b.aiCost) * 100) : 0,
+        manualCost: Math.round(b.manualCost),
+        manualRev: Math.round(b.manualRev),
+        manualRoas: b.manualCost > 0 ? Math.round((b.manualRev / b.manualCost) * 100) : 0,
+        _totalCost: b.aiCost + b.manualCost,
+      })
+    }
+    arr.sort((a, b) => b._totalCost - a._totalCost)
+    return arr.slice(0, 20)
+  }, [view.campaigns])
+
+  const PairTooltip = ({ active, payload }: any) => {
+    if (!active || !payload?.length) return null
+    const p = payload[0]?.payload
+    if (!p) return null
+    return (
+      <div style={{
+        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
+        borderRadius: 6, padding: '8px 12px', fontSize: 11.5,
+        boxShadow: '0 2px 6px rgba(0,0,0,0.05)', minWidth: 220,
+      }}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.prefix}</div>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.55 }}>
+          <div style={{ color: '#2563EB', fontWeight: 600, marginTop: 2 }}>🤖 AI</div>
+          <div>· 광고비: {p.aiCost.toLocaleString('ko-KR')}원</div>
+          <div>· 매출: {p.aiRev.toLocaleString('ko-KR')}원</div>
+          <div>· ROAS: {p.aiCost > 0 ? `${p.aiRoas.toLocaleString('ko-KR')}%` : '—'}</div>
+          <div style={{ color: '#9333EA', fontWeight: 600, marginTop: 4 }}>🎯 수동</div>
+          <div>· 광고비: {p.manualCost.toLocaleString('ko-KR')}원</div>
+          <div>· 매출: {p.manualRev.toLocaleString('ko-KR')}원</div>
+          <div>· ROAS: {p.manualCost > 0 ? `${p.manualRoas.toLocaleString('ko-KR')}%` : '—'}</div>
+        </div>
+      </div>
+    )
+  }
+
+  // 동적 높이 — 한 행 28px + 상하 여백 80px. 최소 200.
+  const chartHeight = Math.max(200, data.length * 32 + 60)
+
+  return (
+    <div className="aa-section" style={{ marginBottom: 16 }}>
+      <div className="aa-section-header">
+        <div>
+          <div className="aa-section-title">⚖️ AI vs 수동 페어 ROAS 비교</div>
+          <div className="aa-section-desc">같은 prefix 의 AI·수동 캠페인 페어 ROAS 비교 (Top 20, 광고비 합 기준 정렬)</div>
+        </div>
+        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
+      </div>
+      {expanded && (
+        <div className="aa-section-body">
+          {data.length === 0 ? (
+            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 AI·수동 페어 데이터가 없습니다.</div>
+          ) : (
+            <div
+              tabIndex={-1}
+              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
+              style={{ outline: 'none' }}
+            >
+              <ResponsiveContainer width="100%" height={chartHeight}>
+                <BarChart
+                  data={data} layout="vertical"
+                  margin={{ top: 8, right: 24, bottom: 8, left: 8 }}
+                  tabIndex={-1} style={{ outline: 'none' }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
+                  <XAxis type="number" tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11 }} />
+                  <YAxis type="category" dataKey="labelShort" width={180} tick={{ fontSize: 11 }} />
+                  <Tooltip cursor={{ fill: '#FFF7ED', fillOpacity: 0.5 }} content={<PairTooltip />} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="aiRoas" name="🤖 AI" fill="#2563EB" />
+                  <Bar dataKey="manualRoas" name="🎯 수동" fill="#9333EA" />
+                </BarChart>
               </ResponsiveContainer>
             </div>
           )}
