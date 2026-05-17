@@ -90,6 +90,76 @@ function useSort<T extends Record<string, any>>(rows: T[], defaultKey: keyof T, 
   return { sorted, key, dir, toggle }
 }
 
+// ── 목표 ROAS — prefix + 타입(AI|수동|스마트) 단위 키 ────────────
+// 분석 업로드가 갱신되어도 같은 prefix+타입이면 사용자가 입력한 목표값 유지.
+// `parseCampaignName` 은 'smart' 미지원이라 별도 정규식으로 4종 토큰 모두 매칭.
+const TARGET_KEY_RE = /^(.+)_(AI|수동|스마트|smart)_(.+)$/i
+
+function parseCampaignTargetKey(name: string): { key: string; kind: 'AI' | '수동' | '스마트' } | null {
+  const m = (name || '').trim().match(TARGET_KEY_RE)
+  if (!m) return null
+  const prefix = m[1].trim()
+  const tok = m[2]
+  let kind: 'AI' | '수동' | '스마트'
+  if (/^ai$/i.test(tok)) kind = 'AI'
+  else if (tok === '수동') kind = '수동'
+  else kind = '스마트' // 'smart' or '스마트'
+  if (!prefix) return null
+  return { key: `${prefix}::${kind}`, kind }
+}
+
+// 셀 내 목표 ROAS 입력 — debounce 500ms + onBlur 즉시 flush
+function TargetRoasInput({
+  value,
+  onChange,
+}: {
+  value: number | null
+  onChange: (v: number | null) => void
+}) {
+  const [local, setLocal] = useState<string>(value != null ? String(value) : '')
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setLocal(value != null ? String(value) : '')
+  }, [value])
+
+  const flush = (raw: string) => {
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+    const trimmed = raw.trim()
+    if (trimmed === '') { onChange(null); return }
+    const n = Number(trimmed)
+    if (!Number.isFinite(n) || n <= 0) return
+    onChange(Math.round(n))
+  }
+
+  return (
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+      <input
+        type="number"
+        min={0}
+        inputMode="numeric"
+        placeholder="예: 400"
+        value={local}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          const v = e.target.value
+          setLocal(v)
+          if (timerRef.current) clearTimeout(timerRef.current)
+          timerRef.current = setTimeout(() => flush(v), 500)
+        }}
+        onBlur={() => flush(local)}
+        style={{
+          width: 58, padding: '2px 4px',
+          border: '1px solid #CBD5E1', borderRadius: 4,
+          fontSize: 12, textAlign: 'right',
+          fontFamily: 'inherit',
+        }}
+      />
+      <span style={{ fontSize: 11, color: '#94A3B8' }}>%</span>
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────
 export default function AdAnalysisPage() {
   const marginMaster = useMarginStore((s) => s.marginMaster)
@@ -107,6 +177,38 @@ export default function AdAnalysisPage() {
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const [autoLoading, setAutoLoading] = useState(true)
   const [uploadError, setUploadError] = useState<string | null>(null)
+
+  // 목표 ROAS — 사용자 입력값 (prefix::타입 → %). 분석 갱신과 무관하게 유지.
+  const [targets, setTargets] = useState<Record<string, number>>({})
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/campaign-targets')
+        const json = await res.json()
+        if (!cancelled && json?.targets && typeof json.targets === 'object') {
+          setTargets(json.targets as Record<string, number>)
+        }
+      } catch {
+        // 로드 실패는 무시 — 빈 상태로 시작.
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+  const setTargetForKey = (key: string, value: number | null) => {
+    setTargets((prev) => {
+      const next = { ...prev }
+      if (value == null) delete next[key]
+      else next[key] = value
+      return next
+    })
+    // 백엔드 저장 — 응답 안 기다림 (낙관적 업데이트)
+    fetch('/api/campaign-targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, value }),
+    }).catch((err) => console.error('[campaign-targets] save 실패:', err))
+  }
 
   function openCampaignAndOption(campaignId: string, optionId: string | null) {
     setOpenCampId(campaignId)
@@ -333,6 +435,8 @@ export default function AdAnalysisPage() {
           onOpen={toggleCampaign}
           selectedOptionId={selectedOptionId}
           onSelectOption={openCampaignAndOption}
+          targets={targets}
+          onTargetChange={setTargetForKey}
         />
         {openCampaign && (
           openCampaign.type === 'manual'
@@ -390,6 +494,8 @@ export default function AdAnalysisPage() {
         onOpen={toggleCampaign}
         selectedOptionId={selectedOptionId}
         onSelectOption={openCampaignAndOption}
+        targets={targets}
+        onTargetChange={setTargetForKey}
       />
       {openCampaign && (
         openCampaign.type === 'manual'
@@ -1569,13 +1675,15 @@ function HistoryNotesSection() {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, onSelectOption }: {
+function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
   openCampId: string | null
   onOpen: (id: string) => void
   selectedOptionId: string | null
   onSelectOption: (campaignId: string, optionId: string | null) => void
+  targets: Record<string, number>
+  onTargetChange: (key: string, value: number | null) => void
 }) {
   const { sorted, key, dir, toggle } = useSort(view.campaigns, 'adCostVat' as keyof CampaignDiag, 'desc')
   const [expandedCampIds, setExpandedCampIds] = useState<Set<string>>(new Set())
@@ -1626,6 +1734,7 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
               <TH label="광고 매출" k={'revenue'} num />
               <TH label={<>타상품 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'otherProductRevenue'} num minWidth={110} />
               <TH label="광고 판매수" k={'orders'} num />
+              <th className="num" style={{ minWidth: 96 }} title="prefix+타입 단위 저장 · 분석 갱신 후에도 유지">목표 ROAS</th>
               <TH label="ROAS" k={'roasPct'} num />
               <TH label="BEP" k={'bepPct'} num />
               <TH label="갭" k={'gapPct'} num />
@@ -1651,6 +1760,8 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
                   options={opts}
                   selectedOptionId={isOpen ? selectedOptionId : null}
                   onSelectOption={(optId) => onSelectOption(c.campaignId, optId)}
+                  targets={targets}
+                  onTargetChange={onTargetChange}
                 />
               )
             })}
@@ -1661,7 +1772,7 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
   )
 }
 
-function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption }: {
+function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange }: {
   c: CampaignDiag
   isOpen: boolean
   isExpanded: boolean
@@ -1670,6 +1781,8 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
   options: OptionDiag[]
   selectedOptionId: string | null
   onSelectOption: (optionId: string) => void
+  targets: Record<string, number>
+  onTargetChange: (key: string, value: number | null) => void
 }) {
   const roasUnder = c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct
   const roasClass = roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : '')
@@ -1683,6 +1796,11 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
   const searchPct = Math.round(c.searchShare * 100)
   const isManual = c.type === 'manual'
   const cvrPct = c.clicks > 0 ? (c.orders / c.clicks) * 100 : null
+
+  // 목표 ROAS — 캠페인명에서 prefix+타입 추출. 수동 또는 비표준 네이밍이면 입력 비활성화.
+  const targetInfo = parseCampaignTargetKey(c.campaignName)
+  const targetEditable = targetInfo != null && (targetInfo.kind === 'AI' || targetInfo.kind === '스마트')
+  const targetValue = targetInfo ? (targets[targetInfo.key] ?? null) : null
 
   return (
     <>
@@ -1702,6 +1820,11 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
         <td className="num">{fmtMan(c.revenue)}</td>
         <td className="num text-muted">{c.otherProductRevenue > 0 ? fmtMan(c.otherProductRevenue) : '—'}</td>
         <td className="num">{fmtNum(c.orders)}</td>
+        <td className="num" onClick={(e) => e.stopPropagation()}>
+          {targetEditable && targetInfo
+            ? <TargetRoasInput value={targetValue} onChange={(v) => onTargetChange(targetInfo.key, v)} />
+            : <span className="text-muted">—</span>}
+        </td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
         <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
         <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>
@@ -1726,7 +1849,7 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
       ))}
       {isExpanded && options.length === 0 && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={11} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
+          <td className="sticky-left aa-option-cell" colSpan={12} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
         </tr>
       )}
     </>
@@ -1759,6 +1882,7 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
       <td className="num">{fmtMan(o.revenue)}</td>
       <td className="num text-muted">{o.otherProductRevenue > 0 ? fmtMan(o.otherProductRevenue) : '—'}</td>
       <td className="num">{fmtNum(o.sold)}</td>
+      <td className="num text-muted">—</td>
       <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
       <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
       <td className={`num ${gapClass}`}>{o.gapPct != null ? `${o.gapPct > 0 ? '+' : ''}${Math.round(o.gapPct)}%p` : '—'}</td>
