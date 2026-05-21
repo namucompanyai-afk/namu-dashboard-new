@@ -13,6 +13,7 @@ export default function Sidebar() {
   const [isCoupangOpen, setIsCoupangOpen] = useState(true);  // 쿠팡 서브
   const [isNaverOpen, setIsNaverOpen] = useState(true);      // 스마트스토어 서브
   const [isJindopamOpen, setIsJindopamOpen] = useState(true); // 진도팜 (최상위)
+  const [isOrderStaffOpen, setIsOrderStaffOpen] = useState(true); // 발주 직원 (최상위)
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -209,6 +210,24 @@ export default function Sidebar() {
                   <span>🔗</span>
                   <span>공유 View</span>
                   <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                </Link>
+              </div>
+            )}
+          </div>
+
+          {/* 발주 직원 */}
+          <div>
+            <button onClick={() => setIsOrderStaffOpen(!isOrderStaffOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/jindopam/order-work') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+              <span>📦</span>
+              <span className="flex-1 text-left">발주 직원</span>
+              <span className="text-xs">{isOrderStaffOpen ? '▼' : '▶'}</span>
+            </button>
+
+            {isOrderStaffOpen && (
+              <div className="ml-4 mt-1 space-y-1">
+                <Link href="/jindopam/order-work" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/order-work') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🌾</span>
+                  <span>진도팜 발주</span>
                 </Link>
               </div>
             )}
