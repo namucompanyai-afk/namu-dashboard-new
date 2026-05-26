@@ -97,6 +97,24 @@ function downloadXlsx(rows: any[][], filename: string) {
   XLSX.writeFile(wb, filename);
 }
 
+function normalizePhone(s: string): string {
+  return (s || '').replace(/\D/g, '');
+}
+
+interface ReplyEntry {
+  운송장: string;
+  받는분: string;
+  전화원본: string;
+}
+
+interface InvoiceException {
+  type: '다중박스(수동)' | '회신없음(수동)';
+  받는분: string;
+  전화: string;
+  주문번호: string;
+  후보송장?: string[];
+}
+
 export default function JindopamOrderWorkPage() {
   const [shopmine, setShopmine] = useState<ShopmineRow[]>([]);
   const [mapping, setMapping] = useState<MappingRow[]>([]);
@@ -105,6 +123,8 @@ export default function JindopamOrderWorkPage() {
   const [error, setError] = useState<string>('');
   const [dragSm, setDragSm] = useState(false);
   const [dragMp, setDragMp] = useState(false);
+  const [dragRp, setDragRp] = useState(false);
+  const [replyFiles, setReplyFiles] = useState<{ name: string; entries: ReplyEntry[] }[]>([]);
 
   const parseShopmine = useCallback((file: File) => {
     setError('');
@@ -175,6 +195,49 @@ export default function JindopamOrderWorkPage() {
       }
     };
     reader.readAsArrayBuffer(file);
+  }, []);
+
+  const parseReplyFiles = useCallback((files: FileList | File[]) => {
+    setError('');
+    const list = Array.from(files);
+    let remaining = list.length;
+    const results: { name: string; entries: ReplyEntry[] }[] = [];
+    list.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const wb = XLSX.read(data, { type: 'array' });
+          const sh = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json<any[]>(sh, { header: 1, defval: '' });
+          const entries: ReplyEntry[] = [];
+          for (let i = 1; i < rows.length; i++) {
+            const r = rows[i] as any[];
+            if (!r) continue;
+            const 운송장 = String(r[7] || '').trim();
+            if (!운송장) continue;
+            entries.push({
+              운송장,
+              받는분: String(r[20] || '').trim().normalize('NFC'),
+              전화원본: String(r[21] || '').trim(),
+            });
+          }
+          results.push({ name: file.name.normalize('NFC'), entries });
+        } catch (err: any) {
+          setError('회신 파일 파싱 실패: ' + file.name + ' / ' + (err?.message || err));
+        } finally {
+          remaining--;
+          if (remaining === 0) {
+            setReplyFiles((prev) => {
+              const byName = new Map(prev.map(p => [p.name, p]));
+              for (const r of results) byName.set(r.name, r);
+              return [...byName.values()];
+            });
+          }
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
   }, []);
 
   const mappingMap = useMemo(() => {
@@ -282,6 +345,44 @@ export default function JindopamOrderWorkPage() {
   const totalBong = aggregate.total;
   const totalRecipients = recipientBuckets.groups.length;
 
+  const phoneToWaybills = useMemo(() => {
+    const m = new Map<string, Set<string>>();
+    for (const f of replyFiles) {
+      for (const e of f.entries) {
+        const ph = normalizePhone(e.전화원본);
+        if (!ph) continue;
+        if (!m.has(ph)) m.set(ph, new Set());
+        m.get(ph)!.add(e.운송장);
+      }
+    }
+    return m;
+  }, [replyFiles]);
+
+  const invoiceResult = useMemo(() => {
+    const matched: { 주문번호: string; 송장: string }[] = [];
+    const exceptions: InvoiceException[] = [];
+    for (const r of jindopam) {
+      const ph = normalizePhone(r.전화);
+      const ways = phoneToWaybills.get(ph);
+      if (!ways) {
+        exceptions.push({ type: '회신없음(수동)', 받는분: r.받는분성명, 전화: r.전화, 주문번호: r.주문번호 });
+        continue;
+      }
+      if (ways.size > 1) {
+        exceptions.push({ type: '다중박스(수동)', 받는분: r.받는분성명, 전화: r.전화, 주문번호: r.주문번호, 후보송장: [...ways] });
+        continue;
+      }
+      matched.push({ 주문번호: r.주문번호, 송장: [...ways][0] });
+    }
+    return { matched, exceptions };
+  }, [jindopam, phoneToWaybills]);
+
+  const downloadInvoice = useCallback(() => {
+    const rows: any[][] = [['주문고유코드', '송장번호', '택배사']];
+    for (const m of invoiceResult.matched) rows.push([m.주문번호, m.송장, 'CJ대한통운']);
+    downloadXlsx(rows, `발송등록_곡물(CJ)_진도팜_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }, [invoiceResult]);
+
   const copyAggregateText = useCallback(() => {
     const lines = [`별칭\t발송봉수`];
     for (const r of aggregate.rows) {
@@ -313,14 +414,16 @@ export default function JindopamOrderWorkPage() {
     downloadXlsx(rows, `진도팜_${key}_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }, [recipientBuckets]);
 
-  const onDrop = (kind: 'sm' | 'mp') => (e: React.DragEvent) => {
+  const onDrop = (kind: 'sm' | 'mp' | 'rp') => (e: React.DragEvent) => {
     e.preventDefault();
     if (kind === 'sm') setDragSm(false);
-    else setDragMp(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    if (kind === 'sm') parseShopmine(file);
-    else parseMapping(file);
+    else if (kind === 'mp') setDragMp(false);
+    else setDragRp(false);
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    if (kind === 'sm') parseShopmine(files[0]);
+    else if (kind === 'mp') parseMapping(files[0]);
+    else parseReplyFiles(files);
   };
 
   return (
@@ -466,6 +569,99 @@ export default function JindopamOrderWorkPage() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          {/* 3단계 송장 변환 */}
+          <section className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200">
+              <h2 className="text-base font-semibold">3단계 · 진도팜 회신 → 발송등록(CJ) 변환</h2>
+              <p className="text-xs text-gray-500 mt-0.5">파일접수 회신 파일 여러 개 드래그앤드롭 · 전화번호로 송장 매칭</p>
+            </div>
+            <div className="p-4 space-y-4">
+              <div
+                onDragOver={(e) => { e.preventDefault(); setDragRp(true); }}
+                onDragLeave={() => setDragRp(false)}
+                onDrop={onDrop('rp')}
+                className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${dragRp ? 'border-teal-500 bg-teal-50' : 'border-gray-300 bg-gray-50'}`}
+              >
+                <div className="text-sm font-medium mb-1">회신 파일 (파일접수_상세내역_*.xlsx · 다중 선택 가능)</div>
+                <p className="text-xs text-gray-500 mb-3">드래그앤드롭 또는 클릭</p>
+                <label className="inline-block px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs cursor-pointer hover:bg-gray-700">
+                  파일 선택
+                  <input type="file" accept=".xlsx" multiple className="hidden"
+                    onChange={(e) => { if (e.target.files && e.target.files.length > 0) parseReplyFiles(e.target.files); }} />
+                </label>
+                {replyFiles.length > 0 && (
+                  <div className="mt-3 space-y-0.5 text-xs text-gray-700">
+                    {replyFiles.map((f, i) => (
+                      <div key={i}>📄 {f.name} · {f.entries.length}행</div>
+                    ))}
+                    <button
+                      onClick={() => setReplyFiles([])}
+                      className="mt-2 text-xs text-gray-500 underline hover:text-gray-700"
+                    >회신 파일 모두 제거</button>
+                  </div>
+                )}
+              </div>
+
+              {replyFiles.length > 0 && (
+                <>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <KpiCard label="진도팜 주문" value={`${jindopam.length.toLocaleString()}건`} />
+                    <KpiCard label="자동매칭 성공" value={`${invoiceResult.matched.length.toLocaleString()}건`} accent="green" />
+                    <KpiCard
+                      label="예외(수동입력)"
+                      value={`${invoiceResult.exceptions.length.toLocaleString()}건`}
+                      accent={invoiceResult.exceptions.length > 0 ? 'red' : undefined}
+                      sub={`다중박스 ${invoiceResult.exceptions.filter(e => e.type === '다중박스(수동)').length} · 회신없음 ${invoiceResult.exceptions.filter(e => e.type === '회신없음(수동)').length}`}
+                    />
+                    <KpiCard label="회신 송장 총합" value={`${[...phoneToWaybills.values()].reduce((s, w) => s + w.size, 0).toLocaleString()}건`} />
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      onClick={downloadInvoice}
+                      disabled={invoiceResult.matched.length === 0}
+                      className="rounded-md bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                      ⬇ 발송등록 파일 다운로드 ({invoiceResult.matched.length}건)
+                    </button>
+                  </div>
+
+                  {invoiceResult.exceptions.length > 0 && (
+                    <div className="rounded-lg border border-orange-300 bg-orange-50 p-4">
+                      <h3 className="text-sm font-semibold text-orange-700 mb-2">
+                        ⚠️ 수동 입력 필요 — {invoiceResult.exceptions.length}건
+                      </h3>
+                      <div className="overflow-x-auto max-h-96">
+                        <table className="w-full text-xs">
+                          <thead className="bg-orange-100 text-orange-800 sticky top-0">
+                            <tr>
+                              <th className="text-left px-2 py-1.5 font-medium">유형</th>
+                              <th className="text-left px-2 py-1.5 font-medium">받는분</th>
+                              <th className="text-left px-2 py-1.5 font-medium">전화</th>
+                              <th className="text-left px-2 py-1.5 font-medium">고객주문번호</th>
+                              <th className="text-left px-2 py-1.5 font-medium">후보 송장</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {invoiceResult.exceptions.map((e, i) => (
+                              <tr key={i} className="border-t border-orange-200">
+                                <td className="px-2 py-1.5 whitespace-nowrap">{e.type}</td>
+                                <td className="px-2 py-1.5 whitespace-nowrap">{e.받는분}</td>
+                                <td className="px-2 py-1.5 whitespace-nowrap font-mono">{e.전화}</td>
+                                <td className="px-2 py-1.5 whitespace-nowrap font-mono">{e.주문번호}</td>
+                                <td className="px-2 py-1.5 font-mono text-orange-700">{e.후보송장?.join(' / ') || '-'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </section>
         </>
