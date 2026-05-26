@@ -108,11 +108,10 @@ interface ReplyEntry {
 }
 
 interface InvoiceException {
-  type: '다중박스(수동)' | '회신없음(수동)';
   받는분: string;
   전화: string;
   주문번호: string;
-  후보송장?: string[];
+  후보송장: string[];
 }
 
 export default function JindopamOrderWorkPage() {
@@ -361,21 +360,19 @@ export default function JindopamOrderWorkPage() {
   const invoiceResult = useMemo(() => {
     const matched: { 주문번호: string; 송장: string }[] = [];
     const exceptions: InvoiceException[] = [];
-    for (const r of jindopam) {
+    let excludedCount = 0;
+    for (const r of shopmine) {
       const ph = normalizePhone(r.전화);
       const ways = phoneToWaybills.get(ph);
-      if (!ways) {
-        exceptions.push({ type: '회신없음(수동)', 받는분: r.받는분성명, 전화: r.전화, 주문번호: r.주문번호 });
-        continue;
-      }
+      if (!ways) { excludedCount++; continue; }
       if (ways.size > 1) {
-        exceptions.push({ type: '다중박스(수동)', 받는분: r.받는분성명, 전화: r.전화, 주문번호: r.주문번호, 후보송장: [...ways] });
+        exceptions.push({ 받는분: r.받는분성명, 전화: r.전화, 주문번호: r.주문번호, 후보송장: [...ways] });
         continue;
       }
       matched.push({ 주문번호: r.주문번호, 송장: [...ways][0] });
     }
-    return { matched, exceptions };
-  }, [jindopam, phoneToWaybills]);
+    return { matched, exceptions, excludedCount };
+  }, [shopmine, phoneToWaybills]);
 
   const downloadInvoice = useCallback(() => {
     const rows: any[][] = [['주문고유코드', '송장번호', '택배사']];
@@ -608,15 +605,18 @@ export default function JindopamOrderWorkPage() {
               {replyFiles.length > 0 && (
                 <>
                   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                    <KpiCard label="진도팜 주문" value={`${jindopam.length.toLocaleString()}건`} />
-                    <KpiCard label="자동매칭 성공" value={`${invoiceResult.matched.length.toLocaleString()}건`} accent="green" />
+                    <KpiCard label="샵마인 전체주문" value={`${shopmine.length.toLocaleString()}건`} />
+                    <KpiCard label="송장 매칭 성공" value={`${invoiceResult.matched.length.toLocaleString()}건`} accent="green" />
                     <KpiCard
-                      label="예외(수동입력)"
+                      label="다중박스 예외(수동)"
                       value={`${invoiceResult.exceptions.length.toLocaleString()}건`}
                       accent={invoiceResult.exceptions.length > 0 ? 'red' : undefined}
-                      sub={`다중박스 ${invoiceResult.exceptions.filter(e => e.type === '다중박스(수동)').length} · 회신없음 ${invoiceResult.exceptions.filter(e => e.type === '회신없음(수동)').length}`}
                     />
-                    <KpiCard label="회신 송장 총합" value={`${[...phoneToWaybills.values()].reduce((s, w) => s + w.size, 0).toLocaleString()}건`} />
+                    <KpiCard
+                      label="회신 미포함 (제외)"
+                      value={`${invoiceResult.excludedCount.toLocaleString()}건`}
+                      sub="비진도팜 발송 / 텍스트 회신"
+                    />
                   </div>
 
                   <div className="flex justify-end">
@@ -632,13 +632,12 @@ export default function JindopamOrderWorkPage() {
                   {invoiceResult.exceptions.length > 0 && (
                     <div className="rounded-lg border border-orange-300 bg-orange-50 p-4">
                       <h3 className="text-sm font-semibold text-orange-700 mb-2">
-                        ⚠️ 수동 입력 필요 — {invoiceResult.exceptions.length}건
+                        ⚠️ 다중박스 — 수동 선택 필요 ({invoiceResult.exceptions.length}건)
                       </h3>
                       <div className="overflow-x-auto max-h-96">
                         <table className="w-full text-xs">
                           <thead className="bg-orange-100 text-orange-800 sticky top-0">
                             <tr>
-                              <th className="text-left px-2 py-1.5 font-medium">유형</th>
                               <th className="text-left px-2 py-1.5 font-medium">받는분</th>
                               <th className="text-left px-2 py-1.5 font-medium">전화</th>
                               <th className="text-left px-2 py-1.5 font-medium">고객주문번호</th>
@@ -648,11 +647,10 @@ export default function JindopamOrderWorkPage() {
                           <tbody>
                             {invoiceResult.exceptions.map((e, i) => (
                               <tr key={i} className="border-t border-orange-200">
-                                <td className="px-2 py-1.5 whitespace-nowrap">{e.type}</td>
                                 <td className="px-2 py-1.5 whitespace-nowrap">{e.받는분}</td>
                                 <td className="px-2 py-1.5 whitespace-nowrap font-mono">{e.전화}</td>
                                 <td className="px-2 py-1.5 whitespace-nowrap font-mono">{e.주문번호}</td>
-                                <td className="px-2 py-1.5 font-mono text-orange-700">{e.후보송장?.join(' / ') || '-'}</td>
+                                <td className="px-2 py-1.5 font-mono text-orange-700">{e.후보송장.join(' / ')}</td>
                               </tr>
                             ))}
                           </tbody>
