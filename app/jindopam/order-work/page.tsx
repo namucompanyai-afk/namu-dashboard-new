@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import KpiCard from '@/components/pnl/KpiCard';
 
@@ -101,6 +101,31 @@ function normalizePhone(s: string): string {
   return (s || '').replace(/\D/g, '');
 }
 
+/**
+ * 매핑 변환: header:1 형식의 행 배열(A~H) → MappingRow[].
+ * xlsx 업로드와 구글시트 CSV 자동로드가 동일하게 이 로직을 재사용한다.
+ * (0행 헤더 스킵, A~G 인덱스 사용, H 마켓 컬럼은 미사용)
+ */
+function rowsToMapping(rows: any[][]): MappingRow[] {
+  const parsed: MappingRow[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] as any[];
+    if (!r || r.length === 0) continue;
+    const 품목명 = String(r[0] || '').trim();
+    if (!품목명) continue;
+    parsed.push({
+      품목명,
+      옵션: String(r[1] || '').trim(),
+      별칭: String(r[2] || '').trim(),
+      주문당수량: Number(r[3]) || 0,
+      발송거래처: String(r[4] || '').trim(),
+      소한계: Number(r[5]) || 0,
+      중한계: Number(r[6]) || 0,
+    });
+  }
+  return parsed;
+}
+
 interface ReplyEntry {
   운송장: string;
   받는분: string;
@@ -124,6 +149,32 @@ export default function JindopamOrderWorkPage() {
   const [dragMp, setDragMp] = useState(false);
   const [dragRp, setDragRp] = useState(false);
   const [replyFiles, setReplyFiles] = useState<{ name: string; entries: ReplyEntry[] }[]>([]);
+  const [autoStatus, setAutoStatus] = useState<'loading' | 'loaded' | 'error' | 'idle'>('loading');
+  const manualMappingRef = useRef(false);
+
+  // 페이지 로드 시 구글시트 게시 CSV에서 매핑 자동 로드.
+  // 수동 업로드(manualMappingRef)가 있으면 덮어쓰지 않음.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/jindopam-mapping', { cache: 'no-store' });
+        const json = await res.json();
+        if (cancelled || manualMappingRef.current) return;
+        if (json?.ok && Array.isArray(json.rows)) {
+          const parsed = rowsToMapping(json.rows);
+          setMapping(parsed);
+          setMappingName(`구글시트 자동로드 (${parsed.length}행)`);
+          setAutoStatus('loaded');
+        } else {
+          setAutoStatus('error');
+        }
+      } catch {
+        if (!cancelled) setAutoStatus('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const parseShopmine = useCallback((file: File) => {
     setError('');
@@ -163,6 +214,7 @@ export default function JindopamOrderWorkPage() {
 
   const parseMapping = useCallback((file: File) => {
     setError('');
+    manualMappingRef.current = true; // 수동 업로드 우선: 자동로드가 덮어쓰지 않도록
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -171,23 +223,7 @@ export default function JindopamOrderWorkPage() {
         const sheetName = wb.SheetNames.find(n => n === '발주매핑v6') || wb.SheetNames[0];
         const sh = wb.Sheets[sheetName];
         const rows = XLSX.utils.sheet_to_json<any[]>(sh, { header: 1, defval: '' });
-        const parsed: MappingRow[] = [];
-        for (let i = 1; i < rows.length; i++) {
-          const r = rows[i] as any[];
-          if (!r || r.length === 0) continue;
-          const 품목명 = String(r[0] || '').trim();
-          if (!품목명) continue;
-          parsed.push({
-            품목명,
-            옵션: String(r[1] || '').trim(),
-            별칭: String(r[2] || '').trim(),
-            주문당수량: Number(r[3]) || 0,
-            발송거래처: String(r[4] || '').trim(),
-            소한계: Number(r[5]) || 0,
-            중한계: Number(r[6]) || 0,
-          });
-        }
-        setMapping(parsed);
+        setMapping(rowsToMapping(rows));
         setMappingName(file.name);
       } catch (err: any) {
         setError('매핑 파일 파싱 실패: ' + (err?.message || err));
@@ -456,10 +492,16 @@ export default function JindopamOrderWorkPage() {
           onDrop={onDrop('mp')}
           className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${dragMp ? 'border-teal-500 bg-teal-50' : 'border-gray-300 bg-white'}`}
         >
-          <div className="text-sm font-medium mb-1">② 매핑 파일 (.xlsx, 시트 발주매핑v6)</div>
-          <p className="text-xs text-gray-500 mb-3">드래그앤드롭 또는 클릭</p>
+          <div className="text-sm font-medium mb-1">② 매핑 (구글시트 자동로드)</div>
+          <p className="text-xs text-gray-500 mb-1">
+            {autoStatus === 'loading' && '⏳ 구글시트에서 매핑 불러오는 중…'}
+            {autoStatus === 'loaded' && !manualMappingRef.current && '✅ 구글시트 매핑 자동 적용됨'}
+            {autoStatus === 'error' && '⚠️ 자동로드 실패 — 아래에서 .xlsx 직접 업로드'}
+            {autoStatus === 'idle' && '수동 업로드 (폴백)'}
+          </p>
+          <p className="text-[11px] text-gray-400 mb-3">시트 수정은 수 분 내 반영 · 필요시 .xlsx 업로드가 우선</p>
           <label className="inline-block px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs cursor-pointer hover:bg-gray-700">
-            파일 선택
+            매핑 .xlsx 업로드 (폴백)
             <input type="file" accept=".xlsx" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) parseMapping(f); }} />
           </label>
