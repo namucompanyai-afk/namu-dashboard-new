@@ -462,15 +462,31 @@ export default function JindopamOrderWorkPage() {
       const el = aggregateTableRef.current;
       if (!el) return;
       const { default: html2canvas } = await import('html2canvas-pro');
-      const canvas = await html2canvas(el, {
-        backgroundColor: '#ffffff',
-        scale: 2,
-        logging: false,
-        useCORS: true,
-        width: el.scrollWidth,
-        height: el.scrollHeight,
-      });
-      const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+
+      // sticky 헤더가 스크롤 시 중복 캡처되는 문제 → 클론에서 sticky 제거 후 캡처.
+      // 원본 DOM은 손대지 않음(UI sticky 효과 유지).
+      const clone = el.cloneNode(true) as HTMLTableElement;
+      const thead = clone.querySelector('thead');
+      if (thead) thead.classList.remove('sticky', 'top-0');
+      clone.style.position = 'fixed';
+      clone.style.top = '-99999px';
+      clone.style.left = '0';
+      document.body.appendChild(clone);
+
+      let blob: Blob | null;
+      try {
+        const canvas = await html2canvas(clone, {
+          backgroundColor: '#ffffff',
+          scale: 2,
+          logging: false,
+          useCORS: true,
+          width: clone.scrollWidth,
+          height: clone.scrollHeight,
+        });
+        blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      } finally {
+        clone.remove();
+      }
       if (!blob) { showToast('이미지 생성 실패'); return; }
       try {
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
