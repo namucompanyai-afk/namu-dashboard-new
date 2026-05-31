@@ -435,7 +435,7 @@ export default function JindopamOrderWorkPage() {
     try {
       const el = aggregateTableRef.current;
       if (!el) return;
-      const { default: html2canvas } = await import('html2canvas');
+      const { default: html2canvas } = await import('html2canvas-pro');
       const canvas = await html2canvas(el, {
         backgroundColor: '#ffffff',
         scale: 2,
