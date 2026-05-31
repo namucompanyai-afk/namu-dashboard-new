@@ -418,19 +418,6 @@ export default function JindopamOrderWorkPage() {
     downloadXlsx(rows, `발송등록_곡물(CJ)_진도팜_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }, [invoiceResult]);
 
-  const copyAggregateText = useCallback(() => {
-    const lines = [`별칭\t발송봉수`];
-    for (const r of aggregate.rows) {
-      lines.push(`${r.별칭}\t${r.발송봉수}`);
-    }
-    lines.push(`총합계\t${aggregate.total}`);
-    const text = lines.join('\n');
-    navigator.clipboard.writeText(text).then(
-      () => alert('집계표 복사 완료. 카톡에 붙여넣기 하세요.'),
-      () => alert('복사 실패. 브라우저 권한 확인.'),
-    );
-  }, [aggregate]);
-
   const downloadAggregate = useCallback(() => {
     const rows: any[][] = [['별칭', '발송봉수']];
     for (const r of aggregate.rows) rows.push([r.별칭, r.발송봉수]);
@@ -445,24 +432,36 @@ export default function JindopamOrderWorkPage() {
 
   // 집계표 DOM을 PNG로 캡처 → 클립보드 복사, 실패 시 파일 다운로드 폴백.
   const copyAggregateImage = useCallback(async () => {
-    const el = aggregateTableRef.current;
-    if (!el) return;
-    const { default: html2canvas } = await import('html2canvas');
-    const canvas = await html2canvas(el, { backgroundColor: '#ffffff', scale: 2 });
-    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
-    if (!blob) { showToast('이미지 생성 실패'); return; }
     try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      showToast('클립보드에 복사됨 — 카톡에 붙여넣기');
-    } catch {
-      // 클립보드 권한 거부/미지원 → 파일 다운로드 폴백.
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `진도팜_집계_${new Date().toISOString().slice(0, 10)}.png`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast('클립보드 권한 거부 — 이미지 파일로 다운로드됨');
+      const el = aggregateTableRef.current;
+      if (!el) return;
+      const { default: html2canvas } = await import('html2canvas');
+      const canvas = await html2canvas(el, {
+        backgroundColor: '#ffffff',
+        scale: 2,
+        logging: false,
+        useCORS: true,
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+      });
+      const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (!blob) { showToast('이미지 생성 실패'); return; }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        showToast('클립보드에 복사됨 — 카톡에 붙여넣기');
+      } catch {
+        // 클립보드 권한 거부/미지원 → 파일 다운로드 폴백.
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `진도팜_집계_${new Date().toISOString().slice(0, 10)}.png`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('클립보드 권한 거부 — 이미지 파일로 다운로드됨');
+      }
+    } catch (err: any) {
+      console.error('[이미지복사 실패]', err);
+      showToast(`이미지 복사 실패: ${err?.message || err}`);
     }
   }, [showToast]);
 
@@ -577,10 +576,6 @@ export default function JindopamOrderWorkPage() {
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-base font-semibold">1단계 · 진도팜 통합 집계표</h2>
               <div className="flex gap-2">
-                <button onClick={copyAggregateText}
-                  className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-700">
-                  📋 텍스트 복사 (카톡용)
-                </button>
                 <button onClick={copyAggregateImage}
                   className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700">
                   📷 이미지 복사 (카톡용)
