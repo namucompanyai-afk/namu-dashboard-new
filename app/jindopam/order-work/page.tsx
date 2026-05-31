@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import KpiCard from '@/components/pnl/KpiCard';
 
@@ -153,6 +153,10 @@ export default function JindopamOrderWorkPage() {
   const manualMappingRef = useRef(false);
   const aggregateTableRef = useRef<HTMLTableElement>(null);
   const [toast, setToast] = useState<string>('');
+  // 1단계 높이를 2단계(오른쪽) 실제 렌더 높이에 맞추기 위한 측정.
+  const rightRef = useRef<HTMLElement>(null);
+  const [rightHeight, setRightHeight] = useState<number | null>(null);
+  const [isLg, setIsLg] = useState(false);
 
   // 페이지 로드 시 구글시트 게시 CSV에서 매핑 자동 로드.
   // 수동 업로드(manualMappingRef)가 있으면 덮어쓰지 않음.
@@ -177,6 +181,28 @@ export default function JindopamOrderWorkPage() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // lg breakpoint(1024px) 감지 — 미만에서는 높이 강제 해제(세로 쌓기).
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const update = () => setIsLg(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+
+  const hasResult = shopmine.length > 0 && mapping.length > 0;
+
+  // 2단계(오른쪽) 실제 높이 측정 → 1단계 maxHeight 기준값.
+  useLayoutEffect(() => {
+    const el = rightRef.current;
+    if (!el) { setRightHeight(null); return; }
+    const measure = () => setRightHeight(el.offsetHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasResult]);
 
   const parseShopmine = useCallback((file: File) => {
     setError('');
@@ -574,8 +600,11 @@ export default function JindopamOrderWorkPage() {
           {/* 1·2단계 좌우 분할 (lg 이상) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           {/* 1단계 집계표 */}
-          <section className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+          <section
+            className="rounded-lg border border-gray-200 bg-white overflow-hidden flex flex-col"
+            style={isLg && rightHeight ? { maxHeight: rightHeight } : undefined}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between shrink-0">
               <h2 className="text-base font-semibold">1단계 · 진도팜 통합 집계표</h2>
               <div className="flex gap-2">
                 <button onClick={copyAggregateImage}
@@ -588,7 +617,7 @@ export default function JindopamOrderWorkPage() {
                 </button>
               </div>
             </div>
-            <div className="overflow-auto max-h-screen">
+            <div className="flex-1 min-h-0 overflow-auto">
               <table ref={aggregateTableRef} className="w-full text-sm bg-white" style={{ maxWidth: 720 }}>
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
                   <tr>
@@ -616,7 +645,7 @@ export default function JindopamOrderWorkPage() {
           </section>
 
           {/* 2단계 6파일 */}
-          <section className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <section ref={rightRef} className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200">
               <h2 className="text-base font-semibold">2단계 · 마켓×사이즈 6개 파일</h2>
               <p className="text-xs text-gray-500 mt-0.5">받는분 단위 합포장 · 대 사이즈는 중 파일로 통합</p>
