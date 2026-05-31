@@ -151,6 +151,8 @@ export default function JindopamOrderWorkPage() {
   const [replyFiles, setReplyFiles] = useState<{ name: string; entries: ReplyEntry[] }[]>([]);
   const [autoStatus, setAutoStatus] = useState<'loading' | 'loaded' | 'error' | 'idle'>('loading');
   const manualMappingRef = useRef(false);
+  const aggregateTableRef = useRef<HTMLTableElement>(null);
+  const [toast, setToast] = useState<string>('');
 
   // 페이지 로드 시 구글시트 게시 CSV에서 매핑 자동 로드.
   // 수동 업로드(manualMappingRef)가 있으면 덮어쓰지 않음.
@@ -436,6 +438,34 @@ export default function JindopamOrderWorkPage() {
     downloadXlsx(rows, `진도팜_집계표_${new Date().toISOString().slice(0, 10)}.xlsx`);
   }, [aggregate]);
 
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 2500);
+  }, []);
+
+  // 집계표 DOM을 PNG로 캡처 → 클립보드 복사, 실패 시 파일 다운로드 폴백.
+  const copyAggregateImage = useCallback(async () => {
+    const el = aggregateTableRef.current;
+    if (!el) return;
+    const { default: html2canvas } = await import('html2canvas');
+    const canvas = await html2canvas(el, { backgroundColor: '#ffffff', scale: 2 });
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) { showToast('이미지 생성 실패'); return; }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      showToast('클립보드에 복사됨 — 카톡에 붙여넣기');
+    } catch {
+      // 클립보드 권한 거부/미지원 → 파일 다운로드 폴백.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `진도팜_집계_${new Date().toISOString().slice(0, 10)}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('클립보드 권한 거부 — 이미지 파일로 다운로드됨');
+    }
+  }, [showToast]);
+
   const downloadBucket = useCallback((key: FileKey) => {
     const groups = recipientBuckets.buckets[key];
     const rows: any[][] = [['받는분성명', '받는분전화번호', '받는분주소', '배송메세지1', '내품명', '내품수량', '채널']];
@@ -551,6 +581,10 @@ export default function JindopamOrderWorkPage() {
                   className="rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-gray-700">
                   📋 텍스트 복사 (카톡용)
                 </button>
+                <button onClick={copyAggregateImage}
+                  className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700">
+                  📷 이미지 복사 (카톡용)
+                </button>
                 <button onClick={downloadAggregate}
                   className="rounded-md bg-teal-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-700">
                   ⬇ 엑셀 다운로드
@@ -558,7 +592,7 @@ export default function JindopamOrderWorkPage() {
               </div>
             </div>
             <div className="overflow-x-auto max-h-[60vh]">
-              <table className="w-full text-sm">
+              <table ref={aggregateTableRef} className="w-full text-sm bg-white" style={{ maxWidth: 720 }}>
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
                   <tr>
                     <th className="text-left px-4 py-2 font-medium">별칭</th>
@@ -705,6 +739,12 @@ export default function JindopamOrderWorkPage() {
             </div>
           </section>
         </>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 rounded-md bg-gray-900 px-4 py-2 text-sm text-white shadow-lg">
+          {toast}
+        </div>
       )}
     </div>
   );
