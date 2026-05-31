@@ -571,6 +571,8 @@ export default function JindopamOrderWorkPage() {
               sub={FILE_KEYS.map(k => `${k}:${recipientBuckets.buckets[k].length}`).join(' · ')} />
           </div>
 
+          {/* 1·2단계 좌우 분할 (lg 이상) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           {/* 1단계 집계표 */}
           <section className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
@@ -586,7 +588,7 @@ export default function JindopamOrderWorkPage() {
                 </button>
               </div>
             </div>
-            <div className="overflow-x-auto max-h-[60vh]">
+            <div className="overflow-auto max-h-screen">
               <table ref={aggregateTableRef} className="w-full text-sm bg-white" style={{ maxWidth: 720 }}>
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
                   <tr>
@@ -619,7 +621,7 @@ export default function JindopamOrderWorkPage() {
               <h2 className="text-base font-semibold">2단계 · 마켓×사이즈 6개 파일</h2>
               <p className="text-xs text-gray-500 mt-0.5">받는분 단위 합포장 · 대 사이즈는 중 파일로 통합</p>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 p-4">
+            <div className="grid grid-cols-1 gap-3 p-4">
               {FILE_KEYS.map((k) => {
                 const groups = recipientBuckets.buckets[k];
                 const bong = groups.reduce((s, g) => s + g.rows.reduce((ss, r) => ss + r.발송봉수, 0), 0);
@@ -639,6 +641,7 @@ export default function JindopamOrderWorkPage() {
               })}
             </div>
           </section>
+          </div>
 
           {/* 3단계 송장 변환 */}
           <section className="rounded-lg border border-gray-200 bg-white overflow-hidden">
