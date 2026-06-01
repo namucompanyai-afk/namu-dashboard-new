@@ -255,7 +255,7 @@ export default function LeaveApplyPage() {
                   <div className="h-px bg-gray-200"></div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium text-gray-700">신청 후 잔여</span>
-                    <span className="text-xl font-bold text-green-600">{leaveBalance.remaining - days}일</span>
+                    <span className={'text-xl font-bold ' + (leaveBalance.remaining - days < 0 ? 'text-red-600' : 'text-green-600')}>{leaveBalance.remaining - days}일</span>
                   </div>
                 </div>
               </div>
@@ -284,10 +284,10 @@ export default function LeaveApplyPage() {
                   <div>
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-xs text-gray-600">잔여</span>
-                      <span className="text-sm font-semibold text-green-600">{leaveBalance.remaining}일</span>
+                      <span className={'text-sm font-semibold ' + (leaveBalance.remaining < 0 ? 'text-red-600' : 'text-green-600')}>{leaveBalance.remaining}일</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div className="bg-green-500 h-2 rounded-full" style={{ width: ((leaveBalance.remaining / leaveBalance.total) * 100) + '%' }}></div>
+                      <div className={(leaveBalance.remaining < 0 ? 'bg-red-500' : 'bg-green-500') + ' h-2 rounded-full'} style={{ width: Math.max(0, (leaveBalance.remaining / leaveBalance.total) * 100) + '%' }}></div>
                     </div>
                   </div>
                 </div>
