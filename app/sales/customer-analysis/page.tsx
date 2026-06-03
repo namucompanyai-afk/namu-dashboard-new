@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { Fragment, useEffect, useMemo, useState, type ReactElement } from 'react';
 import * as XLSX from 'xlsx';
 import {
   ResponsiveContainer,
@@ -129,6 +129,19 @@ function analyze(all: Row[]): Analysis {
   return { rows: f, totalPay, female, male, femaleShare: totalPay > 0 ? female / totalPay : 0, ageVolume, axes, categories, products };
 }
 
+// 행 목록 → 결제수/주력연령/여성비중 (그룹·옵션 집계 공통).
+function metricsOf(rows: Row[]) {
+  const 결제수 = rows.reduce((s, r) => s + r.결제수, 0);
+  const ageMap = new Map<string, number>();
+  for (const r of rows) ageMap.set(r.나이, (ageMap.get(r.나이) ?? 0) + r.결제수);
+  let 주력연령 = '';
+  let max = -1;
+  for (const [a, v] of ageMap) if (v > max) { max = v; 주력연령 = a; }
+  const pf = rows.filter((r) => r.성별 === '여성').reduce((s, r) => s + r.결제수, 0);
+  const pm = rows.filter((r) => r.성별 === '남성').reduce((s, r) => s + r.결제수, 0);
+  return { 결제수, 주력연령, 여성비중: pf + pm > 0 ? pf / (pf + pm) : 0 };
+}
+
 // DB 행 → 집계 입력
 const toRow = (d: DemographicRow): Row => ({
   카테고리소: d.cat_s ?? '',
@@ -168,10 +181,13 @@ export default function CustomerAnalysisPage() {
 
   const [error, setError] = useState('');
   const [drag, setDrag] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState('');
-  // 진도팜 매핑: NFC(샵마인품목명) → 표준별칭. dupCount = 한 품목명에 별칭 2개+ 충돌 건수.
-  const [aliasMap, setAliasMap] = useState<Map<string, string>>(new Map());
-  const [aliasDup, setAliasDup] = useState(0);
+  const [selectedProduct, setSelectedProduct] = useState('');   // 표시명(D) 기준
+  // 상품 그룹 매핑: NFC(product_name) → { group, label, channel }.
+  const [prodMap, setProdMap] = useState<Map<string, { group: string; label: string; channel: string }>>(new Map());
+  const [channels, setChannels] = useState<string[]>([]);        // 판매형태(E) 등장값
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
+  const [showUnmatched, setShowUnmatched] = useState(false);
 
   // 업로드 스테이징
   const [staged, setStaged] = useState<Omit<DemographicRow, 'user_email' | 'period'>[] | null>(null);
@@ -237,34 +253,34 @@ export default function CustomerAnalysisPage() {
     })();
   }, []);
 
-  // 진도팜 매핑 CSV 로드 → 표준별칭 맵 구축 (품목명 A / 표준별칭 C).
+  // 상품 그룹 매핑 CSV 로드 → product_name → {group,label,channel} 맵 구축.
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/jindopam-mapping', { cache: 'no-store' });
+        const res = await fetch('/api/ss-product-mapping', { cache: 'no-store' });
         const json = await res.json();
-        if (!json?.ok || !Array.isArray(json.rows)) return;
-        // 품목명 → 등장한 별칭 Set (첫 값 유지, 2개 이상이면 충돌 케이스로 카운트).
-        const sets = new Map<string, string[]>();
+        if (!json?.ok || !Array.isArray(json.rows)) {
+          if (json?.message) setError(json.message);
+          return;
+        }
+        const map = new Map<string, { group: string; label: string; channel: string }>();
+        const chSet = new Set<string>();
         for (let i = 1; i < json.rows.length; i++) {       // 0행 헤더 스킵
           const row = json.rows[i];
-          const name = String(row?.[0] ?? '').normalize('NFC').trim();
-          const alias = String(row?.[2] ?? '').normalize('NFC').trim();
-          if (!name || !alias) continue;
-          const arr = sets.get(name) ?? [];
-          if (!arr.includes(alias)) arr.push(alias);
-          sets.set(name, arr);
+          const key = String(row?.[0] ?? '').normalize('NFC').trim();
+          const group = String(row?.[1] ?? '').normalize('NFC').trim();
+          const label = String(row?.[3] ?? '').normalize('NFC').trim();
+          const channel = String(row?.[4] ?? '').normalize('NFC').trim();
+          if (!key) continue;
+          if (!map.has(key)) map.set(key, { group, label, channel });   // 첫 값 유지
+          if (channel) chSet.add(channel);
         }
-        const map = new Map<string, string>();
-        let dup = 0;                                       // 별칭 2개+ 품목명 케이스 수
-        for (const [name, aliases] of sets) {
-          map.set(name, aliases[0]);                       // 첫 값 사용
-          if (aliases.length > 1) dup++;
-        }
-        setAliasMap(map);
-        setAliasDup(dup);
+        setProdMap(map);
+        const chs = [...chSet];
+        setChannels(chs);
+        setSelectedChannels(chs);    // 기본 전체 선택
       } catch (err) {
-        console.error('진도팜 매핑 로드 실패:', err);
+        console.error('상품 매핑 로드 실패:', err);
       }
     })();
   }, []);
@@ -358,21 +374,70 @@ export default function CustomerAnalysisPage() {
     }
   };
 
-  // 표준별칭 치환 (NFC 매칭, 못 맞추면 원래 상품명).
-  const aliasOf = (name: string) => aliasMap.get(name.normalize('NFC').trim()) ?? name;
-  const aliasStats = useMemo(() => {
-    if (!data) return { matched: 0, total: 0 };
-    const matched = data.products.filter((p) => aliasMap.has(p.상품명.normalize('NFC').trim())).length;
-    return { matched, total: data.products.length };
-  }, [data, aliasMap]);
+  const nfc = (s: string) => s.normalize('NFC').trim();
 
+  const toggleGroup = (g: string) => {
+    setExpandedGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
+  };
+  const toggleChannel = (c: string) => {
+    setSelectedChannels((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+  };
+
+  // 그룹(B) 집계 — 판매형태(E) 필터 적용. 펼치면 표시명(D) 옵션 행.
+  const groupTable = useMemo(() => {
+    if (!data) return [] as { group: string; 결제수: number; 주력연령: string; 여성비중: number; options: { label: string; 결제수: number; 주력연령: string; 여성비중: number }[] }[];
+    const chSel = new Set(selectedChannels);
+    const groups = new Map<string, { rows: Row[]; labels: Map<string, Row[]> }>();
+    for (const r of data.rows) {
+      const m = prodMap.get(nfc(r.상품명));
+      if (!m) continue;                                                  // 미매칭 제외
+      if (channels.length > 0 && !chSel.has(m.channel)) continue;        // 판매형태 필터
+      const gName = m.group || '(미분류)';
+      const lName = m.label || '(표시명없음)';
+      const g = groups.get(gName) ?? { rows: [] as Row[], labels: new Map<string, Row[]>() };
+      g.rows.push(r);
+      const lab = g.labels.get(lName) ?? ([] as Row[]);
+      lab.push(r);
+      g.labels.set(lName, lab);
+      groups.set(gName, g);
+    }
+    return [...groups.entries()]
+      .map(([group, g]) => ({
+        group,
+        ...metricsOf(g.rows),
+        options: [...g.labels.entries()]
+          .map(([label, rs]) => ({ label, ...metricsOf(rs) }))
+          .sort((a, b) => b.결제수 - a.결제수),
+      }))
+      .sort((a, b) => b.결제수 - a.결제수);
+  }, [data, prodMap, selectedChannels, channels]);
+
+  // 미매칭 product_name (선택 기간 데이터엔 있으나 매핑 없음).
+  const unmatched = useMemo(() => {
+    if (!data) return [] as string[];
+    const set = new Set<string>();
+    for (const r of data.rows) if (!prodMap.has(nfc(r.상품명))) set.add(r.상품명);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [data, prodMap]);
+
+  // 표시명(D) 드롭다운 옵션 (그룹 표와 동일 필터).
+  const labelOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of groupTable) for (const o of g.options) set.add(o.label);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [groupTable]);
+
+  // 표시명(D) 단위 연령 분포.
   const productAgeDist = useMemo(() => {
     if (!data || !selectedProduct) return [];
-    const rs = data.rows.filter((r) => r.상품명 === selectedProduct);
-    const m = new Map<string, number>();
-    for (const r of rs) m.set(r.나이, (m.get(r.나이) ?? 0) + r.결제수);
-    return AGE_ORDER.filter((a) => m.has(a)).map((a) => ({ 연령: a, 결제수: m.get(a) ?? 0 }));
-  }, [data, selectedProduct]);
+    const rs = data.rows.filter((r) => {
+      const m = prodMap.get(nfc(r.상품명));
+      return m && (m.label || '(표시명없음)') === selectedProduct;
+    });
+    const mp = new Map<string, number>();
+    for (const r of rs) mp.set(r.나이, (mp.get(r.나이) ?? 0) + r.결제수);
+    return AGE_ORDER.filter((a) => mp.has(a)).map((a) => ({ 연령: a, 결제수: mp.get(a) ?? 0 }));
+  }, [data, prodMap, selectedProduct]);
 
   return (
     <div className="space-y-6">
@@ -525,47 +590,89 @@ export default function CustomerAnalysisPage() {
             </ChartBox>
           </div>
 
-          {/* 상품별 주력연령 (진도팜 표준별칭 치환) */}
-          <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-200 flex items-baseline justify-between">
-              <h2 className="text-base font-semibold">상품별 주력연령</h2>
-              <span className="text-xs text-gray-400">별칭 적용 {aliasStats.matched} / 전체 {aliasStats.total}{aliasDup > 0 ? ` · 별칭충돌 ${aliasDup}` : ''}</span>
+          {/* 판매형태(E) 멀티 토글 */}
+          {channels.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-gray-500">판매형태</span>
+              {channels.map((c) => (
+                <label key={c} className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-sm cursor-pointer ' + (selectedChannels.includes(c) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+                  <input type="checkbox" checked={selectedChannels.includes(c)} onChange={() => toggleChannel(c)} className="h-3.5 w-3.5" />
+                  {c}
+                </label>
+              ))}
             </div>
+          )}
+
+          {/* 그룹별 주력연령 (표시명 옵션 펼침) */}
+          <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-3">
+              <h2 className="text-base font-semibold">그룹별 주력연령</h2>
+              <button
+                onClick={() => setShowUnmatched((v) => !v)}
+                className={'text-xs px-2 py-0.5 rounded-full font-medium ' + (unmatched.length > 0 ? 'bg-amber-50 text-amber-600 hover:bg-amber-100' : 'bg-gray-100 text-gray-400')}
+                title="매핑에 없는 product_name"
+              >
+                미매칭 {unmatched.length}건
+              </button>
+              <span className="ml-auto text-xs text-gray-400">{groupTable.length}개 그룹</span>
+            </div>
+            {showUnmatched && unmatched.length > 0 && (
+              <div className="px-5 py-3 bg-amber-50 border-b border-amber-100 text-xs text-amber-800 max-h-40 overflow-y-auto">
+                {unmatched.map((u, i) => <div key={i}>· {u}</div>)}
+              </div>
+            )}
             <div className="overflow-x-auto max-h-[60vh]">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
                   <tr>
-                    <th className="text-left px-4 py-2 font-medium">상품</th>
+                    <th className="text-left px-4 py-2 font-medium">그룹 / 표시명</th>
                     <th className="text-right px-4 py-2 font-medium">결제수</th>
                     <th className="text-center px-4 py-2 font-medium">주력연령</th>
                     <th className="text-right px-4 py-2 font-medium">여성%</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.products.slice(0, 50).map((p, i) => (
-                    <tr key={i} className="border-t border-gray-100">
-                      <td className="px-4 py-2 max-w-md truncate" title={p.상품명}>{aliasOf(p.상품명)}</td>
-                      <td className="px-4 py-2 text-right font-mono">{fmt(p.결제수)}</td>
-                      <td className="px-4 py-2 text-center">{p.주력연령}</td>
-                      <td className="px-4 py-2 text-right font-mono">{pct(p.여성비중)}</td>
-                    </tr>
-                  ))}
+                  {groupTable.map((g) => {
+                    const open = expandedGroups.includes(g.group);
+                    return (
+                      <Fragment key={g.group}>
+                        <tr className="border-t border-gray-100 cursor-pointer hover:bg-gray-50" onClick={() => toggleGroup(g.group)}>
+                          <td className="px-4 py-2 font-medium">
+                            <span className="inline-block w-4 text-gray-400">{open ? '▼' : '▶'}</span>
+                            {g.group}
+                            <span className="ml-1 text-xs text-gray-400">({g.options.length})</span>
+                          </td>
+                          <td className="px-4 py-2 text-right font-mono">{fmt(g.결제수)}</td>
+                          <td className="px-4 py-2 text-center">{g.주력연령}</td>
+                          <td className="px-4 py-2 text-right font-mono">{pct(g.여성비중)}</td>
+                        </tr>
+                        {open && g.options.map((o, j) => (
+                          <tr key={g.group + '_' + j} className="border-t border-gray-50 bg-gray-50/40">
+                            <td className="px-4 py-1.5 pl-10 text-gray-600 max-w-md truncate" title={o.label}>{o.label}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-gray-600">{fmt(o.결제수)}</td>
+                            <td className="px-4 py-1.5 text-center text-gray-600">{o.주력연령}</td>
+                            <td className="px-4 py-1.5 text-right font-mono text-gray-600">{pct(o.여성비중)}</td>
+                          </tr>
+                        ))}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
 
-          {/* 상품 선택 → 연령 분포 */}
+          {/* 표시명 선택 → 연령 분포 */}
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <div className="flex items-center gap-3 mb-4">
-              <h2 className="text-base font-semibold">상품별 연령 분포</h2>
+              <h2 className="text-base font-semibold">표시명별 연령 분포</h2>
               <select
                 value={selectedProduct}
                 onChange={(e) => setSelectedProduct(e.target.value)}
                 className="flex-1 max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm"
               >
-                <option value="">상품을 선택하세요</option>
-                {data.products.map((p) => <option key={p.상품명} value={p.상품명}>{aliasOf(p.상품명)}</option>)}
+                <option value="">표시명을 선택하세요</option>
+                {labelOptions.map((l) => <option key={l} value={l}>{l}</option>)}
               </select>
             </div>
             {selectedProduct ? (
