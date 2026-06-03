@@ -131,6 +131,29 @@ export async function getDemographics(email: string, period: string): Promise<De
   return out;
 }
 
+// 여러 period 행을 한 번에 조회 (1000행 페이지네이션 유지).
+export async function getDemographicsMulti(email: string, periods: string[]): Promise<DemographicRow[]> {
+  if (periods.length === 0) return [];
+  const client = getClient();
+  const out: DemographicRow[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from(SS_DEMO_TABLE)
+      .select('*')
+      .eq('user_email', email)
+      .in('period', periods)
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error('getDemographicsMulti error:', error);
+      break;
+    }
+    out.push(...((data ?? []) as DemographicRow[]));
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
+
 // 같은 period 행 delete 후 insert(교체).
 export async function replaceDemographics(
   email: string,

@@ -6,6 +6,8 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -17,7 +19,7 @@ import {
 } from 'recharts';
 import {
   listDemographicPeriods,
-  getDemographics,
+  getDemographicsMulti,
   replaceDemographics,
   type DemographicRow,
 } from '@/lib/supabase';
@@ -105,18 +107,31 @@ const toRow = (d: DemographicRow): Row => ({
   결제수: Number(d.pay_count) || 0,
 });
 
-// 파일명에서 period 추출: 2025-12-01_2026-05-31 → "2025-12_2026-05"
+// 파일명 날짜에서 period 추출.
+//   시작월 == 끝월 → "YYYY-MM"            (2025-01-01_2025-01-31 → "2025-01")
+//   시작월 != 끝월 → "YYYY-MM_YYYY-MM"    (2025-12-01_2026-05-31 → "2025-12_2026-05")
 function extractPeriod(name: string): string {
   const m = name.match(/(\d{4})-(\d{2})-\d{2}[_~](\d{4})-(\d{2})-\d{2}/);
-  if (m) return `${m[1]}-${m[2]}_${m[3]}-${m[4]}`;
-  return '';
+  if (!m) {
+    const single = name.match(/(\d{4})-(\d{2})-\d{2}/);
+    return single ? `${single[1]}-${single[2]}` : '';
+  }
+  const start = `${m[1]}-${m[2]}`;
+  const end = `${m[3]}-${m[4]}`;
+  return start === end ? start : `${start}_${end}`;
 }
+
+const RECENT_DEFAULT = 12;
+
+interface TrendPoint { period: string; 중년: number; 전환맘: number; 시니어: number; 여성: number; 총결제수: number; }
 
 export default function CustomerAnalysisPage() {
   const [email, setEmail] = useState('');
-  const [periods, setPeriods] = useState<string[]>([]);
-  const [activePeriod, setActivePeriod] = useState('');
-  const [data, setData] = useState<Analysis | null>(null);
+  const [periods, setPeriods] = useState<string[]>([]);            // 전체 (desc)
+  const [selectedPeriods, setSelectedPeriods] = useState<string[]>([]);
+  const [mode, setMode] = useState<'sum' | 'trend'>('sum');
+  const [data, setData] = useState<Analysis | null>(null);        // 합산 집계
+  const [trend, setTrend] = useState<TrendPoint[]>([]);           // 추이 (period 오름차순)
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState('');
@@ -129,6 +144,42 @@ export default function CustomerAnalysisPage() {
   const [periodInput, setPeriodInput] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // 선택 period들 조회 → 합산 집계 + 추이 동시 계산.
+  const loadSelected = async (userEmail: string, sel: string[]) => {
+    setSelectedProduct('');
+    if (sel.length === 0) { setData(null); setTrend([]); return; }
+    setLoading(true);
+    try {
+      const all = await getDemographicsMulti(userEmail, sel);
+      // 합산: 모든 행을 한 리스트로 집계(analyze 가 상품·연령·성별 단위로 SUM).
+      setData(analyze(all.map(toRow)));
+      // 추이: period별로 나눠 각각 집계 → 오름차순 정렬.
+      const byPeriod = new Map<string, DemographicRow[]>();
+      for (const r of all) {
+        const arr = byPeriod.get(r.period) ?? [];
+        arr.push(r);
+        byPeriod.set(r.period, arr);
+      }
+      const pts: TrendPoint[] = [...byPeriod.keys()].sort((a, b) => a.localeCompare(b)).map((p) => {
+        const a = analyze((byPeriod.get(p) ?? []).map(toRow));
+        const ax = Object.fromEntries(a.axes.map((x) => [x.축, x.비중])) as Record<string, number>;
+        return {
+          period: p,
+          중년: +(ax['중년'] * 100).toFixed(1),
+          전환맘: +(ax['전환맘'] * 100).toFixed(1),
+          시니어: +(ax['시니어'] * 100).toFixed(1),
+          여성: +(a.femaleShare * 100).toFixed(1),
+          총결제수: a.totalPay,
+        };
+      });
+      setTrend(pts);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // 최초 로드
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -139,32 +190,22 @@ export default function CustomerAnalysisPage() {
       try {
         const ps = await listDemographicPeriods(userEmail);
         setPeriods(ps);
-        if (ps.length > 0) {
-          setActivePeriod(ps[0]);
-          const rows = await getDemographics(userEmail, ps[0]);
-          setData(analyze(rows.map(toRow)));
-        }
+        const def = ps.slice(0, RECENT_DEFAULT);   // 최근 12개
+        setSelectedPeriods(def);
+        await loadSelected(userEmail, def);
       } catch (err) {
         console.error(err);
-      } finally {
         setLoading(false);
       }
     })();
   }, []);
 
-  const loadPeriod = async (period: string) => {
-    if (!email) return;
-    setActivePeriod(period);
-    setSelectedProduct('');
-    setLoading(true);
-    try {
-      const rows = await getDemographics(email, period);
-      setData(analyze(rows.map(toRow)));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+  const togglePeriod = (p: string) => {
+    const next = selectedPeriods.includes(p)
+      ? selectedPeriods.filter((x) => x !== p)
+      : [...selectedPeriods, p];
+    setSelectedPeriods(next);
+    loadSelected(email, next);
   };
 
   const parseFile = (file: File) => {
@@ -218,7 +259,10 @@ export default function CustomerAnalysisPage() {
       setPeriodInput('');
       const ps = await listDemographicPeriods(email);
       setPeriods(ps);
-      await loadPeriod(period);
+      // 방금 저장한 period 를 선택에 포함시켜 갱신.
+      const next = selectedPeriods.includes(period) ? selectedPeriods : [period, ...selectedPeriods];
+      setSelectedPeriods(next);
+      await loadSelected(email, next);
     } catch (err: any) {
       console.error(err);
       setError('저장 실패: ' + (err?.message || err));
@@ -242,16 +286,38 @@ export default function CustomerAnalysisPage() {
           <h1 className="text-2xl font-semibold">스마트스토어 고객분석</h1>
           <p className="text-sm text-gray-500 mt-1">상품 인구통계 저장 데이터 → 연령·성별·콘텐츠축 분석</p>
         </div>
-        {periods.length > 1 && (
-          <select
-            value={activePeriod}
-            onChange={(e) => loadPeriod(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+        {/* 합산/추이 토글 — 추이는 period 2개 이상일 때만 */}
+        <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+          <button
+            onClick={() => setMode('sum')}
+            className={'px-3 py-1.5 text-sm font-medium ' + (mode === 'sum' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}
           >
-            {periods.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        )}
+            합산
+          </button>
+          <button
+            onClick={() => setMode('trend')}
+            disabled={periods.length < 2}
+            className={'px-3 py-1.5 text-sm font-medium ' + (mode === 'trend' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50 disabled:text-gray-300 disabled:cursor-not-allowed')}
+          >
+            추이
+          </button>
+        </div>
       </div>
+
+      {/* 포함할 period 다중선택 */}
+      {periods.length > 0 && (
+        <div className="rounded-2xl border border-gray-200 bg-white p-4">
+          <div className="text-xs font-medium text-gray-500 mb-2">포함 기간 (기본 최근 {RECENT_DEFAULT}개)</div>
+          <div className="flex flex-wrap gap-2">
+            {periods.map((p) => (
+              <label key={p} className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-sm cursor-pointer ' + (selectedPeriods.includes(p) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+                <input type="checkbox" checked={selectedPeriods.includes(p)} onChange={() => togglePeriod(p)} className="h-3.5 w-3.5" />
+                {p}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* 업로드 (교체 저장) */}
       <div
@@ -299,7 +365,7 @@ export default function CustomerAnalysisPage() {
         </div>
       )}
 
-      {data && (
+      {mode === 'sum' && data && (
         <>
           {/* KPI */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -427,6 +493,67 @@ export default function CustomerAnalysisPage() {
             )}
           </div>
         </>
+      )}
+
+      {/* 추이 모드 */}
+      {mode === 'trend' && (
+        trend.length < 2 ? (
+          <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-8 text-center text-sm text-gray-500">
+            추이는 포함 기간이 2개 이상일 때 표시됩니다. 위에서 기간을 더 선택하세요.
+          </div>
+        ) : (
+          <>
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <h2 className="text-base font-semibold mb-4">콘텐츠축 비중 추이 (%)</h2>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} width={48} unit="%" />
+                    <Tooltip formatter={(v: any) => v + '%'} />
+                    <Legend />
+                    <Line type="monotone" dataKey="중년" stroke={AXIS_COLORS['중년']} strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="전환맘" stroke={AXIS_COLORS['전환맘']} strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="시니어" stroke={AXIS_COLORS['시니어']} strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <h2 className="text-base font-semibold mb-4">여성 비중 추이 (%)</h2>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={trend}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} width={48} unit="%" />
+                      <Tooltip formatter={(v: any) => v + '%'} />
+                      <Line type="monotone" dataKey="여성" stroke="#ec4899" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-200 bg-white p-5">
+                <h2 className="text-base font-semibold mb-4">총 결제수 추이</h2>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={trend}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                      <YAxis tick={{ fontSize: 11 }} width={56} />
+                      <Tooltip formatter={(v: any) => fmt(Number(v))} />
+                      <Line type="monotone" dataKey="총결제수" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+          </>
+        )
       )}
     </div>
   );
