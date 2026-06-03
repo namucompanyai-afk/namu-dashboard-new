@@ -181,7 +181,10 @@ export default function CustomerAnalysisPage() {
 
   const [error, setError] = useState('');
   const [drag, setDrag] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState('');   // 표시명(D) 기준
+  // 표시명별 연령 분포 — 그룹/표시명/판매형태 계단식 필터 (상단 그룹표와 독립).
+  const [chartGroup, setChartGroup] = useState('');
+  const [chartLabel, setChartLabel] = useState('');
+  const [chartChannel, setChartChannel] = useState('');
   // 상품 그룹 매핑: NFC(product_name) → { group, label, channel }.
   const [prodMap, setProdMap] = useState<Map<string, { group: string; label: string; channel: string }>>(new Map());
   const [channels, setChannels] = useState<string[]>([]);        // 판매형태(E) 등장값
@@ -197,7 +200,7 @@ export default function CustomerAnalysisPage() {
 
   // 선택 period들 조회 → 합산 집계 + 추이 동시 계산.
   const loadSelected = async (userEmail: string, sel: string[]) => {
-    setSelectedProduct('');
+    setChartGroup(''); setChartLabel(''); setChartChannel('');
     if (sel.length === 0) { setData(null); setTrend([]); return; }
     setLoading(true);
     try {
@@ -420,24 +423,38 @@ export default function CustomerAnalysisPage() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [data, prodMap]);
 
-  // 표시명(D) 드롭다운 옵션 (그룹 표와 동일 필터).
-  const labelOptions = useMemo(() => {
+  // 차트 필터 옵션 — 매핑 전체 기준 (그룹/표시명).
+  const mapGroups = useMemo(() => {
     const set = new Set<string>();
-    for (const g of groupTable) for (const o of g.options) set.add(o.label);
+    for (const v of prodMap.values()) set.add(v.group || '(미분류)');
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [groupTable]);
+  }, [prodMap]);
+  // 표시명: 그룹 선택 시 해당 그룹만, 미선택이면 전체.
+  const chartLabels = useMemo(() => {
+    const set = new Set<string>();
+    for (const v of prodMap.values()) {
+      if (chartGroup && (v.group || '(미분류)') !== chartGroup) continue;
+      set.add(v.label || '(표시명없음)');
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [prodMap, chartGroup]);
 
-  // 표시명(D) 단위 연령 분포.
-  const productAgeDist = useMemo(() => {
-    if (!data || !selectedProduct) return [];
+  // 세 필터(그룹/표시명/판매형태) 교집합으로 좁힌 행들의 연령 분포.
+  const chartAgeDist = useMemo(() => {
+    if (!data) return [];
+    if (!chartGroup && !chartLabel && !chartChannel) return [];   // 아무것도 선택 안 함
     const rs = data.rows.filter((r) => {
       const m = prodMap.get(nfc(r.상품명));
-      return m && (m.label || '(표시명없음)') === selectedProduct;
+      if (!m) return false;
+      if (chartGroup && (m.group || '(미분류)') !== chartGroup) return false;
+      if (chartLabel && (m.label || '(표시명없음)') !== chartLabel) return false;
+      if (chartChannel && m.channel !== chartChannel) return false;
+      return true;
     });
     const mp = new Map<string, number>();
     for (const r of rs) mp.set(r.나이, (mp.get(r.나이) ?? 0) + r.결제수);
     return AGE_ORDER.filter((a) => mp.has(a)).map((a) => ({ 연령: a, 결제수: mp.get(a) ?? 0 }));
-  }, [data, prodMap, selectedProduct]);
+  }, [data, prodMap, chartGroup, chartLabel, chartChannel]);
 
   return (
     <div className="space-y-6">
@@ -662,22 +679,12 @@ export default function CustomerAnalysisPage() {
             </div>
           </div>
 
-          {/* 표시명 선택 → 연령 분포 */}
+          {/* 표시명별 연령 분포 — 차트 위, 필터 아래 */}
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
-            <div className="flex items-center gap-3 mb-4">
-              <h2 className="text-base font-semibold">표시명별 연령 분포</h2>
-              <select
-                value={selectedProduct}
-                onChange={(e) => setSelectedProduct(e.target.value)}
-                className="flex-1 max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm"
-              >
-                <option value="">표시명을 선택하세요</option>
-                {labelOptions.map((l) => <option key={l} value={l}>{l}</option>)}
-              </select>
-            </div>
-            {selectedProduct ? (
+            <h2 className="text-base font-semibold mb-4">표시명별 연령 분포</h2>
+            {(chartGroup || chartLabel || chartChannel) ? (
               <ChartBox>
-                <BarChart data={productAgeDist}>
+                <BarChart data={chartAgeDist}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
                   <YAxis tick={{ fontSize: 11 }} width={48} />
@@ -686,8 +693,45 @@ export default function CustomerAnalysisPage() {
                 </BarChart>
               </ChartBox>
             ) : (
-              <p className="text-sm text-gray-400 py-8 text-center">상품을 선택하면 연령 분포가 표시됩니다.</p>
+              <p className="text-sm text-gray-400 py-8 text-center">필터를 선택하세요.</p>
             )}
+
+            {/* 계단식 필터: 그룹명 / 표시명 / 판매형태 */}
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">그룹명</label>
+                <select
+                  value={chartGroup}
+                  onChange={(e) => { setChartGroup(e.target.value); setChartLabel(''); }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="">(전체)</option>
+                  {mapGroups.map((g) => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">상품명(표시명)</label>
+                <select
+                  value={chartLabel}
+                  onChange={(e) => setChartLabel(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="">(전체)</option>
+                  {chartLabels.map((l) => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">판매형태</label>
+                <select
+                  value={chartChannel}
+                  onChange={(e) => setChartChannel(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="">(전체)</option>
+                  {channels.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
           </div>
         </>
       )}
