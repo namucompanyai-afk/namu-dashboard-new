@@ -82,7 +82,31 @@ function Sparkline({ data, color }: { data: number[]; color: string }) {
 export default function SnsDashboardPage() {
   const [period, setPeriod] = useState<7 | 30 | 90>(30);
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
-  const [manualInputs, setManualInputs] = useState<Record<string, string>>({});
+  // 수동 채널 inline edit — 카드별 팔로워 수 오버라이드 + 편집 상태.
+  const [followers, setFollowers] = useState<Record<string, number>>(
+    Object.fromEntries(CHANNELS.map((c) => [c.id, c.followers])),
+  );
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState<string>('');
+
+  const startEdit = (ch: Channel) => {
+    setEditingId(ch.id);
+    setEditValue(String(followers[ch.id]));
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditValue('');
+  };
+  const saveEdit = (ch: Channel) => {
+    const next = Number(editValue);
+    if (!Number.isNaN(next)) {
+      setFollowers((prev) => ({ ...prev, [ch.id]: next }));
+      // 실제 DB 저장은 다음 단계 — 현재는 로그만.
+      console.log('[SNS 수동입력]', ch.name, '팔로워:', next);
+    }
+    setEditingId(null);
+    setEditValue('');
+  };
 
   const totalFollowers = CHANNELS.reduce((s, c) => s + c.followers, 0);
   const weekNew = CHANNELS.reduce((s, c) => s + c.week, 0);
@@ -106,14 +130,6 @@ export default function SnsDashboardPage() {
   const toggleChannel = (id: string) => {
     setHidden((prev) => ({ ...prev, [id]: !prev[id] }));
   };
-
-  const saveManual = (ch: Channel) => {
-    const val = manualInputs[ch.id];
-    // 실제 DB 저장은 다음 단계 — 현재는 로그만.
-    console.log('[SNS 수동입력]', ch.name, '오늘 팔로워:', val);
-  };
-
-  const manualChannels = CHANNELS.filter((c) => c.source === '수동');
 
   return (
     <div className="space-y-6">
@@ -154,11 +170,36 @@ export default function SnsDashboardPage() {
                 <span className="text-2xl">{c.emoji}</span>
                 <span className="font-semibold text-gray-900">{c.name}</span>
               </div>
-              <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + (c.source === '자동' ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600')}>
-                {c.source}
-              </span>
+              <div className="flex items-center gap-1">
+                <span className={'text-xs px-2 py-0.5 rounded-full font-medium ' + (c.source === '자동' ? 'bg-blue-50 text-blue-600' : 'bg-amber-50 text-amber-600')}>
+                  {c.source}
+                </span>
+                {c.source === '수동' && editingId !== c.id && (
+                  <button
+                    onClick={() => startEdit(c)}
+                    title="수기 수정"
+                    className="text-gray-400 hover:text-gray-700 text-sm leading-none"
+                  >
+                    ✏
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="mt-4 text-3xl font-bold text-gray-900">{fmt(c.followers)}</div>
+            {editingId === c.id ? (
+              <div className="mt-4 flex items-center gap-2">
+                <input
+                  type="number"
+                  autoFocus
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="w-28 px-2 py-1 border border-gray-300 rounded-lg text-2xl font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <button onClick={() => saveEdit(c)} className="px-2 py-1 rounded-md bg-blue-600 text-white text-xs font-medium hover:bg-blue-700">저장</button>
+                <button onClick={cancelEdit} className="px-2 py-1 rounded-md border border-gray-300 text-gray-600 text-xs font-medium hover:bg-gray-50">취소</button>
+              </div>
+            ) : (
+              <div className="mt-4 text-3xl font-bold text-gray-900">{fmt(followers[c.id])}</div>
+            )}
             <div className="mt-4 flex items-end justify-between">
               <div className="space-y-0.5 text-sm">
                 <div className="flex gap-2"><span className="text-gray-400 w-6">일</span><Delta value={c.day} /></div>
@@ -212,37 +253,6 @@ export default function SnsDashboardPage() {
           </ResponsiveContainer>
         </div>
         <p className="mt-2 text-xs text-gray-400">범례를 클릭하면 채널을 켜고 끌 수 있습니다.</p>
-      </div>
-
-      {/* 섹션 4: 수동 입력 */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-5">
-        <h2 className="text-base font-semibold mb-1">수동 입력</h2>
-        <p className="text-sm text-gray-500 mb-4">자동 수집이 안 되는 채널의 오늘 팔로워 수를 입력하세요. (저장은 다음 단계)</p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {manualChannels.map((c) => (
-            <div key={c.id} className="rounded-xl border border-gray-200 p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-xl">{c.emoji}</span>
-                <span className="font-medium text-gray-800">{c.name}</span>
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  value={manualInputs[c.id] ?? ''}
-                  onChange={(e) => setManualInputs((prev) => ({ ...prev, [c.id]: e.target.value }))}
-                  placeholder={fmt(c.followers)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <button
-                  onClick={() => saveManual(c)}
-                  className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 whitespace-nowrap"
-                >
-                  저장
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
