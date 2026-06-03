@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import * as XLSX from 'xlsx';
 import {
   ResponsiveContainer,
@@ -16,6 +16,7 @@ import {
   Pie,
   Cell,
   Legend,
+  LabelList,
 } from 'recharts';
 import {
   listDemographicPeriods,
@@ -34,9 +35,31 @@ const AXES: Record<string, string[]> = {
   시니어: ['61~65', '66~70', '71+'],
 };
 const AXIS_COLORS: Record<string, string> = { 중년: '#3b82f6', 전환맘: '#ec4899', 시니어: '#22c55e' };
+// 집계 축 정의(중년 41~60 / 전환맘 36~40 / 시니어 61+)는 유지하고 표시 라벨만 나이대로.
+const AXIS_LABELS: Record<string, string> = { 중년: '40~50대', 전환맘: '30대 후반', 시니어: '60대 이상' };
 
 const fmt = (n: number) => n.toLocaleString();
 const pct = (n: number) => (n * 100).toFixed(1) + '%';
+
+// 차트 클릭 시 파란 박스/포커스 outline 제거 (쿠팡 수익진단 방식).
+const NOSEL = 'focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none';
+function ChartBox({ children, height = 288 }: { children: ReactElement; height?: number }) {
+  return (
+    <div tabIndex={-1} className={NOSEL} style={{ outline: 'none', height }}>
+      <ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer>
+    </div>
+  );
+}
+
+// 선택 기간 라벨: 최소 ~ 최대 (N개월). 단일이면 범위 생략.
+function rangeLabel(sel: string[]): string {
+  if (sel.length === 0) return '선택된 기간 없음';
+  const sorted = [...sel].sort((a, b) => a.localeCompare(b));
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const n = sel.length;
+  return min === max ? `${min} (${n}개월)` : `${min} ~ ${max} (${n}개월)`;
+}
 
 interface Analysis {
   rows: Row[];
@@ -130,6 +153,7 @@ export default function CustomerAnalysisPage() {
   const [periods, setPeriods] = useState<string[]>([]);            // 전체 (desc)
   const [selectedPeriods, setSelectedPeriods] = useState<string[]>([]);
   const [mode, setMode] = useState<'sum' | 'trend'>('sum');
+  const [expandedYears, setExpandedYears] = useState<string[]>([]);
   const [data, setData] = useState<Analysis | null>(null);        // 합산 집계
   const [trend, setTrend] = useState<TrendPoint[]>([]);           // 추이 (period 오름차순)
   const [loading, setLoading] = useState(true);
@@ -192,6 +216,8 @@ export default function CustomerAnalysisPage() {
         setPeriods(ps);
         const def = ps.slice(0, RECENT_DEFAULT);   // 최근 12개
         setSelectedPeriods(def);
+        const years = Array.from(new Set(ps.map((p) => p.slice(0, 4)))).sort((a, b) => b.localeCompare(a));
+        if (years.length > 0) setExpandedYears([years[0]]);   // 최신 연도 펼침
         await loadSelected(userEmail, def);
       } catch (err) {
         console.error(err);
@@ -207,6 +233,24 @@ export default function CustomerAnalysisPage() {
     setSelectedPeriods(next);
     loadSelected(email, next);
   };
+
+  const toggleYear = (y: string) => {
+    setExpandedYears((prev) => (prev.includes(y) ? prev.filter((x) => x !== y) : [...prev, y]));
+  };
+
+  // 연도 → 해당 연도 period(월) 목록(오름차순). 연도 내림차순.
+  const periodsByYear = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const p of periods) {
+      const y = p.slice(0, 4);
+      const arr = map.get(y) ?? [];
+      arr.push(p);
+      map.set(y, arr);
+    }
+    return [...map.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([year, ps]) => ({ year, months: ps.sort((a, b) => a.localeCompare(b)) }));
+  }, [periods]);
 
   const parseFile = (file: File) => {
     setError('');
@@ -281,13 +325,21 @@ export default function CustomerAnalysisPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">스마트스토어 고객분석</h1>
-          <p className="text-sm text-gray-500 mt-1">상품 인구통계 저장 데이터 → 연령·성별·콘텐츠축 분석</p>
-        </div>
-        {/* 합산/추이 토글 — 추이는 period 2개 이상일 때만 */}
-        <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+      <div>
+        <h1 className="text-2xl font-semibold">스마트스토어 고객분석</h1>
+        <p className="text-sm text-gray-500 mt-1">상품 인구통계 저장 데이터 → 연령·성별 분석</p>
+      </div>
+
+      {/* 컨트롤 바: [업로드 버튼] [선택 기간] ......... [합산/추이 토글] */}
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm cursor-pointer hover:bg-gray-700">
+          <span>⬆</span> 업로드
+          <input type="file" accept=".xlsx,.xls" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f); }} />
+        </label>
+        <span className="text-sm text-gray-600">{rangeLabel(selectedPeriods)}</span>
+
+        <div className="ml-auto inline-flex rounded-lg border border-gray-200 overflow-hidden">
           <button
             onClick={() => setMode('sum')}
             className={'px-3 py-1.5 text-sm font-medium ' + (mode === 'sum' ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50')}
@@ -304,56 +356,63 @@ export default function CustomerAnalysisPage() {
         </div>
       </div>
 
-      {/* 포함할 period 다중선택 */}
-      {periods.length > 0 && (
-        <div className="rounded-2xl border border-gray-200 bg-white p-4">
-          <div className="text-xs font-medium text-gray-500 mb-2">포함 기간 (기본 최근 {RECENT_DEFAULT}개)</div>
-          <div className="flex flex-wrap gap-2">
-            {periods.map((p) => (
-              <label key={p} className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-sm cursor-pointer ' + (selectedPeriods.includes(p) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
-                <input type="checkbox" checked={selectedPeriods.includes(p)} onChange={() => togglePeriod(p)} className="h-3.5 w-3.5" />
-                {p}
-              </label>
-            ))}
-          </div>
+      {/* 업로드 스테이징 (교체 저장 확인) */}
+      {staged && (
+        <div className="rounded-2xl border border-teal-200 bg-teal-50 p-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-700">📄 {stagedName} · {staged.length}행</span>
+          <input
+            value={periodInput}
+            onChange={(e) => setPeriodInput(e.target.value)}
+            placeholder="기간 예: 2025-12 또는 2025-12_2026-05"
+            className="px-3 py-1.5 border border-gray-300 rounded-lg bg-white"
+          />
+          <button onClick={saveStaged} disabled={saving}
+            className={'px-3 py-1.5 rounded-lg text-white text-sm font-medium ' + (saving ? 'bg-gray-400 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700')}>
+            {saving ? '저장 중...' : '저장(교체)'}
+          </button>
+          <button onClick={() => { setStaged(null); setStagedName(''); setPeriodInput(''); }}
+            className="px-3 py-1.5 rounded-lg border border-gray-300 bg-white text-gray-600 text-sm font-medium hover:bg-gray-50">
+            취소
+          </button>
         </div>
       )}
 
-      {/* 업로드 (교체 저장) */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) parseFile(f); }}
-        className={'rounded-2xl border-2 border-dashed p-6 text-center transition-colors ' + (drag ? 'border-teal-500 bg-teal-50' : 'border-gray-300 bg-white')}
-      >
-        <div className="text-sm font-medium mb-1">상품_인구통계 (.xlsx) 업로드 → 같은 기간 데이터 교체 저장</div>
-        <p className="text-xs text-gray-500 mb-3">드래그앤드롭 또는 클릭</p>
-        <label className="inline-block px-4 py-2 rounded-lg bg-gray-900 text-white text-sm cursor-pointer hover:bg-gray-700">
-          파일 선택
-          <input type="file" accept=".xlsx,.xls" className="hidden"
-            onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f); }} />
-        </label>
-
-        {staged && (
-          <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-sm">
-            <span className="text-gray-700">📄 {stagedName} · {staged.length}행</span>
-            <input
-              value={periodInput}
-              onChange={(e) => setPeriodInput(e.target.value)}
-              placeholder="기간 예: 2025-12_2026-05"
-              className="px-3 py-1.5 border border-gray-300 rounded-lg"
-            />
-            <button onClick={saveStaged} disabled={saving}
-              className={'px-3 py-1.5 rounded-lg text-white text-sm font-medium ' + (saving ? 'bg-gray-400 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700')}>
-              {saving ? '저장 중...' : '저장(교체)'}
-            </button>
-            <button onClick={() => { setStaged(null); setStagedName(''); setPeriodInput(''); }}
-              className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-sm font-medium hover:bg-gray-50">
-              취소
-            </button>
+      {/* 포함 기간 — 연도 그룹 아코디언 */}
+      {periods.length > 0 && (
+        <div className="rounded-2xl border border-gray-200 bg-white p-4">
+          <div className="text-xs font-medium text-gray-500 mb-3">포함 기간 (기본 최근 {RECENT_DEFAULT}개)</div>
+          <div className="space-y-2">
+            {periodsByYear.map(({ year, months }) => {
+              const open = expandedYears.includes(year);
+              const selCount = months.filter((m) => selectedPeriods.includes(m)).length;
+              return (
+                <div key={year} className="rounded-lg border border-gray-200 overflow-hidden">
+                  <button
+                    onClick={() => toggleYear(year)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 text-sm font-medium"
+                  >
+                    <span>{year}년 <span className="text-gray-400 font-normal">· {selCount}/{months.length} 선택</span></span>
+                    <span className="text-xs text-gray-400">{open ? '▼' : '▶'}</span>
+                  </button>
+                  {open && (
+                    <div className="flex flex-wrap gap-2 p-3">
+                      {months.map((p) => {
+                        const mm = p.length === 7 ? `${parseInt(p.slice(5, 7), 10)}월` : p;
+                        return (
+                          <label key={p} className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-sm cursor-pointer ' + (selectedPeriods.includes(p) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+                            <input type="checkbox" checked={selectedPeriods.includes(p)} onChange={() => togglePeriod(p)} className="h-3.5 w-3.5" />
+                            {mm}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {error && <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">{error}</div>}
 
@@ -367,70 +426,54 @@ export default function CustomerAnalysisPage() {
 
       {mode === 'sum' && data && (
         <>
-          {/* KPI */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          {/* KPI — 총 결제수 / 여성 / 남성 */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
-              <div className="text-xs text-gray-500">총 결제수</div>
+              <div className="text-xs text-gray-500">총 결제수 (남+여 합산)</div>
               <div className="mt-2 text-2xl font-bold text-gray-900">{fmt(data.totalPay)}</div>
             </div>
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <div className="text-xs text-gray-500">여성 비중</div>
               <div className="mt-2 text-2xl font-bold text-pink-600">{pct(data.femaleShare)}</div>
             </div>
-            {data.axes.map((a) => (
-              <div key={a.축} className="rounded-2xl border border-gray-200 bg-white p-5">
-                <div className="text-xs text-gray-500">{a.축} 축</div>
-                <div className="mt-2 text-2xl font-bold" style={{ color: AXIS_COLORS[a.축] }}>{pct(a.비중)}</div>
-                <div className="text-xs text-gray-400">{fmt(a.결제수)}건</div>
-              </div>
-            ))}
+            <div className="rounded-2xl border border-gray-200 bg-white p-5">
+              <div className="text-xs text-gray-500">남성 비중</div>
+              <div className="mt-2 text-2xl font-bold text-blue-600">{pct(1 - data.femaleShare)}</div>
+            </div>
           </div>
 
           {/* 차트 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <h2 className="text-base font-semibold mb-4">연령대별 볼륨 (남+여 합산)</h2>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령))}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="연령" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} width={48} />
-                    <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                    <Bar dataKey="합산" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <ChartBox>
+                <BarChart data={[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령))} margin={{ top: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={48} />
+                  <Tooltip formatter={(v: any) => fmt(Number(v))} />
+                  <Bar dataKey="합산" fill="#3b82f6" radius={[4, 4, 0, 0]}>
+                    <LabelList dataKey="합산" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
+                  </Bar>
+                </BarChart>
+              </ChartBox>
             </div>
 
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <h2 className="text-base font-semibold mb-4">콘텐츠축 (제작 3축 재환산)</h2>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={data.axes} dataKey="결제수" nameKey="축" innerRadius={60} outerRadius={100} label={(e: any) => `${e.축} ${pct(e.비중)}`}>
-                      {data.axes.map((a) => <Cell key={a.축} fill={AXIS_COLORS[a.축]} />)}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 bg-white p-5">
-            <h2 className="text-base font-semibold mb-4">카테고리(소)별 결제수</h2>
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={data.categories} layout="vertical" margin={{ left: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="카테고리" tick={{ fontSize: 11 }} width={90} />
-                  <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                  <Bar dataKey="결제수" fill="#22c55e" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <ChartBox>
+                <PieChart>
+                  <Pie
+                    data={data.axes.map((a) => ({ ...a, 라벨: AXIS_LABELS[a.축] }))}
+                    dataKey="결제수" nameKey="라벨" innerRadius={60} outerRadius={100}
+                    label={(e: any) => `${e.라벨} ${pct(e.비중)}`}
+                  >
+                    {data.axes.map((a) => <Cell key={a.축} fill={AXIS_COLORS[a.축]} />)}
+                  </Pie>
+                  <Tooltip formatter={(v: any, _n: any, p: any) => [fmt(Number(v)), p?.payload?.라벨]} />
+                  <Legend />
+                </PieChart>
+              </ChartBox>
             </div>
           </div>
 
@@ -477,17 +520,15 @@ export default function CustomerAnalysisPage() {
               </select>
             </div>
             {selectedProduct ? (
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={productAgeDist}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="연령" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} width={48} />
-                    <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                    <Bar dataKey="결제수" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <ChartBox>
+                <BarChart data={productAgeDist}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={48} />
+                  <Tooltip formatter={(v: any) => fmt(Number(v))} />
+                  <Bar dataKey="결제수" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ChartBox>
             ) : (
               <p className="text-sm text-gray-400 py-8 text-center">상품을 선택하면 연령 분포가 표시됩니다.</p>
             )}
@@ -505,51 +546,45 @@ export default function CustomerAnalysisPage() {
           <>
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <h2 className="text-base font-semibold mb-4">콘텐츠축 비중 추이 (%)</h2>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={trend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} width={48} unit="%" />
-                    <Tooltip formatter={(v: any) => v + '%'} />
-                    <Legend />
-                    <Line type="monotone" dataKey="중년" stroke={AXIS_COLORS['중년']} strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="전환맘" stroke={AXIS_COLORS['전환맘']} strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="시니어" stroke={AXIS_COLORS['시니어']} strokeWidth={2} dot={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
+              <ChartBox>
+                <LineChart data={trend}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={48} unit="%" />
+                  <Tooltip formatter={(v: any) => v + '%'} />
+                  <Legend />
+                  <Line type="monotone" dataKey="중년" name={AXIS_LABELS['중년']} stroke={AXIS_COLORS['중년']} strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="전환맘" name={AXIS_LABELS['전환맘']} stroke={AXIS_COLORS['전환맘']} strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="시니어" name={AXIS_LABELS['시니어']} stroke={AXIS_COLORS['시니어']} strokeWidth={2} dot={false} />
+                </LineChart>
+              </ChartBox>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="rounded-2xl border border-gray-200 bg-white p-5">
                 <h2 className="text-base font-semibold mb-4">여성 비중 추이 (%)</h2>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={trend}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} width={48} unit="%" />
-                      <Tooltip formatter={(v: any) => v + '%'} />
-                      <Line type="monotone" dataKey="여성" stroke="#ec4899" strokeWidth={2} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                <ChartBox>
+                  <LineChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} width={48} unit="%" />
+                    <Tooltip formatter={(v: any) => v + '%'} />
+                    <Line type="monotone" dataKey="여성" stroke="#ec4899" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ChartBox>
               </div>
 
               <div className="rounded-2xl border border-gray-200 bg-white p-5">
                 <h2 className="text-base font-semibold mb-4">총 결제수 추이</h2>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={trend}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                      <XAxis dataKey="period" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} width={56} />
-                      <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                      <Line type="monotone" dataKey="총결제수" stroke="#3b82f6" strokeWidth={2} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
+                <ChartBox>
+                  <LineChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis dataKey="period" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} width={56} />
+                    <Tooltip formatter={(v: any) => fmt(Number(v))} />
+                    <Line type="monotone" dataKey="총결제수" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ChartBox>
               </div>
             </div>
           </>
