@@ -114,6 +114,12 @@ export default function Sidebar() {
             )}
           </div>
 
+          {/* SNS 대시보드 */}
+          <Link href="/sns" className={'flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/sns') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+            <span>📱</span>
+            <span className="flex-1 text-left">SNS 대시보드</span>
+          </Link>
+
           {/* 손익 관리자 - 관리자만 */}
           {userRole === '관리자' && (
             <div>

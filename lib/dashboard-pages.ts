@@ -17,6 +17,7 @@ export const DASHBOARD_PAGES: DashboardPage[] = [
   { id: 'jindopam-order', title: '진도팜 발주', emoji: '🌾', href: '/jindopam/order-work' },
   { id: 'jindopam-settlement', title: '진도팜 정산', emoji: '💰', href: '/jindopam/settlement' },
   { id: 'jindopam-crm', title: 'CRM', emoji: '🤝', href: '/jindopam/crm' },
+  { id: 'sns-dashboard', title: 'SNS 대시보드', emoji: '📱', href: '/sns' },
 ];
 
 // page_ids 가 없거나 빈 배열일 때 기본 노출.
