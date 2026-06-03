@@ -95,18 +95,27 @@ export interface DemographicRow {
 const SS_DEMO_TABLE = 'ss_customer_demographics';
 
 // 저장된 period 목록 (최신 우선).
+// 주의: Supabase 기본 1000행 제한 → range 페이지네이션으로 전 행을 훑어 distinct.
+//       (period 컬럼만 select 하므로 페이로드는 가볍다)
 export async function listDemographicPeriods(email: string): Promise<string[]> {
-  const { data, error } = await getClient()
-    .from(SS_DEMO_TABLE)
-    .select('period')
-    .eq('user_email', email);
-  if (error) {
-    console.error('listDemographicPeriods error:', error);
-    return [];
+  const client = getClient();
+  const seen = new Set<string>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from(SS_DEMO_TABLE)
+      .select('period')
+      .eq('user_email', email)
+      .order('period', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error('listDemographicPeriods error:', error);
+      break;
+    }
+    for (const r of data ?? []) seen.add((r as any).period as string);
+    if (!data || data.length < PAGE) break;
   }
-  const uniq = Array.from(new Set((data ?? []).map((r: any) => r.period as string)));
-  uniq.sort((a, b) => b.localeCompare(a));
-  return uniq;
+  return Array.from(seen).sort((a, b) => b.localeCompare(a));
 }
 
 // 특정 period 행 조회 (페이지네이션 — Supabase 기본 1000행 제한 회피).
