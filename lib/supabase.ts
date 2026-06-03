@@ -70,6 +70,93 @@ export async function saveUserDashboardPages(email: string, pageIds: string[]): 
   return true;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 스마트스토어 고객분석 (ss_customer_demographics)
+// ─────────────────────────────────────────────────────────────
+export interface DemographicRow {
+  user_email: string;
+  period: string;
+  cat_l: string;
+  cat_m: string;
+  cat_s: string;
+  cat_d: string;
+  product_name: string;
+  product_id: string;
+  gender: string;
+  age_band: string;
+  pay_amount: number;
+  pay_count: number;
+  pay_qty: number;
+  refund_amount: number;
+  refund_count: number;
+  refund_qty: number;
+}
+
+const SS_DEMO_TABLE = 'ss_customer_demographics';
+
+// 저장된 period 목록 (최신 우선).
+export async function listDemographicPeriods(email: string): Promise<string[]> {
+  const { data, error } = await getClient()
+    .from(SS_DEMO_TABLE)
+    .select('period')
+    .eq('user_email', email);
+  if (error) {
+    console.error('listDemographicPeriods error:', error);
+    return [];
+  }
+  const uniq = Array.from(new Set((data ?? []).map((r: any) => r.period as string)));
+  uniq.sort((a, b) => b.localeCompare(a));
+  return uniq;
+}
+
+// 특정 period 행 조회 (페이지네이션 — Supabase 기본 1000행 제한 회피).
+export async function getDemographics(email: string, period: string): Promise<DemographicRow[]> {
+  const client = getClient();
+  const out: DemographicRow[] = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await client
+      .from(SS_DEMO_TABLE)
+      .select('*')
+      .eq('user_email', email)
+      .eq('period', period)
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error('getDemographics error:', error);
+      break;
+    }
+    out.push(...((data ?? []) as DemographicRow[]));
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
+
+// 같은 period 행 delete 후 insert(교체).
+export async function replaceDemographics(
+  email: string,
+  period: string,
+  rows: Omit<DemographicRow, 'user_email' | 'period'>[],
+): Promise<number> {
+  const client = getClient();
+  const { error: delErr } = await client
+    .from(SS_DEMO_TABLE)
+    .delete()
+    .eq('user_email', email)
+    .eq('period', period);
+  if (delErr) throw delErr;
+
+  const payload = rows.map((r) => ({ ...r, user_email: email, period }));
+  const BATCH = 500;
+  let inserted = 0;
+  for (let i = 0; i < payload.length; i += BATCH) {
+    const batch = payload.slice(i, i + BATCH);
+    const { error } = await client.from(SS_DEMO_TABLE).insert(batch);
+    if (error) throw error;
+    inserted += batch.length;
+  }
+  return inserted;
+}
+
 // prefix로 시작하는 키만 조회 (data 미포함 — 존재 여부 체크 등 가벼운 용도)
 export async function listIdsByPrefix(prefix: string): Promise<string[]> {
   const client = getClient();
