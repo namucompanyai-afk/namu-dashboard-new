@@ -45,6 +45,31 @@ export async function deleteData(id: string): Promise<number> {
   return count ?? 0;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 개인별 대시보드 페이지 핀 (user_dashboard_pages)
+// ─────────────────────────────────────────────────────────────
+export async function getUserDashboardPages(email: string): Promise<string[] | null> {
+  const { data, error } = await getClient()
+    .from('user_dashboard_pages')
+    .select('page_ids')
+    .eq('user_email', email)
+    .maybeSingle();
+  if (error) {
+    console.error('getUserDashboardPages error:', error);
+    return null;
+  }
+  if (!data) return null;
+  return Array.isArray(data.page_ids) ? (data.page_ids as string[]) : [];
+}
+
+export async function saveUserDashboardPages(email: string, pageIds: string[]): Promise<boolean> {
+  const { error } = await getClient()
+    .from('user_dashboard_pages')
+    .upsert({ user_email: email, page_ids: pageIds, updated_at: new Date().toISOString() });
+  if (error) throw error;
+  return true;
+}
+
 // prefix로 시작하는 키만 조회 (data 미포함 — 존재 여부 체크 등 가벼운 용도)
 export async function listIdsByPrefix(prefix: string): Promise<string[]> {
   const client = getClient();
