@@ -12,8 +12,6 @@ import {
   YAxis,
   Tooltip,
   CartesianGrid,
-  PieChart,
-  Pie,
   Cell,
   Legend,
   LabelList,
@@ -37,6 +35,14 @@ const AXES: Record<string, string[]> = {
 const AXIS_COLORS: Record<string, string> = { 중년: '#3b82f6', 전환맘: '#ec4899', 시니어: '#22c55e' };
 // 집계 축 정의(중년 41~60 / 전환맘 36~40 / 시니어 61+)는 유지하고 표시 라벨만 나이대로.
 const AXIS_LABELS: Record<string, string> = { 중년: '40~50대', 전환맘: '30대 후반', 시니어: '60대 이상' };
+
+// 연령대별 막대 색: 제작 축별 분류 + 35세 이하 비제작 회색.
+function ageColor(age: string): string {
+  if (age === '36~40') return '#ec4899';                                  // 전환맘
+  if (['41~45', '46~50', '51~55', '56~60'].includes(age)) return '#3b82f6'; // 중년
+  if (['61~65', '66~70', '71+'].includes(age)) return '#22c55e';           // 시니어
+  return '#d1d5db';                                                        // 35세 이하 비제작
+}
 
 const fmt = (n: number) => n.toLocaleString();
 const pct = (n: number) => (n * 100).toFixed(1) + '%';
@@ -64,6 +70,8 @@ function rangeLabel(sel: string[]): string {
 interface Analysis {
   rows: Row[];
   totalPay: number;
+  female: number;
+  male: number;
   femaleShare: number;
   ageVolume: { 연령: string; 합산: number; 비중: number }[];
   axes: { 축: string; 결제수: number; 비중: number }[];
@@ -118,7 +126,7 @@ function analyze(all: Row[]): Analysis {
     return { 상품명, 결제수, 주력연령, 여성비중: pf + pm > 0 ? pf / (pf + pm) : 0 };
   }).sort((a, b) => b.결제수 - a.결제수);
 
-  return { rows: f, totalPay, femaleShare: totalPay > 0 ? female / totalPay : 0, ageVolume, axes, categories, products };
+  return { rows: f, totalPay, female, male, femaleShare: totalPay > 0 ? female / totalPay : 0, ageVolume, axes, categories, products };
 }
 
 // DB 행 → 집계 입력
@@ -161,6 +169,9 @@ export default function CustomerAnalysisPage() {
   const [error, setError] = useState('');
   const [drag, setDrag] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState('');
+  // 진도팜 매핑: NFC(샵마인품목명) → 표준별칭. dupCount = 한 품목명에 별칭 2개+ 충돌 건수.
+  const [aliasMap, setAliasMap] = useState<Map<string, string>>(new Map());
+  const [aliasDup, setAliasDup] = useState(0);
 
   // 업로드 스테이징
   const [staged, setStaged] = useState<Omit<DemographicRow, 'user_email' | 'period'>[] | null>(null);
@@ -222,6 +233,38 @@ export default function CustomerAnalysisPage() {
       } catch (err) {
         console.error(err);
         setLoading(false);
+      }
+    })();
+  }, []);
+
+  // 진도팜 매핑 CSV 로드 → 표준별칭 맵 구축 (품목명 A / 표준별칭 C).
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/jindopam-mapping', { cache: 'no-store' });
+        const json = await res.json();
+        if (!json?.ok || !Array.isArray(json.rows)) return;
+        // 품목명 → 등장한 별칭 Set (첫 값 유지, 2개 이상이면 충돌 케이스로 카운트).
+        const sets = new Map<string, string[]>();
+        for (let i = 1; i < json.rows.length; i++) {       // 0행 헤더 스킵
+          const row = json.rows[i];
+          const name = String(row?.[0] ?? '').normalize('NFC').trim();
+          const alias = String(row?.[2] ?? '').normalize('NFC').trim();
+          if (!name || !alias) continue;
+          const arr = sets.get(name) ?? [];
+          if (!arr.includes(alias)) arr.push(alias);
+          sets.set(name, arr);
+        }
+        const map = new Map<string, string>();
+        let dup = 0;                                       // 별칭 2개+ 품목명 케이스 수
+        for (const [name, aliases] of sets) {
+          map.set(name, aliases[0]);                       // 첫 값 사용
+          if (aliases.length > 1) dup++;
+        }
+        setAliasMap(map);
+        setAliasDup(dup);
+      } catch (err) {
+        console.error('진도팜 매핑 로드 실패:', err);
       }
     })();
   }, []);
@@ -314,6 +357,14 @@ export default function CustomerAnalysisPage() {
       setSaving(false);
     }
   };
+
+  // 표준별칭 치환 (NFC 매칭, 못 맞추면 원래 상품명).
+  const aliasOf = (name: string) => aliasMap.get(name.normalize('NFC').trim()) ?? name;
+  const aliasStats = useMemo(() => {
+    if (!data) return { matched: 0, total: 0 };
+    const matched = data.products.filter((p) => aliasMap.has(p.상품명.normalize('NFC').trim())).length;
+    return { matched, total: data.products.length };
+  }, [data, aliasMap]);
 
   const productAgeDist = useMemo(() => {
     if (!data || !selectedProduct) return [];
@@ -435,52 +486,50 @@ export default function CustomerAnalysisPage() {
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <div className="text-xs text-gray-500">여성 비중</div>
               <div className="mt-2 text-2xl font-bold text-pink-600">{pct(data.femaleShare)}</div>
+              <div className="text-xs text-gray-400">{fmt(data.female)}건</div>
             </div>
             <div className="rounded-2xl border border-gray-200 bg-white p-5">
               <div className="text-xs text-gray-500">남성 비중</div>
               <div className="mt-2 text-2xl font-bold text-blue-600">{pct(1 - data.femaleShare)}</div>
+              <div className="text-xs text-gray-400">{fmt(data.male)}건</div>
             </div>
           </div>
 
-          {/* 차트 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="rounded-2xl border border-gray-200 bg-white p-5">
-              <h2 className="text-base font-semibold mb-4">연령대별 볼륨 (남+여 합산)</h2>
-              <ChartBox>
-                <BarChart data={[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령))} margin={{ top: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
-                  <YAxis tick={{ fontSize: 11 }} width={48} />
-                  <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                  <Bar dataKey="합산" fill="#3b82f6" radius={[4, 4, 0, 0]}>
-                    <LabelList dataKey="합산" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
-                  </Bar>
-                </BarChart>
-              </ChartBox>
-            </div>
-
-            <div className="rounded-2xl border border-gray-200 bg-white p-5">
-              <h2 className="text-base font-semibold mb-4">콘텐츠축 (제작 3축 재환산)</h2>
-              <ChartBox>
-                <PieChart>
-                  <Pie
-                    data={data.axes.map((a) => ({ ...a, 라벨: AXIS_LABELS[a.축] }))}
-                    dataKey="결제수" nameKey="라벨" innerRadius={60} outerRadius={100}
-                    label={(e: any) => `${e.라벨} ${pct(e.비중)}`}
-                  >
-                    {data.axes.map((a) => <Cell key={a.축} fill={AXIS_COLORS[a.축]} />)}
-                  </Pie>
-                  <Tooltip formatter={(v: any, _n: any, p: any) => [fmt(Number(v)), p?.payload?.라벨]} />
-                  <Legend />
-                </PieChart>
-              </ChartBox>
-            </div>
+          {/* KPI — 콘텐츠축 3개 (제작 3축 재환산) */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {data.axes.map((a) => (
+              <div key={a.축} className="rounded-2xl border border-gray-200 bg-white p-5">
+                <div className="text-xs text-gray-500">{AXIS_LABELS[a.축]} <span className="text-gray-400">(남+여 합산)</span></div>
+                <div className="mt-2 text-2xl font-bold" style={{ color: AXIS_COLORS[a.축] }}>{pct(a.비중)}</div>
+                <div className="text-xs text-gray-400">{fmt(a.결제수)}건</div>
+              </div>
+            ))}
           </div>
 
-          {/* 상품별 주력연령 */}
+          {/* 차트 — 연령대별 볼륨 */}
+          <div className="rounded-2xl border border-gray-200 bg-white p-5">
+            <h2 className="text-base font-semibold mb-4">연령대별 볼륨 (남+여 합산)</h2>
+            <ChartBox>
+              <BarChart data={[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령))} margin={{ top: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
+                <YAxis tick={{ fontSize: 11 }} width={48} />
+                <Tooltip formatter={(v: any) => fmt(Number(v))} />
+                <Bar dataKey="합산" radius={[4, 4, 0, 0]}>
+                  {[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령)).map((d) => (
+                    <Cell key={d.연령} fill={ageColor(d.연령)} />
+                  ))}
+                  <LabelList dataKey="합산" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
+                </Bar>
+              </BarChart>
+            </ChartBox>
+          </div>
+
+          {/* 상품별 주력연령 (진도팜 표준별칭 치환) */}
           <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
-            <div className="px-5 py-3 border-b border-gray-200">
+            <div className="px-5 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-base font-semibold">상품별 주력연령</h2>
+              <span className="text-xs text-gray-400">별칭 적용 {aliasStats.matched} / 전체 {aliasStats.total}{aliasDup > 0 ? ` · 별칭충돌 ${aliasDup}` : ''}</span>
             </div>
             <div className="overflow-x-auto max-h-[60vh]">
               <table className="w-full text-sm">
@@ -495,7 +544,7 @@ export default function CustomerAnalysisPage() {
                 <tbody>
                   {data.products.slice(0, 50).map((p, i) => (
                     <tr key={i} className="border-t border-gray-100">
-                      <td className="px-4 py-2 max-w-md truncate" title={p.상품명}>{p.상품명}</td>
+                      <td className="px-4 py-2 max-w-md truncate" title={p.상품명}>{aliasOf(p.상품명)}</td>
                       <td className="px-4 py-2 text-right font-mono">{fmt(p.결제수)}</td>
                       <td className="px-4 py-2 text-center">{p.주력연령}</td>
                       <td className="px-4 py-2 text-right font-mono">{pct(p.여성비중)}</td>
@@ -516,7 +565,7 @@ export default function CustomerAnalysisPage() {
                 className="flex-1 max-w-md px-3 py-2 border border-gray-300 rounded-lg text-sm"
               >
                 <option value="">상품을 선택하세요</option>
-                {data.products.map((p) => <option key={p.상품명} value={p.상품명}>{p.상품명}</option>)}
+                {data.products.map((p) => <option key={p.상품명} value={p.상품명}>{aliasOf(p.상품명)}</option>)}
               </select>
             </div>
             {selectedProduct ? (
