@@ -19,13 +19,13 @@ export default function LeaveApplyPage() {
     remaining: 15,
   });
 
+  // 생일 반차: 사용 기록은 0.5일로 남기되 연차 잔여는 차감하지 않는 복지 휴가(noDeduct).
+  // 병가·경조휴가·보상휴가는 UI 카드만 숨김(과거 신청 이력·DB enum은 그대로 유지).
   const leaveTypes = [
     { id: '연차', label: '연차', icon: '🌴', days: 1 },
     { id: '오전반차', label: '오전반차', icon: '🌅', days: 0.5 },
     { id: '오후반차', label: '오후반차', icon: '🌆', days: 0.5 },
-    { id: '병가', label: '병가', icon: '🏥', days: 0 },
-    { id: '경조휴가', label: '경조휴가', icon: '🎊', days: 0 },
-    { id: '보상휴가', label: '보상휴가', icon: '🎁', days: 0 },
+    { id: '생일 반차', label: '생일 반차', icon: '🎂', days: 0.5, noDeduct: true },
   ];
 
   useEffect(() => {
@@ -105,6 +105,9 @@ export default function LeaveApplyPage() {
     }
 
     const days = calculateDays();
+    const submitType = leaveTypes.find(t => t.id === leaveType);
+    // 생일 반차는 기록(days)만 남기고 잔여 차감(deductDays)은 0.
+    const deductDaysSubmit = submitType?.noDeduct ? 0 : days;
 
     setLoading(true);
 
@@ -121,6 +124,7 @@ export default function LeaveApplyPage() {
             startDate,
             endDate,
             days,
+            deductDays: deductDaysSubmit,
           },
         }),
       });
@@ -144,6 +148,10 @@ export default function LeaveApplyPage() {
   };
 
   const days = calculateDays();
+  // 잔여에서 실제 차감되는 일수 — 생일 반차(noDeduct)는 0.
+  const selectedType = leaveTypes.find(t => t.id === leaveType);
+  const deductDays = selectedType?.noDeduct ? 0 : days;
+  const afterRemaining = leaveBalance.remaining - deductDays;
 
   return (
     <div className="min-h-screen bg-[#f5f3ef]">
@@ -162,20 +170,20 @@ export default function LeaveApplyPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-4">
                   휴가 유형
                 </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-4 gap-2">
                   {leaveTypes.map((type) => (
                     <button
                       key={type.id}
                       onClick={() => setLeaveType(type.id)}
-                      className={'relative px-4 py-3 rounded-xl border-2 transition-all ' + (leaveType === type.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300')}
+                      className={'relative px-2 py-2 rounded-xl border-2 transition-all ' + (leaveType === type.id ? 'border-blue-500 bg-blue-50 shadow-sm' : 'border-gray-200 bg-white hover:border-gray-300')}
                     >
-                      <div className="text-2xl mb-1">{type.icon}</div>
-                      <div className={'text-sm font-medium ' + (leaveType === type.id ? 'text-blue-700' : 'text-gray-700')}>
+                      <div className="text-xl mb-1">{type.icon}</div>
+                      <div className={'text-xs font-medium ' + (leaveType === type.id ? 'text-blue-700' : 'text-gray-700')}>
                         {type.label}
                       </div>
                       {type.days > 0 && (
-                        <div className="text-xs text-gray-500 mt-1">
-                          {type.days}일
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          {type.noDeduct ? '0일 차감' : type.days + '일'}
                         </div>
                       )}
                     </button>
@@ -221,7 +229,7 @@ export default function LeaveApplyPage() {
               <button
                 onClick={handleSubmit}
                 disabled={loading}
-                className={'w-full font-medium py-4 rounded-xl transition-colors shadow-sm ' + (loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white')}
+                className={'w-full text-sm font-medium py-2 rounded-xl transition-colors shadow-sm ' + (loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white')}
               >
                 {loading ? '신청 중...' : '연차 신청하기'}
               </button>
@@ -239,7 +247,7 @@ export default function LeaveApplyPage() {
                   </div>
                   <div>
                     <div className="font-medium text-gray-900">{leaveType}</div>
-                    <div className="text-sm text-gray-500">{days}일 차감 (주말제외)</div>
+                    <div className="text-sm text-gray-500">{deductDays}일 차감 (주말제외){selectedType?.noDeduct && days > 0 ? ` · 기록 ${days}일` : ''}</div>
                   </div>
                 </div>
 
@@ -250,12 +258,12 @@ export default function LeaveApplyPage() {
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">차감</span>
-                    <span className="text-lg font-semibold text-gray-900">{days}일</span>
+                    <span className="text-lg font-semibold text-gray-900">{deductDays}일</span>
                   </div>
                   <div className="h-px bg-gray-200"></div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-medium text-gray-700">신청 후 잔여</span>
-                    <span className={'text-xl font-bold ' + (leaveBalance.remaining - days < 0 ? 'text-red-600' : 'text-green-600')}>{leaveBalance.remaining - days}일</span>
+                    <span className={'text-xl font-bold ' + (afterRemaining < 0 ? 'text-red-600' : 'text-green-600')}>{afterRemaining}일</span>
                   </div>
                 </div>
               </div>
@@ -278,7 +286,7 @@ export default function LeaveApplyPage() {
                       <span className="text-sm font-semibold text-blue-600">{leaveBalance.used}일</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div className="bg-blue-400 h-2 rounded-full" style={{ width: ((leaveBalance.used / leaveBalance.total) * 100) + '%' }}></div>
+                      <div className="bg-blue-400 h-2 rounded-full" style={{ width: Math.min((leaveBalance.used / leaveBalance.total) * 100, 100) + '%' }}></div>
                     </div>
                   </div>
                   <div>
@@ -287,7 +295,7 @@ export default function LeaveApplyPage() {
                       <span className={'text-sm font-semibold ' + (leaveBalance.remaining < 0 ? 'text-red-600' : 'text-green-600')}>{leaveBalance.remaining}일</span>
                     </div>
                     <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div className={(leaveBalance.remaining < 0 ? 'bg-red-500' : 'bg-green-500') + ' h-2 rounded-full'} style={{ width: Math.max(0, (leaveBalance.remaining / leaveBalance.total) * 100) + '%' }}></div>
+                      <div className={(leaveBalance.remaining < 0 ? 'bg-red-500' : 'bg-green-500') + ' h-2 rounded-full'} style={{ width: Math.min(Math.max(0, (leaveBalance.remaining / leaveBalance.total) * 100), 100) + '%' }}></div>
                     </div>
                   </div>
                 </div>
