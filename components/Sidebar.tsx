@@ -74,6 +74,17 @@ export default function Sidebar() {
                   <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">개발중</span>
                 </div>
 
+                <Link href="/jindopam/crm" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/crm') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>📇</span>
+                  <span>CRM</span>
+                  <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                </Link>
+
+                <Link href="/sales/customer-analysis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/sales/customer-analysis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🧑‍🤝‍🧑</span>
+                  <span>스마트스토어 고객분석</span>
+                </Link>
+
                 <Link href="/sales" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>📦</span>
                   <span>재고관리</span>
@@ -205,11 +216,6 @@ export default function Sidebar() {
                 <Link href="/jindopam/orders" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/orders') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>📦</span>
                   <span>발주 모니터링</span>
-                  <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
-                </Link>
-                <Link href="/jindopam/crm" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/crm') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-                  <span>📇</span>
-                  <span>CRM</span>
                   <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
                 </Link>
                 <Link href="/jindopam/shared" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/shared') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
