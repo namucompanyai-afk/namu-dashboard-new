@@ -15,6 +15,8 @@ import {
   Cell,
   Legend,
   LabelList,
+  useXAxisScale,
+  usePlotArea,
 } from 'recharts';
 import {
   listDemographicPeriods,
@@ -66,23 +68,39 @@ function ChartBox({ children, height = 288 }: { children: ReactElement; height?:
   );
 }
 
-// 막대 위 값 레이블: 건수 + 전체 대비 비중%. 길면 2줄(건수/%)로 표시.
-// total=0 이면 % 생략. recharts LabelList content 로 사용.
-function barCountPctLabel(total: number) {
-  return (props: any) => {
-    const { x, y, width, value } = props;
-    const v = Number(value);
-    if (!isFinite(v)) return null;
-    const cx = Number(x) + Number(width) / 2;
-    const ty = Number(y) - 4;
-    const pctStr = total > 0 ? '(' + ((v / total) * 100).toFixed(1) + '%)' : '';
-    return (
-      <text x={cx} y={ty} textAnchor="middle" style={{ fontSize: 10, fill: '#374151' }}>
-        <tspan x={cx} dy="0">{fmt(v)}</tspan>
-        {pctStr ? <tspan x={cx} dy="11">{pctStr}</tspan> : null}
-      </text>
-    );
-  };
+// 연령 막대 색상 구간(콘텐츠축) — 그룹 합산 비중% 레이블용. 색은 ageColor와 동일.
+const AGE_GROUPS: { name: string; color: string; ages: string[] }[] = [
+  { name: '비제작', color: '#9ca3af', ages: ['17~19', '20~25', '26~30'] },
+  { name: '30대', color: '#ec4899', ages: ['31~35', '36~40'] },
+  { name: '40~50대', color: '#3b82f6', ages: ['41~45', '46~50', '51~55', '56~60'] },
+  { name: '60대 이상', color: '#22c55e', ages: ['61~65', '66~70', '71+'] },
+];
+
+// 같은 색 구간(콘텐츠축)을 가로로 아우르는 그룹 합산 비중% 레이블. 구간 중앙 상단.
+// data: [{연령, [valueKey]}], total: 분모(차트 전체 또는 필터 합).
+function AgeGroupPctOverlay({ data, valueKey, total }: { data: any[]; valueKey: string; total: number }) {
+  const xScale = useXAxisScale() as any;
+  const plot = usePlotArea();
+  if (!xScale || !plot || total <= 0) return null;
+  const bw = typeof xScale.bandwidth === 'function' ? xScale.bandwidth() : 0;
+  const present = new Set(data.map((d) => d.연령));
+  return (
+    <g>
+      {AGE_GROUPS.map((g) => {
+        const ages = g.ages.filter((a) => present.has(a));
+        if (!ages.length) return null;
+        const centers = ages.map((a) => xScale(a) + bw / 2);
+        const cx = (Math.min(...centers) + Math.max(...centers)) / 2;
+        const sum = data.reduce((s, d) => (g.ages.includes(d.연령) ? s + Number(d[valueKey]) : s), 0);
+        const p = ((sum / total) * 100).toFixed(1);
+        return (
+          <text key={g.name} x={cx} y={plot.y - 26} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700, fill: g.color }}>
+            {g.name} {p}%
+          </text>
+        );
+      })}
+    </g>
+  );
 }
 
 // 체크박스 드롭다운 (복수 선택). native multiple 대신 사용.
@@ -786,7 +804,7 @@ export default function CustomerAnalysisPage() {
           <div className="rounded-2xl border border-gray-200 bg-white p-5">
             <h2 className="text-base font-semibold mb-4">연령대별 볼륨 (남+여 합산)</h2>
             <ChartBox>
-              <BarChart data={[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령))} margin={{ top: 20 }}>
+              <BarChart data={[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령))} margin={{ top: 44 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
                 <YAxis tick={{ fontSize: 11 }} width={48} />
@@ -795,8 +813,9 @@ export default function CustomerAnalysisPage() {
                   {[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령)).map((d) => (
                     <Cell key={d.연령} fill={ageColor(d.연령)} />
                   ))}
-                  <LabelList dataKey="합산" position="top" content={barCountPctLabel(data.ageVolume.reduce((s, d) => s + d.합산, 0))} />
+                  <LabelList dataKey="합산" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
                 </Bar>
+                <AgeGroupPctOverlay data={data.ageVolume} valueKey="합산" total={data.ageVolume.reduce((s, d) => s + d.합산, 0)} />
               </BarChart>
             </ChartBox>
           </div>
@@ -903,15 +922,16 @@ export default function CustomerAnalysisPage() {
             <h2 className="text-base font-semibold mb-4">표시명별 연령 분포</h2>
             {(filterGroups.length || filterLabels.length || filterChannels.length) ? (
               <ChartBox>
-                <BarChart data={chartAgeDist} margin={{ top: 20 }}>
+                <BarChart data={chartAgeDist} margin={{ top: 44 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
                   <YAxis tick={{ fontSize: 11 }} width={48} />
                   <Tooltip formatter={(v: any) => fmt(Number(v))} />
                   <Bar dataKey="결제수" radius={[4, 4, 0, 0]}>
                     {chartAgeDist.map((d) => <Cell key={d.연령} fill={ageColor(d.연령)} />)}
-                    <LabelList dataKey="결제수" position="top" content={barCountPctLabel(chartAgeDist.reduce((s, d) => s + d.결제수, 0))} />
+                    <LabelList dataKey="결제수" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
                   </Bar>
+                  <AgeGroupPctOverlay data={chartAgeDist} valueKey="결제수" total={chartAgeDist.reduce((s, d) => s + d.결제수, 0)} />
                 </BarChart>
               </ChartBox>
             ) : (
