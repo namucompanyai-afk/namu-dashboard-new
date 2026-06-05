@@ -19,6 +19,7 @@ import {
 import {
   listDemographicPeriods,
   getDemographicsMulti,
+  getAllDemographics,
   replaceDemographics,
   type DemographicRow,
 } from '@/lib/supabase';
@@ -251,6 +252,7 @@ export default function CustomerAnalysisPage() {
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [showUnmatched, setShowUnmatched] = useState(false);
   const [showAllGroups, setShowAllGroups] = useState(false);
+  const [rawLoading, setRawLoading] = useState(false);
 
   // 업로드 스테이징
   const [staged, setStaged] = useState<Omit<DemographicRow, 'user_email' | 'period'>[] | null>(null);
@@ -502,6 +504,32 @@ export default function CustomerAnalysisPage() {
     XLSX.writeFile(wb, `스마트스토어_고객분석_그룹별_${range}.xlsx`);
   };
 
+  // 전체 period 원본 행을 가공 없이 엑셀로 (스스 원본 형식 + 맨 앞 period 컬럼).
+  const downloadRawData = async () => {
+    if (!email) { setError('로그인 정보가 없습니다.'); return; }
+    setRawLoading(true);
+    setError('');
+    try {
+      const all = await getAllDemographics(email);
+      const header = ['period', '상품카테고리(대)', '상품카테고리(중)', '상품카테고리(소)', '상품카테고리(세)', '상품명', '상품ID', '성별', '나이', '결제금액', '결제수', '결제상품수량', '환불금액', '환불건수', '환불수량'];
+      const aoa: any[][] = [header];
+      for (const r of all) {
+        aoa.push([r.period, r.cat_l, r.cat_m, r.cat_s, r.cat_d, r.product_name, r.product_id, r.gender, r.age_band, r.pay_amount, r.pay_count, r.pay_qty, r.refund_amount, r.refund_count, r.refund_qty]);
+      }
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'RAW');
+      const ps = all.map((r) => r.period).filter(Boolean).sort((a, b) => a.localeCompare(b));
+      const range = ps.length === 0 ? 'all' : ps[0] === ps[ps.length - 1] ? ps[0] : `${ps[0]}~${ps[ps.length - 1]}`;
+      XLSX.writeFile(wb, `스마트스토어_인구통계_RAW_${range}.xlsx`);
+    } catch (err: any) {
+      console.error(err);
+      setError('RAW 다운로드 실패: ' + (err?.message || err));
+    } finally {
+      setRawLoading(false);
+    }
+  };
+
   const toggleAgeGroup = (g: string) => {
     setExpandedAgeGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
   };
@@ -601,6 +629,13 @@ export default function CustomerAnalysisPage() {
           <input type="file" accept=".xlsx,.xls" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) parseFile(f); }} />
         </label>
+        <button
+          onClick={downloadRawData}
+          disabled={rawLoading}
+          className={'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium ' + (rawLoading ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-gray-100 text-gray-700 hover:bg-gray-200')}
+        >
+          {rawLoading ? '⏳ 내려받는 중…' : '⬇ RAW DATA 다운로드'}
+        </button>
         <span className="text-sm text-gray-600">{rangeLabel(selectedPeriods)}</span>
 
         <div className="ml-auto inline-flex rounded-lg border border-gray-200 overflow-hidden">
