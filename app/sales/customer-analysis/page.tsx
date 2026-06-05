@@ -247,7 +247,7 @@ export default function CustomerAnalysisPage() {
         const def = ps.slice(0, RECENT_DEFAULT);   // 최근 12개
         setSelectedPeriods(def);
         const years = Array.from(new Set(ps.map((p) => p.slice(0, 4)))).sort((a, b) => b.localeCompare(a));
-        if (years.length > 0) setExpandedYears([years[0]]);   // 최신 연도 펼침
+        setExpandedYears(years);   // 전체 연도 펼침
         await loadSelected(userEmail, def);
       } catch (err) {
         console.error(err);
@@ -528,13 +528,22 @@ export default function CustomerAnalysisPage() {
                     <span className="text-xs text-gray-400">{open ? '▼' : '▶'}</span>
                   </button>
                   {open && (
-                    <div className="flex flex-wrap gap-2 p-3">
-                      {months.map((p) => {
-                        const mm = p.length === 7 ? `${parseInt(p.slice(5, 7), 10)}월` : p;
+                    <div className="grid grid-cols-12 gap-2 p-3">
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
+                        const p = `${year}-${String(m).padStart(2, '0')}`;
+                        const exists = months.includes(p);
+                        if (!exists) {
+                          // 데이터 없는 월 — 같은 크기 빈 칸(비활성 회색)으로 자리 유지.
+                          return (
+                            <div key={p} className="flex items-center justify-center px-1 py-1 rounded-lg border border-gray-100 bg-gray-50 text-gray-300 text-sm">
+                              {m}월
+                            </div>
+                          );
+                        }
                         return (
-                          <label key={p} className={'flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-sm cursor-pointer ' + (selectedPeriods.includes(p) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+                          <label key={p} className={'flex items-center justify-center gap-1 px-1 py-1 rounded-lg border text-sm cursor-pointer ' + (selectedPeriods.includes(p) ? 'border-blue-400 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50')}>
                             <input type="checkbox" checked={selectedPeriods.includes(p)} onChange={() => togglePeriod(p)} className="h-3.5 w-3.5" />
-                            {mm}
+                            {m}월
                           </label>
                         );
                       })}
