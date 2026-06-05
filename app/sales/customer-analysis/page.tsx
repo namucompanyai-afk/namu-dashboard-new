@@ -89,14 +89,19 @@ function AgeGroupPctOverlay({ data, valueKey, total }: { data: any[]; valueKey: 
       {AGE_GROUPS.map((g) => {
         const ages = g.ages.filter((a) => present.has(a));
         if (!ages.length) return null;
-        const centers = ages.map((a) => xScale(a) + bw / 2);
-        const cx = (Math.min(...centers) + Math.max(...centers)) / 2;
+        const starts = ages.map((a) => xScale(a));
+        const left = Math.min(...starts) - 4;
+        const right = Math.max(...starts) + bw + 4;
+        const cx = (left + right) / 2;
         const sum = data.reduce((s, d) => (g.ages.includes(d.연령) ? s + Number(d[valueKey]) : s), 0);
         const p = ((sum / total) * 100).toFixed(1);
         return (
-          <text key={g.name} x={cx} y={plot.y - 26} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700, fill: g.color }}>
-            {g.name} {p}%
-          </text>
+          <g key={g.name}>
+            <rect x={left} y={plot.y} width={right - left} height={plot.height} fill="none" stroke={g.color} strokeWidth={2} rx={6} />
+            <text x={cx} y={plot.y - 8} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700, fill: g.color }}>
+              {g.name} {p}%
+            </text>
+          </g>
         );
       })}
     </g>
