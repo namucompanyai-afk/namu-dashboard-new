@@ -305,7 +305,7 @@ export default function CustomerAnalysisPage() {
   // 선택 period들 조회 → 합산 집계 + 추이 동시 계산.
   const loadSelected = async (userEmail: string, sel: string[]) => {
     setFilterGroups([]); setFilterLabels([]); setFilterChannels([]); setFilterAges([]);
-    if (sel.length === 0) { setData(null); setTrend([]); return; }
+    if (sel.length === 0) { setData(null); setTrend([]); setLoading(false); return; }
     setLoading(true);
     try {
       const all = await getDemographicsMulti(userEmail, sel);

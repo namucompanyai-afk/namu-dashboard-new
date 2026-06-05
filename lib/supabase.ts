@@ -105,7 +105,6 @@ export async function listDemographicPeriods(email: string): Promise<string[]> {
     const { data, error } = await client
       .from(SS_DEMO_TABLE)
       .select('period')
-      .eq('user_email', email)
       .order('period', { ascending: true })
       .range(from, from + PAGE - 1);
     if (error) {
@@ -127,7 +126,6 @@ export async function getDemographics(email: string, period: string): Promise<De
     const { data, error } = await client
       .from(SS_DEMO_TABLE)
       .select('*')
-      .eq('user_email', email)
       .eq('period', period)
       .range(from, from + PAGE - 1);
     if (error) {
@@ -150,7 +148,6 @@ export async function getDemographicsMulti(email: string, periods: string[]): Pr
     const { data, error } = await client
       .from(SS_DEMO_TABLE)
       .select('*')
-      .eq('user_email', email)
       .in('period', periods)
       .range(from, from + PAGE - 1);
     if (error) {
@@ -172,7 +169,6 @@ export async function getAllDemographics(email: string): Promise<DemographicRow[
     const { data, error } = await client
       .from(SS_DEMO_TABLE)
       .select('*')
-      .eq('user_email', email)
       .range(from, from + PAGE - 1);
     if (error) {
       console.error('getAllDemographics error:', error);
@@ -191,10 +187,10 @@ export async function replaceDemographics(
   rows: Omit<DemographicRow, 'user_email' | 'period'>[],
 ): Promise<number> {
   const client = getClient();
+  // 공용 도구 — period 단위로 전체 교체(업로더 무관). user_email 분기 없음.
   const { error: delErr } = await client
     .from(SS_DEMO_TABLE)
     .delete()
-    .eq('user_email', email)
     .eq('period', period);
   if (delErr) throw delErr;
 
