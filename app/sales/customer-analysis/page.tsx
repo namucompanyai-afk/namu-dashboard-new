@@ -52,6 +52,8 @@ function ageColor(age: string): string {
 
 const fmt = (n: number) => n.toLocaleString();
 const pct = (n: number) => (n * 100).toFixed(1) + '%';
+// 매출 만원 단위 표기 (만원 미만 반올림, 천단위 콤마). 예: 157,132,420 → "15,713만"
+const man = (n: number) => Math.round(n / 10000).toLocaleString() + '만';
 
 // 차트 클릭 시 파란 박스/포커스 outline 제거 (쿠팡 수익진단 방식).
 const NOSEL = 'focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none';
@@ -740,7 +742,7 @@ export default function CustomerAnalysisPage() {
                             <span className="ml-1 text-xs text-gray-400">({g.options.length})</span>
                           </td>
                           <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{fmt(g.결제수)} <span className="text-gray-400">({pct(groupTotals.결제수 > 0 ? g.결제수 / groupTotals.결제수 : 0)})</span></td>
-                          <td className="px-3 py-2 text-right font-mono whitespace-nowrap">₩{fmt(g.매출)} <span className="text-gray-400">({pct(groupTotals.매출 > 0 ? g.매출 / groupTotals.매출 : 0)})</span></td>
+                          <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{man(g.매출)} <span className="text-gray-400">({pct(groupTotals.매출 > 0 ? g.매출 / groupTotals.매출 : 0)})</span></td>
                           <td className="px-3 py-2 text-right font-mono whitespace-nowrap">₩{fmt(g.객단가)}</td>
                           <td className="px-3 py-2 text-center whitespace-nowrap">{g.주력연령 || '—'} <span className="text-gray-400">({Math.round(g.주력연령비중 * 100)}%)</span></td>
                           <td className="px-3 py-2 text-center">{g.콘텐츠축}</td>
@@ -750,7 +752,7 @@ export default function CustomerAnalysisPage() {
                           <tr key={g.group + '_' + j} className="border-t border-gray-50 bg-gray-50/40 text-gray-600">
                             <td className="px-3 py-1.5 pl-10 max-w-xs truncate" title={o.label}>{o.label}</td>
                             <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">{fmt(o.결제수)} <span className="text-gray-400">({pct(groupTotals.결제수 > 0 ? o.결제수 / groupTotals.결제수 : 0)})</span></td>
-                            <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">₩{fmt(o.매출)} <span className="text-gray-400">({pct(groupTotals.매출 > 0 ? o.매출 / groupTotals.매출 : 0)})</span></td>
+                            <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">{man(o.매출)} <span className="text-gray-400">({pct(groupTotals.매출 > 0 ? o.매출 / groupTotals.매출 : 0)})</span></td>
                             <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">₩{fmt(o.객단가)}</td>
                             <td className="px-3 py-1.5 text-center whitespace-nowrap">{o.주력연령 || '—'} <span className="text-gray-400">({Math.round(o.주력연령비중 * 100)}%)</span></td>
                             <td className="px-3 py-1.5 text-center">{o.콘텐츠축}</td>
