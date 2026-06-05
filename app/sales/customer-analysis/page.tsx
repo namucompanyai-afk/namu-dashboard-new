@@ -83,8 +83,8 @@ function MultiSelect({ title, options, selected, onChange }: {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2">
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute z-50 mt-1 w-full max-h-72 overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg p-2">
             <button type="button" onClick={() => onChange(allSel ? [] : [...options])}
               className="w-full text-left text-xs text-blue-600 px-2 py-1 hover:bg-gray-50 rounded">
               {allSel ? '전체 해제' : '전체 선택'}
@@ -872,14 +872,14 @@ export default function CustomerAnalysisPage() {
             </div>
           </div>
 
-          {/* 연령대별 인기 상품 */}
-          <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+          {/* 연령대별 인기 상품 — overflow-hidden 제거(드롭다운 클립 방지) */}
+          <div className="rounded-2xl border border-gray-200 bg-white">
             <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-3">
               <h2 className="text-base font-semibold">연령대별 인기 상품</h2>
               <div className="ml-auto w-56"><MultiSelect title="" options={AGE_ORDER} selected={filterAges} onChange={setFilterAges} /></div>
             </div>
             {filterAges.length === 0 ? (
-              <p className="text-sm text-gray-400 py-8 text-center">연령대를 선택하세요.</p>
+              <p className="text-sm text-gray-400 py-12 text-center min-h-[120px] flex items-center justify-center">연령대를 선택하세요.</p>
             ) : (
               <div className="overflow-x-auto max-h-[60vh]">
                 <table className="w-full text-sm">
