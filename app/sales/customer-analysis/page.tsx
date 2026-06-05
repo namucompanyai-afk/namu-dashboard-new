@@ -66,6 +66,25 @@ function ChartBox({ children, height = 288 }: { children: ReactElement; height?:
   );
 }
 
+// 막대 위 값 레이블: 건수 + 전체 대비 비중%. 길면 2줄(건수/%)로 표시.
+// total=0 이면 % 생략. recharts LabelList content 로 사용.
+function barCountPctLabel(total: number) {
+  return (props: any) => {
+    const { x, y, width, value } = props;
+    const v = Number(value);
+    if (!isFinite(v)) return null;
+    const cx = Number(x) + Number(width) / 2;
+    const ty = Number(y) - 4;
+    const pctStr = total > 0 ? '(' + ((v / total) * 100).toFixed(1) + '%)' : '';
+    return (
+      <text x={cx} y={ty} textAnchor="middle" style={{ fontSize: 10, fill: '#374151' }}>
+        <tspan x={cx} dy="0">{fmt(v)}</tspan>
+        {pctStr ? <tspan x={cx} dy="11">{pctStr}</tspan> : null}
+      </text>
+    );
+  };
+}
+
 // 체크박스 드롭다운 (복수 선택). native multiple 대신 사용.
 function MultiSelect({ title, options, selected, onChange }: {
   title: string; options: string[]; selected: string[]; onChange: (next: string[]) => void;
@@ -776,7 +795,7 @@ export default function CustomerAnalysisPage() {
                   {[...data.ageVolume].sort((a, b) => AGE_ORDER.indexOf(a.연령) - AGE_ORDER.indexOf(b.연령)).map((d) => (
                     <Cell key={d.연령} fill={ageColor(d.연령)} />
                   ))}
-                  <LabelList dataKey="합산" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
+                  <LabelList dataKey="합산" position="top" content={barCountPctLabel(data.ageVolume.reduce((s, d) => s + d.합산, 0))} />
                 </Bar>
               </BarChart>
             </ChartBox>
@@ -891,7 +910,7 @@ export default function CustomerAnalysisPage() {
                   <Tooltip formatter={(v: any) => fmt(Number(v))} />
                   <Bar dataKey="결제수" radius={[4, 4, 0, 0]}>
                     {chartAgeDist.map((d) => <Cell key={d.연령} fill={ageColor(d.연령)} />)}
-                    <LabelList dataKey="결제수" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
+                    <LabelList dataKey="결제수" position="top" content={barCountPctLabel(chartAgeDist.reduce((s, d) => s + d.결제수, 0))} />
                   </Bar>
                 </BarChart>
               </ChartBox>
