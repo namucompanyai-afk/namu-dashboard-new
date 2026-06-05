@@ -76,28 +76,38 @@ const AGE_GROUPS: { name: string; color: string; ages: string[] }[] = [
   { name: '60대 이상', color: '#22c55e', ages: ['61~65', '66~70', '71+'] },
 ];
 
-// 같은 색 구간(콘텐츠축)을 가로로 아우르는 그룹 합산 비중% 레이블. 구간 중앙 상단.
-// data: [{연령, [valueKey]}], total: 분모(차트 전체 또는 필터 합).
+// 같은 색 구간(콘텐츠축)을 가로로 아우르는 그룹 합산 비중% 레이블 + 테두리 박스.
+// 박스는 band 시작(xScale(firstAge))~끝(xScale(lastAge)+band폭) 기준으로 그룹 전체 막대를 감쌈.
+// 비제작(회색) 구간은 박스 없이 % 텍스트만. data: [{연령, [valueKey]}], total: 분모.
+const BOX_PAD = 3;
 function AgeGroupPctOverlay({ data, valueKey, total }: { data: any[]; valueKey: string; total: number }) {
   const xScale = useXAxisScale() as any;
   const plot = usePlotArea();
   if (!xScale || !plot || total <= 0) return null;
-  const bw = typeof xScale.bandwidth === 'function' ? xScale.bandwidth() : 0;
   const present = new Set(data.map((d) => d.연령));
+  // band 폭: scaleBand.bandwidth() 우선, 없으면(=0) 인접 막대 시작점 간격으로 추정.
+  let band = typeof xScale.bandwidth === 'function' ? xScale.bandwidth() : 0;
+  if (!(band > 0)) {
+    const all = AGE_ORDER.filter((a) => present.has(a)).map((a) => xScale(a)).sort((x, y) => x - y);
+    band = all.length >= 2 ? all[1] - all[0] : 0;
+  }
   return (
     <g>
       {AGE_GROUPS.map((g) => {
         const ages = g.ages.filter((a) => present.has(a));
         if (!ages.length) return null;
         const starts = ages.map((a) => xScale(a));
-        const left = Math.min(...starts) - 4;
-        const right = Math.max(...starts) + bw + 4;
+        const left = Math.min(...starts);                 // 그룹 첫 막대 band 시작
+        const right = Math.max(...starts) + band;          // 그룹 마지막 막대 band 끝
         const cx = (left + right) / 2;
         const sum = data.reduce((s, d) => (g.ages.includes(d.연령) ? s + Number(d[valueKey]) : s), 0);
         const p = ((sum / total) * 100).toFixed(1);
+        const drawBox = g.name !== '비제작';
         return (
           <g key={g.name}>
-            <rect x={left} y={plot.y} width={right - left} height={plot.height} fill="none" stroke={g.color} strokeWidth={2} rx={6} />
+            {drawBox && (
+              <rect x={left - BOX_PAD} y={plot.y} width={(right - left) + BOX_PAD * 2} height={plot.height} fill="none" stroke={g.color} strokeWidth={2} rx={6} />
+            )}
             <text x={cx} y={plot.y - 8} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700, fill: g.color }}>
               {g.name} {p}%
             </text>
