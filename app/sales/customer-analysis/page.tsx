@@ -79,7 +79,7 @@ const AGE_GROUPS: { name: string; color: string; ages: string[] }[] = [
 // 같은 색 구간(콘텐츠축)을 가로로 아우르는 그룹 합산 비중% 레이블 + 테두리 박스.
 // 박스는 band 시작(xScale(firstAge))~끝(xScale(lastAge)+band폭) 기준으로 그룹 전체 막대를 감쌈.
 // 비제작(회색) 구간은 박스 없이 % 텍스트만. data: [{연령, [valueKey]}], total: 분모.
-const BOX_PAD = 3;
+const BOX_INSET = 6;   // band 경계에서 안쪽으로 inset → 인접 그룹 박스 간격 확보(막대는 band보다 좁아 안 잘림).
 function AgeGroupPctOverlay({ data, valueKey, total }: { data: any[]; valueKey: string; total: number }) {
   const xScale = useXAxisScale() as any;
   const plot = usePlotArea();
@@ -97,8 +97,9 @@ function AgeGroupPctOverlay({ data, valueKey, total }: { data: any[]; valueKey: 
         const ages = g.ages.filter((a) => present.has(a));
         if (!ages.length) return null;
         const starts = ages.map((a) => xScale(a));
-        const left = Math.min(...starts);                 // 그룹 첫 막대 band 시작
-        const right = Math.max(...starts) + band;          // 그룹 마지막 막대 band 끝
+        const inset = Math.min(BOX_INSET, band * 0.08);    // band 폭 대비 과하지 않게
+        const left = Math.min(...starts) + inset;          // band 시작에서 안쪽으로
+        const right = Math.max(...starts) + band - inset;  // band 끝에서 안쪽으로
         const cx = (left + right) / 2;
         const sum = data.reduce((s, d) => (g.ages.includes(d.연령) ? s + Number(d[valueKey]) : s), 0);
         const p = ((sum / total) * 100).toFixed(1);
@@ -106,7 +107,7 @@ function AgeGroupPctOverlay({ data, valueKey, total }: { data: any[]; valueKey: 
         return (
           <g key={g.name}>
             {drawBox && (
-              <rect x={left - BOX_PAD} y={plot.y} width={(right - left) + BOX_PAD * 2} height={plot.height} fill="none" stroke={g.color} strokeWidth={2} rx={6} />
+              <rect x={left} y={plot.y} width={right - left} height={plot.height} fill="none" stroke={g.color} strokeWidth={2} rx={6} />
             )}
             <text x={cx} y={plot.y - 8} textAnchor="middle" style={{ fontSize: 11, fontWeight: 700, fill: g.color }}>
               {g.name} {p}%
