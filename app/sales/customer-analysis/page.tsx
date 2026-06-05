@@ -772,12 +772,15 @@ export default function CustomerAnalysisPage() {
             <h2 className="text-base font-semibold mb-4">표시명별 연령 분포</h2>
             {(filterGroups.length || filterLabels.length || filterChannels.length) ? (
               <ChartBox>
-                <BarChart data={chartAgeDist}>
+                <BarChart data={chartAgeDist} margin={{ top: 20 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="연령" tick={{ fontSize: 11, fontWeight: 700 }} />
                   <YAxis tick={{ fontSize: 11 }} width={48} />
                   <Tooltip formatter={(v: any) => fmt(Number(v))} />
-                  <Bar dataKey="결제수" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="결제수" radius={[4, 4, 0, 0]}>
+                    {chartAgeDist.map((d) => <Cell key={d.연령} fill={ageColor(d.연령)} />)}
+                    <LabelList dataKey="결제수" position="top" formatter={(v: any) => fmt(Number(v))} style={{ fontSize: 10, fill: '#374151' }} />
+                  </Bar>
                 </BarChart>
               </ChartBox>
             ) : (
