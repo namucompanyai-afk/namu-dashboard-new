@@ -24,7 +24,7 @@ import {
 } from '@/lib/supabase';
 
 // 집계 입력용 최소 행
-interface Row { 카테고리소: string; 상품명: string; 성별: string; 나이: string; 결제수: number; }
+interface Row { 카테고리소: string; 상품명: string; 성별: string; 나이: string; 결제수: number; 매출: number; 환불건수: number; }
 
 const AGE_ORDER = ['17~19', '20~25', '26~30', '31~35', '36~40', '41~45', '46~50', '51~55', '56~60', '61~65', '66~70', '71+'];
 const AXES: Record<string, string[]> = {
@@ -35,6 +35,12 @@ const AXES: Record<string, string[]> = {
 const AXIS_COLORS: Record<string, string> = { 중년: '#3b82f6', 전환맘: '#ec4899', 시니어: '#22c55e' };
 // 집계 축 정의(중년 41~60 / 전환맘 36~40 / 시니어 61+)는 유지하고 표시 라벨만 나이대로.
 const AXIS_LABELS: Record<string, string> = { 중년: '40~50대', 전환맘: '30대', 시니어: '60대 이상' };
+
+// 연령대 → 콘텐츠축 표시 라벨 (비제작 구간이면 '—').
+function ageToAxisLabel(age: string): string {
+  for (const k of Object.keys(AXES)) if (AXES[k].includes(age)) return AXIS_LABELS[k];
+  return '—';
+}
 
 // 연령대별 막대 색: 제작 축별 분류 + 35세 이하 비제작 회색.
 function ageColor(age: string): string {
@@ -166,18 +172,27 @@ function analyze(all: Row[]): Analysis {
   return { rows: f, totalPay, female, male, femaleShare: totalPay > 0 ? female / totalPay : 0, ageVolume, axes, categories, products };
 }
 
-// 행 목록 → 결제수/주력연령/여성비중 (그룹·옵션 집계 공통).
+// 행 목록 → 결제수/매출/객단가/환불률/주력연령/콘텐츠축 (그룹·옵션 집계 공통).
 function metricsOf(rows: Row[]) {
   const 결제수 = rows.reduce((s, r) => s + r.결제수, 0);
+  const 매출 = rows.reduce((s, r) => s + r.매출, 0);
+  const 환불건수 = rows.reduce((s, r) => s + r.환불건수, 0);
   const ageMap = new Map<string, number>();
   for (const r of rows) ageMap.set(r.나이, (ageMap.get(r.나이) ?? 0) + r.결제수);
   let 주력연령 = '';
   let max = -1;
   for (const [a, v] of ageMap) if (v > max) { max = v; 주력연령 = a; }
-  const pf = rows.filter((r) => r.성별 === '여성').reduce((s, r) => s + r.결제수, 0);
-  const pm = rows.filter((r) => r.성별 === '남성').reduce((s, r) => s + r.결제수, 0);
-  return { 결제수, 주력연령, 여성비중: pf + pm > 0 ? pf / (pf + pm) : 0 };
+  return {
+    결제수,
+    매출,
+    객단가: 결제수 > 0 ? Math.round(매출 / 결제수) : 0,
+    환불률: 결제수 > 0 ? 환불건수 / 결제수 : 0,
+    주력연령,
+    주력연령비중: 결제수 > 0 ? max / 결제수 : 0,
+    콘텐츠축: ageToAxisLabel(주력연령),
+  };
 }
+type GroupMetrics = ReturnType<typeof metricsOf>;
 
 // DB 행 → 집계 입력
 const toRow = (d: DemographicRow): Row => ({
@@ -186,6 +201,8 @@ const toRow = (d: DemographicRow): Row => ({
   성별: d.gender ?? '',
   나이: d.age_band ?? '',
   결제수: Number(d.pay_count) || 0,
+  매출: Number(d.pay_amount) || 0,
+  환불건수: Number(d.refund_count) || 0,
 });
 
 // 파일명 날짜에서 period 추출.
@@ -425,7 +442,7 @@ export default function CustomerAnalysisPage() {
 
   // 그룹(B) 집계 — 판매형태(E) 필터 적용. 펼치면 표시명(D) 옵션 행.
   const groupTable = useMemo(() => {
-    if (!data) return [] as { group: string; 결제수: number; 주력연령: string; 여성비중: number; options: { label: string; 결제수: number; 주력연령: string; 여성비중: number }[] }[];
+    if (!data) return [] as ({ group: string; options: ({ label: string } & GroupMetrics)[] } & GroupMetrics)[];
     const chSel = new Set(selectedChannels);
     const groups = new Map<string, { rows: Row[]; labels: Map<string, Row[]> }>();
     for (const r of data.rows) {
@@ -451,6 +468,12 @@ export default function CustomerAnalysisPage() {
       }))
       .sort((a, b) => b.결제수 - a.결제수);
   }, [data, prodMap, selectedChannels, channels]);
+
+  // 그룹표 전체 합 (결제수·매출 비중% 분모).
+  const groupTotals = useMemo(() => ({
+    결제수: groupTable.reduce((s, g) => s + g.결제수, 0),
+    매출: groupTable.reduce((s, g) => s + g.매출, 0),
+  }), [groupTable]);
 
   // 미매칭 product_name (선택 기간 데이터엔 있으나 매핑 없음).
   const unmatched = useMemo(() => {
@@ -696,10 +719,13 @@ export default function CustomerAnalysisPage() {
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
                   <tr>
-                    <th className="text-left px-4 py-2 font-medium">그룹 / 표시명</th>
-                    <th className="text-right px-4 py-2 font-medium">결제수</th>
-                    <th className="text-center px-4 py-2 font-medium">주력연령</th>
-                    <th className="text-right px-4 py-2 font-medium">여성%</th>
+                    <th className="text-left px-3 py-2 font-medium">그룹 / 표시명</th>
+                    <th className="text-right px-3 py-2 font-medium">결제수 (비중)</th>
+                    <th className="text-right px-3 py-2 font-medium">매출 (비중)</th>
+                    <th className="text-right px-3 py-2 font-medium">객단가</th>
+                    <th className="text-center px-3 py-2 font-medium">주력연령 (비중)</th>
+                    <th className="text-center px-3 py-2 font-medium">콘텐츠축</th>
+                    <th className="text-right px-3 py-2 font-medium">환불률</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -708,21 +734,27 @@ export default function CustomerAnalysisPage() {
                     return (
                       <Fragment key={g.group}>
                         <tr className="border-t border-gray-100 cursor-pointer hover:bg-gray-50" onClick={() => toggleGroup(g.group)}>
-                          <td className="px-4 py-2 font-medium">
+                          <td className="px-3 py-2 font-medium">
                             <span className="inline-block w-4 text-gray-400">{open ? '▼' : '▶'}</span>
                             {g.group}
                             <span className="ml-1 text-xs text-gray-400">({g.options.length})</span>
                           </td>
-                          <td className="px-4 py-2 text-right font-mono">{fmt(g.결제수)}</td>
-                          <td className="px-4 py-2 text-center">{g.주력연령}</td>
-                          <td className="px-4 py-2 text-right font-mono">{pct(g.여성비중)}</td>
+                          <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{fmt(g.결제수)} <span className="text-gray-400">({pct(groupTotals.결제수 > 0 ? g.결제수 / groupTotals.결제수 : 0)})</span></td>
+                          <td className="px-3 py-2 text-right font-mono whitespace-nowrap">₩{fmt(g.매출)} <span className="text-gray-400">({pct(groupTotals.매출 > 0 ? g.매출 / groupTotals.매출 : 0)})</span></td>
+                          <td className="px-3 py-2 text-right font-mono whitespace-nowrap">₩{fmt(g.객단가)}</td>
+                          <td className="px-3 py-2 text-center whitespace-nowrap">{g.주력연령 || '—'} <span className="text-gray-400">({Math.round(g.주력연령비중 * 100)}%)</span></td>
+                          <td className="px-3 py-2 text-center">{g.콘텐츠축}</td>
+                          <td className="px-3 py-2 text-right font-mono">{pct(g.환불률)}</td>
                         </tr>
                         {open && g.options.map((o, j) => (
-                          <tr key={g.group + '_' + j} className="border-t border-gray-50 bg-gray-50/40">
-                            <td className="px-4 py-1.5 pl-10 text-gray-600 max-w-md truncate" title={o.label}>{o.label}</td>
-                            <td className="px-4 py-1.5 text-right font-mono text-gray-600">{fmt(o.결제수)}</td>
-                            <td className="px-4 py-1.5 text-center text-gray-600">{o.주력연령}</td>
-                            <td className="px-4 py-1.5 text-right font-mono text-gray-600">{pct(o.여성비중)}</td>
+                          <tr key={g.group + '_' + j} className="border-t border-gray-50 bg-gray-50/40 text-gray-600">
+                            <td className="px-3 py-1.5 pl-10 max-w-xs truncate" title={o.label}>{o.label}</td>
+                            <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">{fmt(o.결제수)} <span className="text-gray-400">({pct(groupTotals.결제수 > 0 ? o.결제수 / groupTotals.결제수 : 0)})</span></td>
+                            <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">₩{fmt(o.매출)} <span className="text-gray-400">({pct(groupTotals.매출 > 0 ? o.매출 / groupTotals.매출 : 0)})</span></td>
+                            <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">₩{fmt(o.객단가)}</td>
+                            <td className="px-3 py-1.5 text-center whitespace-nowrap">{o.주력연령 || '—'} <span className="text-gray-400">({Math.round(o.주력연령비중 * 100)}%)</span></td>
+                            <td className="px-3 py-1.5 text-center">{o.콘텐츠축}</td>
+                            <td className="px-3 py-1.5 text-right font-mono">{pct(o.환불률)}</td>
                           </tr>
                         ))}
                       </Fragment>
