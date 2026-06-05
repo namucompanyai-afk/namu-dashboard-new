@@ -17,6 +17,7 @@ export default function Sidebar() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -31,11 +32,11 @@ export default function Sidebar() {
     setMobileOpen(false);
   }, [pathname]);
 
-  const handleLogout = () => {
-    if (confirm('로그아웃 하시겠습니까?')) {
-      localStorage.removeItem('user');
-      router.push('/login');
-    }
+  // 클릭 핸들러는 가벼운 state 토글만 — native confirm()은 동기로 메인 스레드를 막아 INP 악화.
+  const handleLogout = () => setShowLogoutConfirm(true);
+  const confirmLogout = () => {
+    localStorage.removeItem('user');
+    router.push('/login');
   };
 
   const isActive = (path: string) => pathname === path;
@@ -301,6 +302,23 @@ export default function Sidebar() {
               ✕
             </button>
             {sidebarContent}
+          </div>
+        </div>
+      )}
+
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setShowLogoutConfirm(false)}></div>
+          <div className="relative w-full max-w-xs rounded-2xl bg-white p-5 shadow-xl">
+            <p className="text-sm font-medium text-gray-800">로그아웃 하시겠습니까?</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShowLogoutConfirm(false)} className="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+                취소
+              </button>
+              <button onClick={confirmLogout} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+                로그아웃
+              </button>
+            </div>
           </div>
         </div>
       )}
