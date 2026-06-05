@@ -632,7 +632,7 @@ export default function CustomerAnalysisPage() {
         <button
           onClick={downloadRawData}
           disabled={rawLoading}
-          className={'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium ' + (rawLoading ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-gray-100 text-gray-700 hover:bg-gray-200')}
+          className={'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium ' + (rawLoading ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-teal-600 text-white hover:bg-teal-700')}
         >
           {rawLoading ? '⏳ 내려받는 중…' : '⬇ RAW DATA 다운로드'}
         </button>
