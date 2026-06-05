@@ -241,6 +241,9 @@ export default function CustomerAnalysisPage() {
   const [filterGroups, setFilterGroups] = useState<string[]>([]);
   const [filterLabels, setFilterLabels] = useState<string[]>([]);
   const [filterChannels, setFilterChannels] = useState<string[]>([]);
+  // 연령대별 인기 상품 섹션
+  const [filterAges, setFilterAges] = useState<string[]>([]);
+  const [expandedAgeGroups, setExpandedAgeGroups] = useState<string[]>([]);
   // 상품 그룹 매핑: NFC(product_name) → { group, label, channel }.
   const [prodMap, setProdMap] = useState<Map<string, { group: string; label: string; channel: string }>>(new Map());
   const [channels, setChannels] = useState<string[]>([]);        // 판매형태(E) 등장값
@@ -256,7 +259,7 @@ export default function CustomerAnalysisPage() {
 
   // 선택 period들 조회 → 합산 집계 + 추이 동시 계산.
   const loadSelected = async (userEmail: string, sel: string[]) => {
-    setFilterGroups([]); setFilterLabels([]); setFilterChannels([]);
+    setFilterGroups([]); setFilterLabels([]); setFilterChannels([]); setFilterAges([]);
     if (sel.length === 0) { setData(null); setTrend([]); return; }
     setLoading(true);
     try {
@@ -476,6 +479,42 @@ export default function CustomerAnalysisPage() {
     결제수: groupTable.reduce((s, g) => s + g.결제수, 0),
     매출: groupTable.reduce((s, g) => s + g.매출, 0),
   }), [groupTable]);
+
+  const toggleAgeGroup = (g: string) => {
+    setExpandedAgeGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
+  };
+
+  // 연령대별 인기 상품 — 선택 연령대(복수=합산) 행만 그룹 집계 (미매칭 제외).
+  const ageGroupTable = useMemo(() => {
+    if (!data || filterAges.length === 0) return [] as ({ group: string; options: ({ label: string } & GroupMetrics)[] } & GroupMetrics)[];
+    const ageSet = new Set(filterAges);
+    const groups = new Map<string, { rows: Row[]; labels: Map<string, Row[]> }>();
+    for (const r of data.rows) {
+      if (!ageSet.has(r.나이)) continue;
+      const m = prodMap.get(nfc(r.상품명));
+      if (!m) continue;
+      const gName = m.group || '(미분류)';
+      const lName = m.label || '(표시명없음)';
+      const g = groups.get(gName) ?? { rows: [] as Row[], labels: new Map<string, Row[]>() };
+      g.rows.push(r);
+      const lab = g.labels.get(lName) ?? ([] as Row[]);
+      lab.push(r);
+      g.labels.set(lName, lab);
+      groups.set(gName, g);
+    }
+    return [...groups.entries()]
+      .map(([group, g]) => ({
+        group,
+        ...metricsOf(g.rows),
+        options: [...g.labels.entries()].map(([label, rs]) => ({ label, ...metricsOf(rs) })).sort((a, b) => b.결제수 - a.결제수),
+      }))
+      .sort((a, b) => b.결제수 - a.결제수);
+  }, [data, prodMap, filterAges]);
+
+  const ageGroupTotals = useMemo(() => ({
+    결제수: ageGroupTable.reduce((s, g) => s + g.결제수, 0),
+    매출: ageGroupTable.reduce((s, g) => s + g.매출, 0),
+  }), [ageGroupTable]);
 
   // 미매칭 product_name (선택 기간 데이터엔 있으나 매핑 없음).
   const unmatched = useMemo(() => {
@@ -793,6 +832,54 @@ export default function CustomerAnalysisPage() {
               <MultiSelect title="상품명(표시명)" options={chartLabels} selected={filterLabels} onChange={setFilterLabels} />
               <MultiSelect title="판매형태" options={channels} selected={filterChannels} onChange={setFilterChannels} />
             </div>
+          </div>
+
+          {/* 연령대별 인기 상품 */}
+          <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-200 flex items-center gap-3">
+              <h2 className="text-base font-semibold">연령대별 인기 상품</h2>
+              <div className="ml-auto w-56"><MultiSelect title="" options={AGE_ORDER} selected={filterAges} onChange={setFilterAges} /></div>
+            </div>
+            {filterAges.length === 0 ? (
+              <p className="text-sm text-gray-400 py-8 text-center">연령대를 선택하세요.</p>
+            ) : (
+              <div className="overflow-x-auto max-h-[60vh]">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-gray-600 text-xs uppercase sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">그룹 / 표시명</th>
+                      <th className="text-right px-3 py-2 font-medium">결제수 (비중)</th>
+                      <th className="text-right px-3 py-2 font-medium">매출 (비중)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ageGroupTable.map((g) => {
+                      const open = expandedAgeGroups.includes(g.group);
+                      return (
+                        <Fragment key={g.group}>
+                          <tr className="border-t border-gray-100 cursor-pointer hover:bg-gray-50" onClick={() => toggleAgeGroup(g.group)}>
+                            <td className="px-3 py-2 font-medium">
+                              <span className="inline-block w-4 text-gray-400">{open ? '▼' : '▶'}</span>
+                              {g.group}
+                              <span className="ml-1 text-xs text-gray-400">({g.options.length})</span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{fmt(g.결제수)} <span className="text-gray-400">({pct(ageGroupTotals.결제수 > 0 ? g.결제수 / ageGroupTotals.결제수 : 0)})</span></td>
+                            <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{man(g.매출)} <span className="text-gray-400">({pct(ageGroupTotals.매출 > 0 ? g.매출 / ageGroupTotals.매출 : 0)})</span></td>
+                          </tr>
+                          {open && g.options.map((o, j) => (
+                            <tr key={g.group + '_' + j} className="border-t border-gray-50 bg-gray-50/40 text-gray-600">
+                              <td className="px-3 py-1.5 pl-10 max-w-xs truncate" title={o.label}>{o.label}</td>
+                              <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">{fmt(o.결제수)} <span className="text-gray-400">({pct(ageGroupTotals.결제수 > 0 ? o.결제수 / ageGroupTotals.결제수 : 0)})</span></td>
+                              <td className="px-3 py-1.5 text-right font-mono whitespace-nowrap">{man(o.매출)} <span className="text-gray-400">({pct(ageGroupTotals.매출 > 0 ? o.매출 / ageGroupTotals.매출 : 0)})</span></td>
+                            </tr>
+                          ))}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </>
       )}
