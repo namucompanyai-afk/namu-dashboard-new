@@ -250,6 +250,7 @@ export default function CustomerAnalysisPage() {
   const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const [showUnmatched, setShowUnmatched] = useState(false);
+  const [showAllGroups, setShowAllGroups] = useState(false);
 
   // 업로드 스테이징
   const [staged, setStaged] = useState<Omit<DemographicRow, 'user_email' | 'period'>[] | null>(null);
@@ -479,6 +480,27 @@ export default function CustomerAnalysisPage() {
     결제수: groupTable.reduce((s, g) => s + g.결제수, 0),
     매출: groupTable.reduce((s, g) => s + g.매출, 0),
   }), [groupTable]);
+
+  // 그룹표 엑셀 다운로드 — 10줄 제한과 무관하게 전체 그룹+옵션. 현재 기간·판매형태 필터 반영.
+  const downloadGroupExcel = () => {
+    const tp = groupTotals.결제수;
+    const tr = groupTotals.매출;
+    const p1 = (ratio: number) => (ratio > 0 ? Math.round(ratio * 1000) / 10 : 0);   // 비율→% 1자리
+    const header = ['구분', '그룹', '표시명', '결제수', '결제수비중(%)', '매출(원)', '매출비중(%)', '객단가', '주력연령', '주력연령비중(%)', '콘텐츠축', '환불률(%)'];
+    const aoa: any[][] = [header];
+    for (const g of groupTable) {
+      aoa.push(['그룹', g.group, '', g.결제수, p1(tp > 0 ? g.결제수 / tp : 0), g.매출, p1(tr > 0 ? g.매출 / tr : 0), g.객단가, g.주력연령, p1(g.주력연령비중), g.콘텐츠축, p1(g.환불률)]);
+      for (const o of g.options) {
+        aoa.push(['옵션', g.group, o.label, o.결제수, p1(tp > 0 ? o.결제수 / tp : 0), o.매출, p1(tr > 0 ? o.매출 / tr : 0), o.객단가, o.주력연령, p1(o.주력연령비중), o.콘텐츠축, p1(o.환불률)]);
+      }
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '그룹별');
+    const sorted = [...selectedPeriods].sort((a, b) => a.localeCompare(b));
+    const range = sorted.length === 0 ? 'all' : sorted[0] === sorted[sorted.length - 1] ? sorted[0] : `${sorted[0]}~${sorted[sorted.length - 1]}`;
+    XLSX.writeFile(wb, `스마트스토어_고객분석_그룹별_${range}.xlsx`);
+  };
 
   const toggleAgeGroup = (g: string) => {
     setExpandedAgeGroups((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
@@ -750,6 +772,12 @@ export default function CustomerAnalysisPage() {
                 미매칭 {unmatched.length}건
               </button>
               <span className="ml-auto text-xs text-gray-400">{groupTable.length}개 그룹</span>
+              <button
+                onClick={downloadGroupExcel}
+                className="rounded-md bg-teal-600 px-3 py-1 text-xs font-medium text-white hover:bg-teal-700"
+              >
+                ⬇ 엑셀 다운로드
+              </button>
             </div>
             {showUnmatched && unmatched.length > 0 && (
               <div className="px-5 py-3 bg-amber-50 border-b border-amber-100 text-xs text-amber-800 max-h-40 overflow-y-auto">
@@ -770,7 +798,7 @@ export default function CustomerAnalysisPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {groupTable.map((g) => {
+                  {(showAllGroups ? groupTable : groupTable.slice(0, 10)).map((g) => {
                     const open = expandedGroups.includes(g.group);
                     return (
                       <Fragment key={g.group}>
@@ -804,6 +832,16 @@ export default function CustomerAnalysisPage() {
                 </tbody>
               </table>
             </div>
+            {groupTable.length > 10 && (
+              <div className="border-t border-gray-100 px-5 py-2 text-center">
+                <button
+                  onClick={() => setShowAllGroups((v) => !v)}
+                  className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                >
+                  {showAllGroups ? '접기' : `더보기 (전체 ${groupTable.length}개)`}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 표시명별 연령 분포 — 차트 위, 필터 아래 */}
