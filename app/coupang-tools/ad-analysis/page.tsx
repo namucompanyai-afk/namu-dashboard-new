@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
+import { useConfirm } from '@/components/ui/useConfirm'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
   ScatterChart, Scatter, ZAxis, ReferenceLine,
@@ -1532,6 +1533,7 @@ function fmtNoteTs(iso: string): string {
 }
 
 function HistoryNotesSection() {
+  const { confirm, confirmModal } = useConfirm()
   const [items, setItems] = useState<HistoryNote[]>([])
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
@@ -1583,7 +1585,7 @@ function HistoryNotesSection() {
   }
 
   async function remove(id: string) {
-    if (!confirm('이 메모를 삭제할까요?')) return
+    if (!(await confirm({ message: '이 메모를 삭제할까요?' }))) return
     setBusy(true)
     try {
       const res = await fetch(`/api/coupang-ad-history?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -1602,6 +1604,7 @@ function HistoryNotesSection() {
 
   return (
     <div className="aa-sub-section" style={{ marginTop: 16 }}>
+      {confirmModal}
       <div className="aa-sub-section-title" style={{ cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
         <span>📝 운영 메모 ({loading ? '…' : `${sorted.length}건`})</span>
         <span style={{ fontSize: 12, color: '#64748B' }}>{open ? '▾ 접기' : '▸ 펼치기'}</span>

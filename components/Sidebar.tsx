@@ -3,10 +3,12 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useConfirm } from './ui/useConfirm';
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const { confirm, confirmModal } = useConfirm();
   const [isSalesOpen, setIsSalesOpen] = useState(true);
   const [isHROpen, setIsHROpen] = useState(true);
   const [isPnlOpen, setIsPnlOpen] = useState(true);          // 손익 관리자 (최상위)
@@ -17,7 +19,6 @@ export default function Sidebar() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -32,9 +33,9 @@ export default function Sidebar() {
     setMobileOpen(false);
   }, [pathname]);
 
-  // 클릭 핸들러는 가벼운 state 토글만 — native confirm()은 동기로 메인 스레드를 막아 INP 악화.
-  const handleLogout = () => setShowLogoutConfirm(true);
-  const confirmLogout = () => {
+  // 클릭 즉시 모달만 열고 반환(메인 스레드 양보) — native confirm() 동기 블로킹 회피.
+  const handleLogout = async () => {
+    if (!(await confirm({ title: '로그아웃', message: '로그아웃 하시겠습니까?', confirmText: '로그아웃' }))) return;
     localStorage.removeItem('user');
     router.push('/login');
   };
@@ -306,22 +307,7 @@ export default function Sidebar() {
         </div>
       )}
 
-      {showLogoutConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black bg-opacity-50" onClick={() => setShowLogoutConfirm(false)}></div>
-          <div className="relative w-full max-w-xs rounded-2xl bg-white p-5 shadow-xl">
-            <p className="text-sm font-medium text-gray-800">로그아웃 하시겠습니까?</p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setShowLogoutConfirm(false)} className="px-3 py-1.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
-                취소
-              </button>
-              <button onClick={confirmLogout} className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700">
-                로그아웃
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {confirmModal}
     </>
   );
 }

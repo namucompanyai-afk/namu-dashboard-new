@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useConfirm } from '@/components/ui/useConfirm';
 
 export default function LeaveAdminPage() {
+  const { confirm, confirmModal } = useConfirm();
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('ALL');
@@ -32,7 +34,7 @@ export default function LeaveAdminPage() {
   };
 
   const handleApprove = async (index: number) => {
-    if (!confirm('이 연차를 승인하시겠습니까?')) {
+    if (!(await confirm({ title: '연차 승인', message: '이 연차를 승인하시겠습니까?', tone: 'primary', confirmText: '승인' }))) {
       return;
     }
 
@@ -63,7 +65,7 @@ export default function LeaveAdminPage() {
   };
 
   const handleReject = async (index: number) => {
-    if (!confirm('이 연차를 반려하시겠습니까?')) {
+    if (!(await confirm({ title: '연차 반려', message: '이 연차를 반려하시겠습니까?', confirmText: '반려' }))) {
       return;
     }
 
@@ -106,6 +108,7 @@ export default function LeaveAdminPage() {
 
   return (
     <div className="min-h-screen bg-[#f5f3ef]">
+      {confirmModal}
       <div className="bg-white border-b border-gray-200 px-8 py-6">
         <h1 className="text-2xl font-semibold text-gray-900">연차 승인 관리</h1>
         <p className="text-sm text-gray-500 mt-1">

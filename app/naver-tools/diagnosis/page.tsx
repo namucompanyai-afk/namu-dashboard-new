@@ -23,6 +23,7 @@ import type { NaverSettlementData, NaverSettlementRow } from '@/lib/naver/parser
 import KpiCard from '@/components/pnl/KpiCard'
 import { formatKRW, formatMan } from '@/components/pnl/format'
 import SettlementUploadModal from '@/components/naver/SettlementUploadModal'
+import { useConfirm } from '@/components/ui/useConfirm'
 
 /** 원 단위 그대로 (음수 보존). 1만 미만 또는 정확한 값 표시 필요할 때 사용. */
 function fmtKRW(n: number): string {
@@ -148,6 +149,7 @@ function numToKorean(n: number): string {
 }
 
 export default function NaverDiagnosisPage() {
+  const { confirm, confirmModal } = useConfirm()
   const {
     settlement,
     productMatch,
@@ -314,7 +316,7 @@ export default function NaverDiagnosisPage() {
 
   const handleDeleteAnalysis = async (id?: string) => {
     if (!id) return
-    if (!confirm('이 분석을 삭제하시겠습니까?')) return
+    if (!(await confirm({ message: '이 분석을 삭제하시겠습니까?' }))) return
     await deleteSnapshot(id)
     if (loadedSnapshot?.id === id) setLoadedSnapshot(null)
   }
@@ -373,7 +375,7 @@ export default function NaverDiagnosisPage() {
 
 
   const onResetAll = async () => {
-    if (!confirm('정말 모든 분석을 초기화하시겠습니까?\n저장된 분석도 모두 삭제됩니다 (마진마스터는 유지).')) return
+    if (!(await confirm({ title: '전체 초기화', message: '정말 모든 분석을 초기화하시겠습니까?\n저장된 분석도 모두 삭제됩니다 (마진마스터는 유지).' }))) return
     await purgeAll()
   }
 
@@ -517,6 +519,7 @@ export default function NaverDiagnosisPage() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
+      {confirmModal}
       <div className="flex items-end justify-between mb-6 gap-4">
         <div>
           <h1 className="text-2xl font-bold">스마트스토어 수익 진단</h1>

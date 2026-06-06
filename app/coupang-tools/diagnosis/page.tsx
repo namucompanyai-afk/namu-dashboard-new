@@ -16,6 +16,7 @@
 import React, { useState, useMemo, useEffect } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
 import { getDefaultConstants } from '@/lib/coupang/costBook'
+import { useConfirm } from '@/components/ui/useConfirm'
 import type { ProductDiagnosis, VerdictCode, DiagnosisResult, OptionDiagnosis } from '@/lib/coupang/diagnosis'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -46,6 +47,7 @@ const VERDICT_STYLES: Record<VerdictCode, { dot: string; bg: string; text: strin
 // ─────────────────────────────────────────────────────────────
 
 export default function DiagnosisPage() {
+  const { confirm, confirmModal } = useConfirm()
   const {
     marginMaster, marginMasterStats, uploads,
     rawSalesInsight, rawAdCampaign, adPeriod,
@@ -324,7 +326,7 @@ export default function DiagnosisPage() {
 
   // 저장된 분석 삭제
   const handleDeleteAnalysis = async (id: string) => {
-    if (!confirm('이 분석을 삭제하시겠습니까?')) return
+    if (!(await confirm({ message: '이 분석을 삭제하시겠습니까?' }))) return
     try {
       const res = await fetch(`/api/coupang-diagnoses?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -496,6 +498,7 @@ export default function DiagnosisPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
+      {confirmModal}
       <div className="max-w-7xl mx-auto">
         {/* 헤더 */}
         <div className="mb-6 flex items-end justify-between border-b pb-5">
@@ -535,7 +538,7 @@ export default function DiagnosisPage() {
                 📊 저장된 분석 ({savedAnalyses.length})
               </button>
               <button
-                onClick={() => { if (confirm('광고 + SELLER 데이터를 초기화합니다. (마진마스터는 유지)')) { setLoadedSnapshot(null); resetExceptMargin() } }}
+                onClick={async () => { if (await confirm({ title: '데이터 초기화', message: '광고 + SELLER 데이터를 초기화합니다. (마진마스터는 유지)' })) { setLoadedSnapshot(null); resetExceptMargin() } }}
                 className="text-sm px-3 py-1.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
               >
                 전체 초기화
@@ -668,7 +671,7 @@ export default function DiagnosisPage() {
 
         {/* 업로드 영역 */}
         <UploadSection
-          onSalesInsight={(rows: any, meta: any) => {
+          onSalesInsight={async (rows: any, meta: any) => {
             // 광고 매출과 SELLER 매출 비율 즉시 검증
             if (rawAdCampaign.length > 0 && rows.length > 0) {
               const adRevenue = rawAdCampaign.reduce((sum: number, r: any) => sum + (r.revenue14d || 0), 0)
@@ -685,14 +688,16 @@ export default function DiagnosisPage() {
                 if (ratio > 0.90) issue = `광고 매출(${adRev}만)이 SELLER 매출(${sellerRev}만)보다 큽니다.\nSELLER가 광고보다 짧은 기간일 수 있어요.`
                 else issue = `광고 매출(${adRev}만)에 비해 SELLER 매출(${sellerRev}만)이 너무 큽니다.\nSELLER가 광고보다 긴 기간일 수 있어요.`
 
-                const ok = confirm(
-                  `⚠ 기간 불일치 의심\n\n` +
-                  `광고 기간: ${adPeriodStr}\n` +
-                  `광고매출 / SELLER매출 비율: ${ratioPct}% (정상 40~90%)\n\n` +
-                  `${issue}\n\n` +
-                  `SELLER 파일이 광고와 같은 기간인지 확인하세요.\n\n` +
-                  `이대로 업로드하시겠습니까?`
-                )
+                const ok = await confirm({
+                  title: '⚠ 기간 불일치 의심',
+                  message:
+                    `광고 기간: ${adPeriodStr}\n` +
+                    `광고매출 / SELLER매출 비율: ${ratioPct}% (정상 40~90%)\n\n` +
+                    `${issue}\n\n` +
+                    `SELLER 파일이 광고와 같은 기간인지 확인하세요.\n\n` +
+                    `이대로 업로드하시겠습니까?`,
+                  confirmText: '업로드',
+                })
                 if (!ok) return  // 취소하면 업로드 안 함
               }
             }

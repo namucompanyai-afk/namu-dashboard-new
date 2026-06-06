@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
+import { useConfirm } from '@/components/ui/useConfirm';
 
 interface Influencer {
   id: string;
@@ -81,6 +82,7 @@ function CopyBtn({ text }: { text: string }) {
 }
 
 export default function InfluencerPage() {
+  const { confirm, confirmModal } = useConfirm();
   const [influencers, setInfluencers] = useState<Influencer[]>([]);
   const [ntData, setNtData] = useState<Record<string, { visits: number; orders: number; revenue: number }>>({});
   const [showAdd, setShowAdd] = useState(false);
@@ -189,7 +191,7 @@ export default function InfluencerPage() {
 
   // 인플루언서 삭제
   async function deleteInfluencer(id: string) {
-    if (!confirm('삭제하시겠습니까?')) return;
+    if (!(await confirm({ message: '삭제하시겠습니까?' }))) return;
     const updated = influencers.filter(i => i.id !== id);
     setInfluencers(updated);
     try {
@@ -228,6 +230,7 @@ export default function InfluencerPage() {
 
   return (
     <div>
+      {confirmModal}
       <div className="text-xs font-medium text-gray-500">인플루언서</div>
       <h1 className="mt-1 text-2xl font-semibold tracking-tight">인플루언서 성과</h1>
 
