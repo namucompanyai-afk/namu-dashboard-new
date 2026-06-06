@@ -458,7 +458,8 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
     const adNetProfit = adMargin - g.adCost
     const organicNetProfit = organicSold * avgMargin
     const totalNetProfit = g.totalMargin - g.adCost
-    const marginRate = g.revenue > 0 ? g.totalMargin / g.revenue : 0
+    // 마진율: 판매 있으면 매출(판매) 가중평균(=totalMargin/revenue), 판매 0이면 옵션 구조 마진율 단순평균(아래 optionDetails 후 보정).
+    let marginRate = g.revenue > 0 ? g.totalMargin / g.revenue : 0
     const adRoasAttr = g.adCost > 0 ? (g.adRevenue / g.adCost) * 100 : null
     const adRoasCamp = g.adCost > 0 ? (g.campaignRevenue / g.adCost) * 100 : null
     const crossSellRate = g.campaignRevenue > 0
@@ -466,11 +467,18 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       : null
     const adDependency = g.revenue > 0 ? g.adRevenue / g.revenue : 0
 
+    // 판정: 매출0&광고0 → 판매없음 / 매출0&광고>0 → 진짜적자(광고비만 손실) / 그 외 실판매 기준.
+    // ( > 0 비교로 NaN·부동소수 잔차 안전 )
+    const hasSales = g.revenue > 0
+    const adSpent = g.adCost > 0
     let verdict: VerdictCode
     let verdictLabel: string
-    if (g.revenue === 0 && g.adCost === 0) {
+    if (!hasSales && !adSpent) {
       verdict = 'no_sales'
       verdictLabel = '판매 없음'
+    } else if (!hasSales && adSpent) {
+      verdict = 'structural_loss'
+      verdictLabel = '🔴 진짜 적자'
     } else if (totalNetProfit > 0 && adNetProfit > 0) {
       verdict = 'profitable'
       verdictLabel = '🟢 흑자'
@@ -492,7 +500,10 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       const optAdMargin = o.adSold * optAvgMargin
       const optAdNetProfit = optAdMargin - o.adCost
       const optTotalNetProfit = o.totalMargin - o.adCost
-      const optMarginRate = o.revenue > 0 ? o.totalMargin / o.revenue : 0
+      // 옵션 마진율 = 구조 마진율(마진계산 시트 AA, 실판매가 대비 순이익). 판매량 무관.
+      const optMarginRate = (mr && mr.marginRate != null && Number.isFinite(mr.marginRate))
+        ? mr.marginRate
+        : (o.revenue > 0 ? o.totalMargin / o.revenue : 0)
       const optAdRoasAttr = o.adCost > 0 ? (o.adRevenue / o.adCost) * 100 : null
       const optAdRoasCamp = o.adCost > 0 ? (o.campaignRevenue / o.adCost) * 100 : null
       const optAdDependency = o.revenue > 0 ? o.adRevenue / o.revenue : 0
@@ -500,11 +511,16 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       const bagMatch = (o.optionName || '').match(/(\d+)\s*개/)
       const bagCount = bagMatch ? parseInt(bagMatch[1]) : 0
 
+      const optHasSales = o.revenue > 0
+      const optAdSpent = o.adCost > 0
       let optVerdict: VerdictCode
       let optVerdictLabel: string
-      if (o.revenue === 0 && o.adCost === 0) {
+      if (!optHasSales && !optAdSpent) {
         optVerdict = 'no_sales'
         optVerdictLabel = '판매 없음'
+      } else if (!optHasSales && optAdSpent) {
+        optVerdict = 'structural_loss'
+        optVerdictLabel = '🔴 적자'
       } else if (optTotalNetProfit > 0 && optAdNetProfit > 0) {
         optVerdict = 'profitable'
         optVerdictLabel = '🟢 흑자'
@@ -560,6 +576,12 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
     })
     // 봉투 개수 오름차순 정렬
     optionDetails.sort((a, b) => a.bagCount - b.bagCount || a.optionName.localeCompare(b.optionName))
+
+    // 판매 0 그룹: 매출 가중이 불가하므로 옵션 구조 마진율 단순평균으로 보정(판매 0이어도 구조 마진율 표시).
+    if (!(g.revenue > 0)) {
+      const sr = optionDetails.map((o) => o.marginRate).filter((r) => Number.isFinite(r))
+      marginRate = sr.length ? sr.reduce((a, b) => a + b, 0) / sr.length : 0
+    }
 
     // 별칭 단위 BEP ROAS — 광고매출 가중평균. 광고매출 0 인 별칭은 매출(판매) 가중평균 fallback
     let bepRoas: number | null = null
