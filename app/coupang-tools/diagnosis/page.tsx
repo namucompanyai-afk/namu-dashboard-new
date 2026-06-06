@@ -643,6 +643,26 @@ export default function DiagnosisPage() {
           </div>
         )}
 
+        {/* 마진 마스터 출처 배지 (구글시트 게시 CSV vs 엑셀 업로드 폴백) */}
+        {marginMaster && (() => {
+          const fn = uploads.marginMaster?.fileName || ''
+          const isCsv = fn.includes('게시 CSV')
+          const at = uploads.marginMaster?.uploadedAt
+          const atStr = at ? new Date(at).toLocaleString('ko-KR') : ''
+          return (
+            <div className="mb-3">
+              <span
+                className={
+                  'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ' +
+                  (isCsv ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-100 text-gray-600 border border-gray-200')
+                }
+              >
+                {isCsv ? '🟢 출처: 구글시트 (게시 CSV)' : `⬆ 출처: 엑셀 업로드${atStr ? ' · ' + atStr : ''}`}
+              </span>
+            </div>
+          )
+        })()}
+
         {/* 마진 마스터 단독 view (광고/SELLER 없이 옵션별 마진 분석) */}
         {marginMaster && <MasterDiagnosisView />}
 
