@@ -15,6 +15,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
+import { getDefaultConstants } from '@/lib/coupang/costBook'
 import type { ProductDiagnosis, VerdictCode, DiagnosisResult, OptionDiagnosis } from '@/lib/coupang/diagnosis'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -72,14 +73,37 @@ export default function DiagnosisPage() {
     }
     ;(async () => {
       try {
-        const masterRes = await fetch('/api/coupang-master?type=margin_master')
-        const masterJson = await masterRes.json()
-        if (masterJson.data) {
-          setMarginMaster(masterJson.data, {
-            fileName: masterJson.fileName || '저장된 데이터',
-            uploadedAt: masterJson.savedAt || new Date().toISOString(),
-            rowCount: masterJson.data?.marginRows?.length || 0,
-          })
+        // 1차: 구글시트 게시 CSV(마진계산 시트). 성공 시 업로드 불필요.
+        let marginLoaded = false
+        try {
+          const csvRes = await fetch('/api/coupang-margin-master')
+          const csvJson = await csvRes.json()
+          if (csvJson?.ok && Array.isArray(csvJson.marginRows) && csvJson.marginRows.length > 0) {
+            setMarginMaster(
+              { costBook: [], marginRows: csvJson.marginRows, constants: getDefaultConstants() },
+              {
+                fileName: '구글시트 마진계산(게시 CSV)',
+                uploadedAt: new Date().toISOString(),
+                rowCount: csvJson.marginRows.length,
+              },
+            )
+            marginLoaded = true
+          }
+        } catch (csvErr) {
+          console.error('마진계산 CSV 로드 실패, 업로드 저장본으로 폴백:', csvErr)
+        }
+
+        // 2차(폴백): CSV 실패 시 기존 엑셀 업로드 저장본.
+        if (!marginLoaded) {
+          const masterRes = await fetch('/api/coupang-master?type=margin_master')
+          const masterJson = await masterRes.json()
+          if (masterJson.data) {
+            setMarginMaster(masterJson.data, {
+              fileName: masterJson.fileName || '저장된 데이터',
+              uploadedAt: masterJson.savedAt || new Date().toISOString(),
+              rowCount: masterJson.data?.marginRows?.length || 0,
+            })
+          }
         }
 
         const settleRes = await fetch('/api/coupang-master?type=settlement')

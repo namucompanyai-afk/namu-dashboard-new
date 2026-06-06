@@ -355,7 +355,7 @@ const MARGIN_ROW_ALIASES = {
 } as const
 type MarginRowKey = keyof typeof MARGIN_ROW_ALIASES
 
-function parseMarginRows(aoa: unknown[][]): { rows: MarginCalcRow[]; error?: string } {
+export function parseMarginRows(aoa: unknown[][]): { rows: MarginCalcRow[]; error?: string } {
   const headerIdx = findHeaderRow(aoa, ['옵션id', '실판매가', '최종채널'])
   if (headerIdx === -1) {
     return { rows: [], error: '마진계산 헤더 행을 찾지 못했습니다' }

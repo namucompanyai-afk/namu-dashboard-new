@@ -124,6 +124,11 @@ export function getCostConstants(): CostTableConstants {
   return _master?.constants ?? DEFAULT_CONSTANTS
 }
 
+// 게시 CSV 경로(마진계산 시트만 사용) — costBook/constants 없이 CostMaster를 만들 때 fallback 상수.
+export function getDefaultConstants(): CostTableConstants {
+  return DEFAULT_CONSTANTS
+}
+
 // ─────────────────────────────────────────────────────────────
 // 신규 lookup helpers (v2)
 // ─────────────────────────────────────────────────────────────
