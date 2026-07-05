@@ -5,22 +5,25 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 // ── 구글시트 설정 ────────────────────────────────────────────────
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
-const RANGE = "'진도팜 원가표'!A4:K"
+const RANGE = "'진도팜 원가표'!A4:G"
+// 작업비 단가표: N5=소포장, N6=벌크
+const RANGE_WORK = "'진도팜 원가표'!N5:N6"
 
-// R4 헤더 순서: A 원료ID / B 구분 / C 품목 / D 품종 / E 1kg당원곡가 /
-//               F 포장형태 / G 작업비직접입력 / H 작업비 / I 공급가 / J 과세여부 / K 취급상태
+// R4 헤더 순서(원곡가 중심): A 원료ID / B 구분 / C 품목 / D 품종 /
+//                            E 1kg당 원곡가 / F 과세여부 / G 취급상태
 type CostRow = {
   rawId: string      // A 원료ID
   category: string   // B 구분
   item: string       // C 품목
   variety: string    // D 품종
-  price: number      // E 1kg당원곡가
-  pkg: string        // F 포장형태
-  workCost: number   // H 작업비
-  supply: number     // I 공급가
-  tax: string        // J 과세여부
-  status: string     // K 취급상태
+  price: number      // E 1kg당 원곡가
+  tax: string        // F 과세여부
+  status: string     // G 취급상태
 }
+
+// 포장별 작업비 단가
+type Pack = '소포장' | '벌크'
+type WorkTable = Record<Pack, number>
 
 // 콤마/원 제거 후 숫자화
 const toNum = (v: string | undefined): number => {
@@ -40,33 +43,47 @@ const catRank = (c: string) => {
 type Role = 'jindo' | 'namu'
 type Device = 'pc' | 'phone'
 
-// 컬럼 정의
-type ColKey = keyof CostRow
+// 컬럼 정의 — workCost·finalCost 는 나무 뷰 계산 컬럼(시트에 없음)
+type ColKey =
+  | 'rawId'
+  | 'category'
+  | 'item'
+  | 'variety'
+  | 'price'
+  | 'workCost'
+  | 'finalCost'
+  | 'tax'
+  | 'status'
 const COL_LABEL: Record<ColKey, string> = {
   rawId: '원료ID',
   category: '구분',
   item: '품목',
   variety: '품종',
-  price: '1kg당원곡가',
-  pkg: '포장형태',
+  price: '1kg당 원곡가',
   workCost: '작업비',
-  supply: '공급가',
+  finalCost: '최종 원가',
   tax: '과세여부',
   status: '취급상태',
 }
-const NUM_COLS: ColKey[] = ['price', 'workCost', 'supply']
+const NUM_COLS: ColKey[] = ['price', 'workCost', 'finalCost']
 
 // 역할 × 기기별 노출 컬럼
 function visibleCols(role: Role, device: Device): ColKey[] {
   if (device === 'pc') {
     return role === 'jindo'
-      ? ['category', 'item', 'variety', 'price', 'tax']
-      : ['rawId', 'category', 'item', 'variety', 'price', 'pkg', 'workCost', 'supply', 'tax', 'status']
+      ? ['category', 'item', 'variety', 'price', 'tax', 'status']
+      : ['rawId', 'category', 'item', 'variety', 'price', 'workCost', 'finalCost', 'tax', 'status']
   }
   // phone
   return role === 'jindo'
     ? ['category', 'item', 'variety', 'price']
-    : ['category', 'item', 'variety', 'price', 'workCost', 'supply', 'tax']
+    : ['category', 'item', 'variety', 'price', 'workCost', 'finalCost', 'tax']
+}
+
+// 최종원가 = 과세면 (원곡가+작업비)×1.1 반올림, 면세면 원곡가+작업비
+function calcFinal(price: number, work: number, tax: string): number {
+  const base = price + work
+  return tax.includes('과세') ? Math.round(base * 1.1) : base
 }
 
 // 기기 감지 (md 브레이크포인트 768px)
@@ -116,13 +133,15 @@ export default function JindopamCostPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<Role>('namu')
+  const [pack, setPack] = useState<Pack>('소포장')
+  const [workTable, setWorkTable] = useState<WorkTable>({ 소포장: 0, 벌크: 0 })
   const device = useDevice()
 
   // 편집 모달 상태
   const [editRow, setEditRow] = useState<CostRow | null>(null)
   const [showCreate, setShowCreate] = useState(false)
 
-  // 원가표 read (기존 클라이언트 방식 유지 · 저장 후 재호출용으로 함수화)
+  // 원가표 + 작업비 단가 read (저장 후 재호출용으로 함수화)
   const loadData = useCallback(async () => {
     const key = process.env.NEXT_PUBLIC_GSHEET_API_KEY
     if (!key) {
@@ -130,13 +149,13 @@ export default function JindopamCostPage() {
       setLoading(false)
       return
     }
-    const url =
-      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/` +
-      `${encodeURIComponent(RANGE)}?key=${key}`
+    const base = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/`
+    const url = `${base}${encodeURIComponent(RANGE)}?key=${key}`
+    const workUrl = `${base}${encodeURIComponent(RANGE_WORK)}?key=${key}`
     try {
       setLoading(true)
       setError(null)
-      const res = await fetch(url)
+      const [res, workRes] = await Promise.all([fetch(url), fetch(workUrl)])
       if (!res.ok) throw new Error(`시트 응답 오류 (${res.status})`)
       const json = await res.json()
       const values: string[][] = json.values || []
@@ -150,12 +169,15 @@ export default function JindopamCostPage() {
           item: (r[2] || '').trim(),
           variety: (r[3] || '').trim(),
           price: toNum(r[4]),
-          pkg: (r[5] || '').trim(),
-          workCost: toNum(r[7]),
-          supply: toNum(r[8]),
-          tax: (r[9] || '').trim(),
-          status: (r[10] || '').trim(),
+          tax: (r[5] || '').trim(),
+          status: (r[6] || '').trim(),
         }))
+      // 작업비 단가 (N5 소포장 / N6 벌크)
+      if (workRes.ok) {
+        const wj = await workRes.json()
+        const wv: string[][] = wj.values || []
+        setWorkTable({ 소포장: toNum(wv[0]?.[0]), 벌크: toNum(wv[1]?.[0]) })
+      }
       setRows(data)
       setLoading(false)
     } catch (e: any) {
@@ -170,22 +192,18 @@ export default function JindopamCostPage() {
 
   const roleLabel = role === 'jindo' ? '진도팜' : '나무'
   const cols = visibleCols(role, device)
+  const workCost = workTable[pack]
 
   const view = useMemo(() => {
-    // 나무 × 폰 → 소포장 행만 (외부 견적용)
-    let list = rows
-    if (role === 'namu' && device === 'phone') {
-      list = list.filter((r) => r.pkg.includes('소포장'))
-    }
-    // 정렬: 구분(고정순서) → 품목(ko) → 품종(ko)
-    return [...list].sort((a, b) => {
+    // 정렬: 구분(고정순서) → 품목(ko) → 품종(ko). 포장 필터 없음(토글로 대체)
+    return [...rows].sort((a, b) => {
       const c = catRank(a.category) - catRank(b.category)
       if (c !== 0) return c
       const it = a.item.localeCompare(b.item, 'ko')
       if (it !== 0) return it
       return a.variety.localeCompare(b.variety, 'ko')
     })
-  }, [rows, role, device])
+  }, [rows])
 
   return (
     <div className="space-y-6">
@@ -219,6 +237,31 @@ export default function JindopamCostPage() {
           </button>
         </div>
       </div>
+
+      {/* 나무 뷰: 포장 토글 (최종원가에 얹는 작업비 기준) */}
+      {role === 'namu' && (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
+            {(['소포장', '벌크'] as Pack[]).map((p) => (
+              <button
+                key={p}
+                onClick={() => setPack(p)}
+                className={
+                  'px-3 py-1.5 rounded-md font-medium transition-colors ' +
+                  (pack === p ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
+                }
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+          <span className="text-sm text-gray-500">
+            작업비 <span className="font-mono font-medium text-gray-700">{workCost.toLocaleString()}</span>원
+            <span className="text-gray-400"> · 최종원가 = (원곡가+작업비){' '}
+            <span className="text-gray-500">과세 시 ×1.1</span></span>
+          </span>
+        </div>
+      )}
 
       {/* 본문 카드 */}
       <div className="rounded-lg border border-gray-200 bg-white">
@@ -277,17 +320,22 @@ export default function JindopamCostPage() {
                           key={k}
                           className={
                             'whitespace-nowrap px-3 py-2 ' +
-                            (NUM_COLS.includes(k) ? 'text-right font-mono' : 'text-left')
+                            (NUM_COLS.includes(k) ? 'text-right font-mono' : 'text-left') +
+                            (k === 'finalCost' ? ' font-semibold text-gray-900' : '')
                           }
                         >
                           {k === 'tax' ? (
                             <TaxBadge value={row.tax} />
                           ) : k === 'status' ? (
                             <StatusMark value={row.status} />
-                          ) : NUM_COLS.includes(k) ? (
-                            (row[k] as number).toLocaleString()
+                          ) : k === 'workCost' ? (
+                            workCost.toLocaleString()
+                          ) : k === 'finalCost' ? (
+                            calcFinal(row.price, workCost, row.tax).toLocaleString()
+                          ) : k === 'price' ? (
+                            row.price.toLocaleString()
                           ) : (
-                            (row[k] as string) || '-'
+                            (row[k as 'rawId' | 'category' | 'item' | 'variety'] as string) || '-'
                           )}
                         </td>
                       ))}

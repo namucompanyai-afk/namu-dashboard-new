@@ -85,6 +85,63 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, message: '변동로그 헤더 세팅 완료' })
     }
 
+    // ── 원가표 원곡가 중심 재구성 (수동 1회) ─────────────────────
+    // 헤더 A~G: 원료ID·구분·품목·품종·1kg당 원곡가·과세여부·취급상태
+    // 기존 J(과세)·K(취급) → 새 F·G로 이전, 구 F~I(포장/작업비직접/작업비/공급가) 및 J·K 잔여 클리어
+    // 우측: 구 포장형태 기준표 제거 후 작업비 단가표(M4 제목, 소포장 800 / 벌크 450) 배치
+    if (action === 'init2') {
+      // 0. 기존 데이터 읽기 (과세=idx9 / 취급=idx10 이전용). 원곡가(E)는 손대지 않음
+      const cur = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A5:K`,
+      })
+      const vals = cur.data.values || []
+      const n = vals.length
+      const lastRow = HEADER_ROW + n // 4 + n
+      const fg = vals.map((r) => [r?.[9] ?? '', r?.[10] ?? '']) // [과세, 취급]
+
+      // 1. 새 헤더 (R4)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A4:G4`,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [['원료ID', '구분', '품목', '품종', '1kg당 원곡가', '과세여부', '취급상태']],
+        },
+      })
+
+      // 2. 값 이전 먼저: 구 J(과세)·K(취급) → 새 F·G
+      if (n > 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID,
+          range: `${quote(COST_TAB)}!F5:G${lastRow}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: fg },
+        })
+        // 3. 잔여열 클리어 나중: 구 H(작업비)·I(공급가)·J·K
+        await sheets.spreadsheets.values.clear({
+          spreadsheetId: SHEET_ID,
+          range: `${quote(COST_TAB)}!H5:K${lastRow}`,
+          requestBody: {},
+        })
+      }
+
+      // 4. 우측 구 기준표 제거 → 작업비 단가표 배치
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!M4:R100`,
+        requestBody: {},
+      })
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!M4:N6`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['작업비 단가', ''], ['소포장', 800], ['벌크', 450]] },
+      })
+
+      return NextResponse.json({ ok: true, message: `원가표 재구성 완료 (데이터 ${n}행)` })
+    }
+
     // ── 기존 원료 수정 ────────────────────────────────────────────
     if (action === 'update') {
       const { gubun, item, variety, field, oldValue, newValue, applyFrom, role } = body
@@ -95,7 +152,7 @@ export async function POST(req: Request) {
       // 대상 행 탐색 (구분+품목+품종 일치)
       const cur = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
-        range: `${quote(COST_TAB)}!A${HEADER_ROW}:K`,
+        range: `${quote(COST_TAB)}!A${HEADER_ROW}:G`,
       })
       const vals = cur.data.values || []
       let targetRow = -1
@@ -157,13 +214,11 @@ export async function POST(req: Request) {
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
       }
-      // 포장형태(F)는 모달에서 제거됨 → 작업비 자동수식 유지를 위해 '소포장' 기본 기록
-      const pack = '소포장'
 
-      // 수식 보존을 위해 마지막 실데이터 행의 A/H/I 수식을 읽어 다음 행으로 bump
+      // 원료ID 자동수식(A열) 보존을 위해 마지막 실데이터 행 수식을 읽어 다음 행으로 bump
       const cur = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
-        range: `${quote(COST_TAB)}!A${HEADER_ROW}:K`,
+        range: `${quote(COST_TAB)}!A${HEADER_ROW}:G`,
         valueRenderOption: 'FORMULA',
       })
       const vals = cur.data.values || []
@@ -176,30 +231,17 @@ export async function POST(req: Request) {
         }
       }
       const newRow = lastFilled + 1
-
-      const srcA = lastIdx > 0 ? vals[lastIdx]?.[0] : undefined
-      const srcH = lastIdx > 0 ? vals[lastIdx]?.[7] : undefined
-      const srcI = lastIdx > 0 ? vals[lastIdx]?.[8] : undefined
-      const fA = bumpFormula(srcA, lastFilled, newRow)
-      const fH = bumpFormula(srcH, lastFilled, newRow)
-      const fI = bumpFormula(srcI, lastFilled, newRow)
+      const fA = bumpFormula(lastIdx > 0 ? vals[lastIdx]?.[0] : undefined, lastFilled, newRow)
 
       const data: { range: string; values: any[][] }[] = [
-        // B~F: 구분·품목·품종·원곡가·포장형태
+        // B~F: 구분·품목·품종·원곡가·과세여부 (G 취급상태는 빈칸 → 나무가 시트에서 직접 기입)
         {
           range: `${quote(COST_TAB)}!B${newRow}:F${newRow}`,
-          values: [[gubun, item, variety || '', wongok ?? '', pack || '']],
-        },
-        // J~K: 과세여부 · 취급상태(빈칸 → 나무가 시트에서 직접 O/X 기입)
-        {
-          range: `${quote(COST_TAB)}!J${newRow}:K${newRow}`,
-          values: [[tax || '', '']],
+          values: [[gubun, item, variety || '', wongok ?? '', tax || '']],
         },
       ]
-      // 자동수식 열은 이전 행 수식이 있을 때만 복사(없으면 시트 ARRAYFORMULA 등에 위임)
+      // 원료ID 자동수식은 이전 행 수식이 있을 때만 복사(없으면 시트 ARRAYFORMULA 등에 위임)
       if (fA) data.push({ range: `${quote(COST_TAB)}!A${newRow}`, values: [[fA]] })
-      if (fH) data.push({ range: `${quote(COST_TAB)}!H${newRow}`, values: [[fH]] })
-      if (fI) data.push({ range: `${quote(COST_TAB)}!I${newRow}`, values: [[fI]] })
 
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: SHEET_ID,
