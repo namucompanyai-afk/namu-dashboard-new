@@ -114,15 +114,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: '대상 원료 행을 찾지 못했습니다.' }, { status: 404 })
       }
 
-      // 필드 → 컬럼: 원곡가=E, 과세여부=J
-      const col = field === '원곡가' ? 'E' : field === '과세여부' ? 'J' : null
-      if (!col) {
+      // 원곡가(E열)만 수정 지원
+      if (field !== '원곡가') {
         return NextResponse.json({ ok: false, error: `지원하지 않는 필드: ${field}` }, { status: 400 })
       }
 
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `${quote(COST_TAB)}!${col}${targetRow}`,
+        range: `${quote(COST_TAB)}!E${targetRow}`,
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [[newValue]] },
       })
@@ -154,10 +153,12 @@ export async function POST(req: Request) {
 
     // ── 신규 원료 추가 ────────────────────────────────────────────
     if (action === 'create') {
-      const { gubun, item, variety, wongok, pack, tax, status } = body
+      const { gubun, item, variety, wongok, tax, status } = body
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
       }
+      // 포장형태(F)는 모달에서 제거됨 → 작업비 자동수식 유지를 위해 '소포장' 기본 기록
+      const pack = '소포장'
 
       // 수식 보존을 위해 마지막 실데이터 행의 A/H/I 수식을 읽어 다음 행으로 bump
       const cur = await sheets.spreadsheets.values.get({

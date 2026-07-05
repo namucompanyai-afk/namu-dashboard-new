@@ -371,50 +371,44 @@ function EditModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [price, setPrice] = useState(String(row.price))
-  const [tax, setTax] = useState(row.tax.includes('과세') ? '과세' : '면세')
+  const [price, setPrice] = useState('')
   const [applyFrom, setApplyFrom] = useState('')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const rawId = [row.category, row.item, row.variety].filter((s) => s.trim() !== '').join('_')
-  const oldTax = row.tax.includes('과세') ? '과세' : '면세'
 
   const handleSave = async () => {
     setSaving(true)
     setErr(null)
     try {
-      const changes: { field: string; oldValue: string; newValue: string }[] = []
       const newPrice = Number(String(price).replace(/[^0-9.-]/g, ''))
-      if (Number.isFinite(newPrice) && newPrice !== row.price) {
-        changes.push({ field: '원곡가', oldValue: String(row.price), newValue: String(newPrice) })
+      if (price.trim() === '' || !Number.isFinite(newPrice)) {
+        setErr('변경 후 원곡가를 입력해 주세요.')
+        setSaving(false)
+        return
       }
-      if (tax !== oldTax) {
-        changes.push({ field: '과세여부', oldValue: oldTax, newValue: tax })
-      }
-      if (changes.length === 0) {
+      if (newPrice === row.price) {
         onClose()
         return
       }
-      for (const c of changes) {
-        const res = await fetch(POST_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'update',
-            gubun: row.category,
-            item: row.item,
-            variety: row.variety,
-            field: c.field,
-            oldValue: c.oldValue,
-            newValue: c.newValue,
-            applyFrom,
-            role: roleLabel,
-          }),
-        })
-        const json = await res.json()
-        if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
-      }
+      const res = await fetch(POST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update',
+          gubun: row.category,
+          item: row.item,
+          variety: row.variety,
+          field: '원곡가',
+          oldValue: String(row.price),
+          newValue: String(newPrice),
+          applyFrom,
+          role: roleLabel,
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
       onSaved()
     } catch (e: any) {
       setErr(e?.message || '저장 중 오류가 발생했습니다.')
@@ -430,26 +424,31 @@ function EditModal({
           <div className="text-xs text-gray-400">원료ID (자동)</div>
           <div className="font-medium">{rawId}</div>
         </div>
-        <label className="block">
+        <div>
           <span className="mb-1 block text-gray-600">1kg당원곡가</span>
-          <input
-            type="number"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
-          />
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-gray-600">과세여부</span>
-          <select
-            value={tax}
-            onChange={(e) => setTax(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
-          >
-            <option value="과세">과세</option>
-            <option value="면세">면세</option>
-          </select>
-        </label>
+          <div className="flex items-center gap-2">
+            <label className="flex-1">
+              <span className="mb-1 block text-xs text-gray-400">변경 전</span>
+              <input
+                type="text"
+                value={row.price.toLocaleString()}
+                readOnly
+                className="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-100 px-3 py-2 text-gray-500 focus:outline-none"
+              />
+            </label>
+            <span className="mt-5 text-gray-400">→</span>
+            <label className="flex-1">
+              <span className="mb-1 block text-xs text-gray-400">변경 후</span>
+              <input
+                type="number"
+                value={price}
+                onChange={(e) => setPrice(e.target.value)}
+                placeholder="새 원곡가"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+              />
+            </label>
+          </div>
+        </div>
         <label className="block">
           <span className="mb-1 block text-gray-600">적용 시작일</span>
           <input
@@ -491,16 +490,18 @@ function CreateModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const [gubun, setGubun] = useState('')
+  const GUBUN_OPTIONS = ['유기농', '무농약', '관행', '수입', '직접입력']
+  const [gubunSelect, setGubunSelect] = useState('유기농')
+  const [gubunCustom, setGubunCustom] = useState('')
   const [item, setItem] = useState('')
   const [variety, setVariety] = useState('')
   const [wongok, setWongok] = useState('')
-  const [pack, setPack] = useState('')
   const [tax, setTax] = useState('면세')
   const [status, setStatus] = useState('O')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  const gubun = gubunSelect === '직접입력' ? gubunCustom : gubunSelect
   const rawId = [gubun, item, variety].filter((s) => s.trim() !== '').join('_') || '—'
 
   const handleSave = async () => {
@@ -520,7 +521,6 @@ function CreateModal({
           item: item.trim(),
           variety: variety.trim(),
           wongok: wongok ? Number(String(wongok).replace(/[^0-9.-]/g, '')) : '',
-          pack: pack.trim(),
           tax,
           status,
           role: roleLabel,
@@ -552,11 +552,29 @@ function CreateModal({
           <div className="text-xs text-gray-400">원료ID (자동 · 구분_품목_품종)</div>
           <div className="font-medium">{rawId}</div>
         </div>
-        {field('구분 *', <input value={gubun} onChange={(e) => setGubun(e.target.value)} className={inputCls} placeholder="유기농 / 무농약 / 관행 / 수입" />)}
+        {field(
+          '구분 *',
+          <div className="space-y-2">
+            <select value={gubunSelect} onChange={(e) => setGubunSelect(e.target.value)} className={inputCls}>
+              {GUBUN_OPTIONS.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+            {gubunSelect === '직접입력' && (
+              <input
+                value={gubunCustom}
+                onChange={(e) => setGubunCustom(e.target.value)}
+                className={inputCls}
+                placeholder="구분 직접 입력"
+              />
+            )}
+          </div>,
+        )}
         {field('품목 *', <input value={item} onChange={(e) => setItem(e.target.value)} className={inputCls} />)}
         {field('품종', <input value={variety} onChange={(e) => setVariety(e.target.value)} className={inputCls} />)}
         {field('1kg당원곡가', <input type="number" value={wongok} onChange={(e) => setWongok(e.target.value)} className={inputCls} />)}
-        {field('포장형태', <input value={pack} onChange={(e) => setPack(e.target.value)} className={inputCls} placeholder="예: 소포장" />)}
         {field(
           '과세여부',
           <select value={tax} onChange={(e) => setTax(e.target.value)} className={inputCls}>
