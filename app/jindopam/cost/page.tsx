@@ -72,7 +72,7 @@ function visibleCols(role: Role, device: Device): ColKey[] {
   if (device === 'pc') {
     return role === 'jindo'
       ? ['category', 'item', 'variety', 'price', 'tax', 'status']
-      : ['rawId', 'category', 'item', 'variety', 'price', 'workCost', 'finalCost', 'tax', 'status']
+      : ['category', 'item', 'variety', 'price', 'workCost', 'finalCost', 'tax', 'status']
   }
   // phone
   return role === 'jindo'
@@ -205,6 +205,19 @@ export default function JindopamCostPage() {
     })
   }, [rows])
 
+  // 구분 rowspan 병합: 연속 같은 구분 구간의 첫 행에 span 길이, 나머지는 0(구분 td 생략)
+  const catRowSpan = useMemo(() => {
+    const spans = new Array<number>(view.length).fill(0)
+    let i = 0
+    while (i < view.length) {
+      let j = i
+      while (j < view.length && view[j].category === view[i].category) j++
+      spans[i] = j - i
+      i = j
+    }
+    return spans
+  }, [view])
+
   return (
     <div className="space-y-6">
       {/* 헤더 */}
@@ -315,30 +328,45 @@ export default function JindopamCostPage() {
                   )}
                   {view.map((row, i) => (
                     <tr key={i} className="border-t border-gray-100 hover:bg-gray-50">
-                      {cols.map((k) => (
-                        <td
-                          key={k}
-                          className={
-                            'whitespace-nowrap px-3 py-2 ' +
-                            (NUM_COLS.includes(k) ? 'text-right font-mono' : 'text-left') +
-                            (k === 'finalCost' ? ' font-semibold text-gray-900' : '')
-                          }
-                        >
-                          {k === 'tax' ? (
-                            <TaxBadge value={row.tax} />
-                          ) : k === 'status' ? (
-                            <StatusMark value={row.status} />
-                          ) : k === 'workCost' ? (
-                            workCost.toLocaleString()
-                          ) : k === 'finalCost' ? (
-                            calcFinal(row.price, workCost, row.tax).toLocaleString()
-                          ) : k === 'price' ? (
-                            row.price.toLocaleString()
-                          ) : (
-                            (row[k as 'rawId' | 'category' | 'item' | 'variety'] as string) || '-'
-                          )}
-                        </td>
-                      ))}
+                      {cols.map((k) => {
+                        // 구분: 연속 구간 첫 행만 rowSpan 병합 셀, 나머지 행은 생략
+                        if (k === 'category') {
+                          if (catRowSpan[i] === 0) return null
+                          return (
+                            <td
+                              key={k}
+                              rowSpan={catRowSpan[i]}
+                              className="whitespace-nowrap px-3 py-2 text-left align-middle bg-gray-50 font-medium text-gray-700"
+                            >
+                              {row.category || '-'}
+                            </td>
+                          )
+                        }
+                        return (
+                          <td
+                            key={k}
+                            className={
+                              'whitespace-nowrap px-3 py-2 ' +
+                              (NUM_COLS.includes(k) ? 'text-right font-mono' : 'text-left') +
+                              (k === 'finalCost' ? ' font-semibold text-gray-900' : '')
+                            }
+                          >
+                            {k === 'tax' ? (
+                              <TaxBadge value={row.tax} />
+                            ) : k === 'status' ? (
+                              <StatusMark value={row.status} />
+                            ) : k === 'workCost' ? (
+                              workCost.toLocaleString()
+                            ) : k === 'finalCost' ? (
+                              calcFinal(row.price, workCost, row.tax).toLocaleString()
+                            ) : k === 'price' ? (
+                              row.price.toLocaleString()
+                            ) : (
+                              (row[k as 'rawId' | 'item' | 'variety'] as string) || '-'
+                            )}
+                          </td>
+                        )
+                      })}
                       <td className="whitespace-nowrap px-3 py-2 text-right">
                         <button
                           onClick={() => setEditRow(row)}
