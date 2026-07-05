@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 // ── 구글시트 설정 ────────────────────────────────────────────────
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
@@ -116,7 +116,12 @@ export default function JindopamCostPage() {
   const [role, setRole] = useState<Role>('namu')
   const device = useDevice()
 
-  useEffect(() => {
+  // 편집 모달 상태
+  const [editRow, setEditRow] = useState<CostRow | null>(null)
+  const [showCreate, setShowCreate] = useState(false)
+
+  // 원가표 read (기존 클라이언트 방식 유지 · 저장 후 재호출용으로 함수화)
+  const loadData = useCallback(async () => {
     const key = process.env.NEXT_PUBLIC_GSHEET_API_KEY
     if (!key) {
       setError('API 키가 설정되지 않았습니다. (.env.local 의 NEXT_PUBLIC_GSHEET_API_KEY)')
@@ -126,46 +131,42 @@ export default function JindopamCostPage() {
     const url =
       `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/` +
       `${encodeURIComponent(RANGE)}?key=${key}`
-
-    let alive = true
-    ;(async () => {
-      try {
-        const res = await fetch(url)
-        if (!res.ok) throw new Error(`시트 응답 오류 (${res.status})`)
-        const json = await res.json()
-        const values: string[][] = json.values || []
-        // values[0] = R4 헤더 → 스킵, R5부터 데이터
-        const data: CostRow[] = values
-          .slice(1)
-          .filter((r) => (r[2] || '').trim() !== '') // 품목(C) 빈 행 스킵
-          .map((r) => ({
-            rawId: (r[0] || '').trim(),
-            category: (r[1] || '').trim(),
-            item: (r[2] || '').trim(),
-            variety: (r[3] || '').trim(),
-            price: toNum(r[4]),
-            pkg: (r[5] || '').trim(),
-            workCost: toNum(r[7]),
-            supply: toNum(r[8]),
-            tax: (r[9] || '').trim(),
-            status: (r[10] || '').trim(),
-          }))
-        if (alive) {
-          setRows(data)
-          setLoading(false)
-        }
-      } catch (e: any) {
-        if (alive) {
-          setError(e?.message || '데이터를 불러오지 못했습니다.')
-          setLoading(false)
-        }
-      }
-    })()
-    return () => {
-      alive = false
+    try {
+      setLoading(true)
+      setError(null)
+      const res = await fetch(url)
+      if (!res.ok) throw new Error(`시트 응답 오류 (${res.status})`)
+      const json = await res.json()
+      const values: string[][] = json.values || []
+      // values[0] = R4 헤더 → 스킵, R5부터 데이터
+      const data: CostRow[] = values
+        .slice(1)
+        .filter((r) => (r[2] || '').trim() !== '') // 품목(C) 빈 행 스킵
+        .map((r) => ({
+          rawId: (r[0] || '').trim(),
+          category: (r[1] || '').trim(),
+          item: (r[2] || '').trim(),
+          variety: (r[3] || '').trim(),
+          price: toNum(r[4]),
+          pkg: (r[5] || '').trim(),
+          workCost: toNum(r[7]),
+          supply: toNum(r[8]),
+          tax: (r[9] || '').trim(),
+          status: (r[10] || '').trim(),
+        }))
+      setRows(data)
+      setLoading(false)
+    } catch (e: any) {
+      setError(e?.message || '데이터를 불러오지 못했습니다.')
+      setLoading(false)
     }
   }, [])
 
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  const roleLabel = role === 'jindo' ? '진도팜' : '나무'
   const cols = visibleCols(role, device)
 
   const view = useMemo(() => {
@@ -192,20 +193,28 @@ export default function JindopamCostPage() {
           <h1 className="text-2xl font-semibold">원가표</h1>
           <p className="text-sm text-gray-500 mt-1">진도팜 → 나무 공급 단가</p>
         </div>
-        {/* 임시 역할 토글 (진도팜/나무) */}
-        <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
-          {(['jindo', 'namu'] as Role[]).map((r) => (
-            <button
-              key={r}
-              onClick={() => setRole(r)}
-              className={
-                'px-3 py-1.5 rounded-md font-medium transition-colors ' +
-                (role === r ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
-              }
-            >
-              {r === 'jindo' ? '진도팜' : '나무'}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {/* 임시 역할 토글 (진도팜/나무) */}
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
+            {(['jindo', 'namu'] as Role[]).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRole(r)}
+                className={
+                  'px-3 py-1.5 rounded-md font-medium transition-colors ' +
+                  (role === r ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
+                }
+              >
+                {r === 'jindo' ? '진도팜' : '나무'}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+          >
+            ＋ 신규 원료 추가
+          </button>
         </div>
       </div>
 
@@ -248,12 +257,13 @@ export default function JindopamCostPage() {
                         {COL_LABEL[k]}
                       </th>
                     ))}
+                    <th className="whitespace-nowrap px-3 py-2 text-right font-medium">수정</th>
                   </tr>
                 </thead>
                 <tbody>
                   {view.length === 0 && (
                     <tr>
-                      <td colSpan={cols.length} className="py-12 text-center text-sm text-gray-400">
+                      <td colSpan={cols.length + 1} className="py-12 text-center text-sm text-gray-400">
                         표시할 데이터가 없습니다.
                       </td>
                     </tr>
@@ -279,6 +289,14 @@ export default function JindopamCostPage() {
                           )}
                         </td>
                       ))}
+                      <td className="whitespace-nowrap px-3 py-2 text-right">
+                        <button
+                          onClick={() => setEditRow(row)}
+                          className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                        >
+                          수정
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -287,6 +305,291 @@ export default function JindopamCostPage() {
           </>
         )}
       </div>
+
+      {editRow && (
+        <EditModal
+          row={editRow}
+          roleLabel={roleLabel}
+          onClose={() => setEditRow(null)}
+          onSaved={async () => {
+            setEditRow(null)
+            await loadData()
+          }}
+        />
+      )}
+      {showCreate && (
+        <CreateModal
+          roleLabel={roleLabel}
+          onClose={() => setShowCreate(false)}
+          onSaved={async () => {
+            setShowCreate(false)
+            await loadData()
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+// ── 공용 모달 셸 (PC 중앙 / 폰 하단시트) ──────────────────────────
+function ModalShell({
+  title,
+  onClose,
+  children,
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+const POST_URL = '/api/jindopam/cost'
+
+// ── 수정 모달 (원곡가·과세여부·적용시작일) ─────────────────────────
+function EditModal({
+  row,
+  roleLabel,
+  onClose,
+  onSaved,
+}: {
+  row: CostRow
+  roleLabel: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [price, setPrice] = useState(String(row.price))
+  const [tax, setTax] = useState(row.tax.includes('과세') ? '과세' : '면세')
+  const [applyFrom, setApplyFrom] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const rawId = [row.category, row.item, row.variety].filter((s) => s.trim() !== '').join('_')
+  const oldTax = row.tax.includes('과세') ? '과세' : '면세'
+
+  const handleSave = async () => {
+    setSaving(true)
+    setErr(null)
+    try {
+      const changes: { field: string; oldValue: string; newValue: string }[] = []
+      const newPrice = Number(String(price).replace(/[^0-9.-]/g, ''))
+      if (Number.isFinite(newPrice) && newPrice !== row.price) {
+        changes.push({ field: '원곡가', oldValue: String(row.price), newValue: String(newPrice) })
+      }
+      if (tax !== oldTax) {
+        changes.push({ field: '과세여부', oldValue: oldTax, newValue: tax })
+      }
+      if (changes.length === 0) {
+        onClose()
+        return
+      }
+      for (const c of changes) {
+        const res = await fetch(POST_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update',
+            gubun: row.category,
+            item: row.item,
+            variety: row.variety,
+            field: c.field,
+            oldValue: c.oldValue,
+            newValue: c.newValue,
+            applyFrom,
+            role: roleLabel,
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+      }
+      onSaved()
+    } catch (e: any) {
+      setErr(e?.message || '저장 중 오류가 발생했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell title="원료 수정" onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="rounded-lg bg-gray-50 px-3 py-2 text-gray-600">
+          <div className="text-xs text-gray-400">원료ID (자동)</div>
+          <div className="font-medium">{rawId}</div>
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-gray-600">1kg당원곡가</span>
+          <input
+            type="number"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-gray-600">과세여부</span>
+          <select
+            value={tax}
+            onChange={(e) => setTax(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          >
+            <option value="과세">과세</option>
+            <option value="면세">면세</option>
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-gray-600">적용 시작일</span>
+          <input
+            type="date"
+            value={applyFrom}
+            onChange={(e) => setApplyFrom(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          />
+        </label>
+        {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+          >
+            취소
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+          >
+            {saving ? '저장 중…' : '저장'}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── 신규 원료 추가 모달 ───────────────────────────────────────────
+function CreateModal({
+  roleLabel,
+  onClose,
+  onSaved,
+}: {
+  roleLabel: string
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [gubun, setGubun] = useState('')
+  const [item, setItem] = useState('')
+  const [variety, setVariety] = useState('')
+  const [wongok, setWongok] = useState('')
+  const [pack, setPack] = useState('')
+  const [tax, setTax] = useState('면세')
+  const [status, setStatus] = useState('O')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const rawId = [gubun, item, variety].filter((s) => s.trim() !== '').join('_') || '—'
+
+  const handleSave = async () => {
+    if (!gubun.trim() || !item.trim()) {
+      setErr('구분과 품목은 필수입니다.')
+      return
+    }
+    setSaving(true)
+    setErr(null)
+    try {
+      const res = await fetch(POST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create',
+          gubun: gubun.trim(),
+          item: item.trim(),
+          variety: variety.trim(),
+          wongok: wongok ? Number(String(wongok).replace(/[^0-9.-]/g, '')) : '',
+          pack: pack.trim(),
+          tax,
+          status,
+          role: roleLabel,
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+      onSaved()
+    } catch (e: any) {
+      setErr(e?.message || '저장 중 오류가 발생했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const field = (label: string, node: React.ReactNode) => (
+    <label className="block">
+      <span className="mb-1 block text-gray-600">{label}</span>
+      {node}
+    </label>
+  )
+  const inputCls =
+    'w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400'
+
+  return (
+    <ModalShell title="신규 원료 추가" onClose={onClose}>
+      <div className="max-h-[70vh] space-y-3 overflow-auto text-sm">
+        <div className="rounded-lg bg-gray-50 px-3 py-2 text-gray-600">
+          <div className="text-xs text-gray-400">원료ID (자동 · 구분_품목_품종)</div>
+          <div className="font-medium">{rawId}</div>
+        </div>
+        {field('구분 *', <input value={gubun} onChange={(e) => setGubun(e.target.value)} className={inputCls} placeholder="유기농 / 무농약 / 관행 / 수입" />)}
+        {field('품목 *', <input value={item} onChange={(e) => setItem(e.target.value)} className={inputCls} />)}
+        {field('품종', <input value={variety} onChange={(e) => setVariety(e.target.value)} className={inputCls} />)}
+        {field('1kg당원곡가', <input type="number" value={wongok} onChange={(e) => setWongok(e.target.value)} className={inputCls} />)}
+        {field('포장형태', <input value={pack} onChange={(e) => setPack(e.target.value)} className={inputCls} placeholder="예: 소포장" />)}
+        {field(
+          '과세여부',
+          <select value={tax} onChange={(e) => setTax(e.target.value)} className={inputCls}>
+            <option value="면세">면세</option>
+            <option value="과세">과세</option>
+          </select>,
+        )}
+        {field(
+          '취급상태',
+          <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}>
+            <option value="O">O (취급)</option>
+            <option value="X">X (미취급)</option>
+          </select>,
+        )}
+        <p className="text-xs text-gray-400">원료ID·작업비·공급가는 시트 수식이 자동 계산합니다.</p>
+        {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+          >
+            취소
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+          >
+            {saving ? '저장 중…' : '추가'}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
   )
 }
