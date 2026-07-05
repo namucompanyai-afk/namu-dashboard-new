@@ -133,9 +133,24 @@ export default function JindopamCostPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [role, setRole] = useState<Role>('namu')
+  const [isJindoAccount, setIsJindoAccount] = useState(false) // 진도팜 role 계정 여부(토글 숨김)
   const [pack, setPack] = useState<Pack>('소포장')
   const [workTable, setWorkTable] = useState<WorkTable>({ 소포장: 0, 벌크: 0 })
   const device = useDevice()
+
+  // 로그인 role 자동 판별: '진도팜'→jindo 고정(토글 숨김), 그 외→namu
+  useEffect(() => {
+    try {
+      const userStr = localStorage.getItem('user')
+      const userRole = userStr ? JSON.parse(userStr)?.role : null
+      if (userRole === '진도팜') {
+        setRole('jindo')
+        setIsJindoAccount(true)
+      }
+    } catch {
+      /* 파싱 실패 시 기본 나무 뷰 */
+    }
+  }, [])
 
   // 편집 모달 상태
   const [editRow, setEditRow] = useState<CostRow | null>(null)
@@ -226,29 +241,32 @@ export default function JindopamCostPage() {
           <h1 className="text-2xl font-semibold">원가표</h1>
           <p className="text-sm text-gray-500 mt-1">진도팜 → 나무 공급 단가</p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* 임시 역할 토글 (진도팜/나무) */}
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
-            {(['jindo', 'namu'] as Role[]).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRole(r)}
-                className={
-                  'px-3 py-1.5 rounded-md font-medium transition-colors ' +
-                  (role === r ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
-                }
-              >
-                {r === 'jindo' ? '진도팜' : '나무'}
-              </button>
-            ))}
-          </div>
-          <button
-            onClick={() => setShowCreate(true)}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
-          >
+        {/* 진도팜 계정은 진도팜 뷰 고정(토글·신규추가 숨김) · 나무 계정만 전환/편집 */}
+        {!isJindoAccount && (
+          <div className="flex items-center gap-2">
+            {/* 역할 토글 (진도팜/나무) */}
+            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
+              {(['jindo', 'namu'] as Role[]).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRole(r)}
+                  className={
+                    'px-3 py-1.5 rounded-md font-medium transition-colors ' +
+                    (role === r ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
+                  }
+                >
+                  {r === 'jindo' ? '진도팜' : '나무'}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowCreate(true)}
+              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+            >
             ＋ 신규 원료 추가
-          </button>
-        </div>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 나무 뷰: 포장 토글 (최종원가에 얹는 작업비 기준) */}
@@ -315,13 +333,15 @@ export default function JindopamCostPage() {
                         {COL_LABEL[k]}
                       </th>
                     ))}
-                    <th className="whitespace-nowrap px-3 py-2 text-right font-medium">수정</th>
+                    {!isJindoAccount && (
+                      <th className="whitespace-nowrap px-3 py-2 text-right font-medium">수정</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
                   {view.length === 0 && (
                     <tr>
-                      <td colSpan={cols.length + 1} className="py-12 text-center text-sm text-gray-400">
+                      <td colSpan={cols.length + (isJindoAccount ? 0 : 1)} className="py-12 text-center text-sm text-gray-400">
                         표시할 데이터가 없습니다.
                       </td>
                     </tr>
@@ -367,14 +387,16 @@ export default function JindopamCostPage() {
                           </td>
                         )
                       })}
-                      <td className="whitespace-nowrap px-3 py-2 text-right">
-                        <button
-                          onClick={() => setEditRow(row)}
-                          className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                        >
-                          수정
-                        </button>
-                      </td>
+                      {!isJindoAccount && (
+                        <td className="whitespace-nowrap px-3 py-2 text-right">
+                          <button
+                            onClick={() => setEditRow(row)}
+                            className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                          >
+                            수정
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

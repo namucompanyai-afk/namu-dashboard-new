@@ -41,6 +41,7 @@ export default function Sidebar() {
   };
 
   const isActive = (path: string) => pathname === path;
+  const isJindoAccount = userRole === '진도팜'; // 원가표만 접근 가능한 진도팜 계정
 
   const sidebarContent = (
     <>
@@ -57,6 +58,16 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 p-4 overflow-y-auto">
+        {isJindoAccount ? (
+          // 진도팜 계정: 원가표 메뉴만 노출
+          <div className="space-y-1">
+            <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider">진도팜</div>
+            <Link href="/jindopam/cost" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/cost') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+              <span>🧾</span>
+              <span>원가표</span>
+            </Link>
+          </div>
+        ) : (
         <div className="space-y-1">
           <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider">분석</div>
 
@@ -269,6 +280,7 @@ export default function Sidebar() {
             </>
           )}
         </div>
+        )}
       </nav>
 
       <div className="p-4 border-t border-gray-700">
