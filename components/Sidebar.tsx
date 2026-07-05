@@ -59,13 +59,38 @@ export default function Sidebar() {
 
       <nav className="flex-1 p-4 overflow-y-auto">
         {isJindoAccount ? (
-          // 진도팜 계정: 원가표 메뉴만 노출
+          // 진도팜 계정: 진도팜 그룹 전체만 노출(다른 그룹 숨김)
           <div className="space-y-1">
-            <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider">진도팜</div>
-            <Link href="/jindopam/cost" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/cost') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
-              <span>🧾</span>
-              <span>원가표</span>
-            </Link>
+            <div>
+              <button onClick={() => setIsJindopamOpen(!isJindopamOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/jindopam') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                <span>🌾</span>
+                <span className="flex-1 text-left">진도팜</span>
+                <span className="text-xs">{isJindopamOpen ? '▼' : '▶'}</span>
+              </button>
+
+              {isJindopamOpen && (
+                <div className="ml-4 mt-1 space-y-1">
+                  <Link href="/jindopam/cost" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/cost') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                    <span>🧾</span>
+                    <span>원가표</span>
+                  </Link>
+                  <Link href="/jindopam/settlement" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/settlement') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                    <span>💵</span>
+                    <span>정산</span>
+                  </Link>
+                  <Link href="/jindopam/orders" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/orders') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                    <span>📦</span>
+                    <span>발주 모니터링</span>
+                    <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                  </Link>
+                  <Link href="/jindopam/shared" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/shared') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                    <span>🔗</span>
+                    <span>공유 View</span>
+                    <span className="ml-auto text-xs bg-gray-600 text-gray-300 px-1.5 py-0.5 rounded">예정</span>
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
         ) : (
         <div className="space-y-1">
