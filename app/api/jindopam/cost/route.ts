@@ -153,7 +153,7 @@ export async function POST(req: Request) {
 
     // ── 신규 원료 추가 ────────────────────────────────────────────
     if (action === 'create') {
-      const { gubun, item, variety, wongok, tax, status } = body
+      const { gubun, item, variety, wongok, tax } = body
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
       }
@@ -190,10 +190,10 @@ export async function POST(req: Request) {
           range: `${quote(COST_TAB)}!B${newRow}:F${newRow}`,
           values: [[gubun, item, variety || '', wongok ?? '', pack || '']],
         },
-        // J~K: 과세여부·취급상태
+        // J~K: 과세여부 · 취급상태(빈칸 → 나무가 시트에서 직접 O/X 기입)
         {
           range: `${quote(COST_TAB)}!J${newRow}:K${newRow}`,
-          values: [[tax || '', status || '']],
+          values: [[tax || '', '']],
         },
       ]
       // 자동수식 열은 이전 행 수식이 있을 때만 복사(없으면 시트 ARRAYFORMULA 등에 위임)

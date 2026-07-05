@@ -99,9 +99,11 @@ function TaxBadge({ value }: { value: string }) {
   )
 }
 
-// 취급상태 O/X
+// 취급상태 O/X (빈칸이면 '-')
 function StatusMark({ value }: { value: string }) {
-  const on = /^(o|취급|사용|y|1|가능|활성)/i.test((value || '').trim())
+  const v = (value || '').trim()
+  if (v === '') return <span className="text-gray-300">-</span>
+  const on = /^(o|취급|사용|y|1|가능|활성)/i.test(v)
   return (
     <span className={'font-bold ' + (on ? 'text-green-600' : 'text-gray-400')}>
       {on ? 'O' : 'X'}
@@ -497,7 +499,6 @@ function CreateModal({
   const [variety, setVariety] = useState('')
   const [wongok, setWongok] = useState('')
   const [tax, setTax] = useState('면세')
-  const [status, setStatus] = useState('O')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -522,7 +523,6 @@ function CreateModal({
           variety: variety.trim(),
           wongok: wongok ? Number(String(wongok).replace(/[^0-9.-]/g, '')) : '',
           tax,
-          status,
           role: roleLabel,
         }),
       })
@@ -582,14 +582,7 @@ function CreateModal({
             <option value="과세">과세</option>
           </select>,
         )}
-        {field(
-          '취급상태',
-          <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}>
-            <option value="O">O (취급)</option>
-            <option value="X">X (미취급)</option>
-          </select>,
-        )}
-        <p className="text-xs text-gray-400">원료ID·작업비·공급가는 시트 수식이 자동 계산합니다.</p>
+        <p className="text-xs text-gray-400">원료ID·작업비·공급가는 시트 수식이 자동 계산합니다. 취급상태는 시트에서 직접 입력합니다.</p>
         {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button
