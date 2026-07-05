@@ -16,8 +16,8 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
       router.replace('/login');
     } else {
       setLoggedIn(!!user);
-      // 진도팜 계정(role='진도팜'): 원가표 외 경로 접근 시 원가표로 리다이렉트
-      if (user && pathname !== '/login' && pathname !== '/jindopam/cost') {
+      // 진도팜 계정(role='진도팜'): 진도팜 그룹(/jindopam/*) 밖 경로 접근 시 원가표로 리다이렉트
+      if (user && pathname !== '/login' && !pathname.startsWith('/jindopam')) {
         try {
           if (JSON.parse(user)?.role === '진도팜') {
             router.replace('/jindopam/cost');
