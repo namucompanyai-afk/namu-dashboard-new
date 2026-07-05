@@ -211,6 +211,10 @@ export default function Sidebar() {
 
             {isJindopamOpen && (
               <div className="ml-4 mt-1 space-y-1">
+                <Link href="/jindopam/cost" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/cost') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🧾</span>
+                  <span>원가표</span>
+                </Link>
                 <Link href="/jindopam/settlement" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/settlement') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>💵</span>
                   <span>정산</span>
