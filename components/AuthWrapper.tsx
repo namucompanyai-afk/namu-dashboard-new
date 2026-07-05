@@ -4,6 +4,14 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 
+// 진도팜 계정(role='진도팜') 허용 경로 화이트리스트 (진도팜 그룹 4개만)
+const JINDO_ALLOWED = [
+  '/jindopam/cost',
+  '/jindopam/settlement',
+  '/jindopam/orders',
+  '/jindopam/shared',
+];
+
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -16,8 +24,8 @@ export default function AuthWrapper({ children }: { children: React.ReactNode })
       router.replace('/login');
     } else {
       setLoggedIn(!!user);
-      // 진도팜 계정(role='진도팜'): 진도팜 그룹(/jindopam/*) 밖 경로 접근 시 원가표로 리다이렉트
-      if (user && pathname !== '/login' && !pathname.startsWith('/jindopam')) {
+      // 진도팜 계정(role='진도팜'): 허용 화이트리스트 밖 경로 접근 시 원가표로 리다이렉트
+      if (user && pathname !== '/login' && !JINDO_ALLOWED.includes(pathname)) {
         try {
           if (JSON.parse(user)?.role === '진도팜') {
             router.replace('/jindopam/cost');
