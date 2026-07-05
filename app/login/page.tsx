@@ -35,7 +35,8 @@ export default function LoginPage() {
 
       if (data.ok) {
         localStorage.setItem('user', JSON.stringify(data.user));
-        window.location.href = '/';
+        // 진도팜 계정은 통합 포털 대신 원가표로 랜딩
+        window.location.href = data.user?.role === '진도팜' ? '/jindopam/cost' : '/';
       } else {
         setError(data.error || '로그인에 실패했습니다.');
       }
