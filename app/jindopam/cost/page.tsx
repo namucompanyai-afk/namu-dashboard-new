@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
 // ── 구글시트 설정 ────────────────────────────────────────────────
-const SHEET_ID = '1knKyAxROh-0fBePgJqcJIsAdlApQsCjS'
+const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
 const RANGE = "'진도팜 원가표'!A4:K"
 
