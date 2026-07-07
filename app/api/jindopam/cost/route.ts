@@ -142,6 +142,85 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, message: `원가표 재구성 완료 (데이터 ${n}행)` })
     }
 
+    // ── 원가표 잔재 정리(원곡가 중심 정돈) + F·G 데이터검증 재설정 (수동 1회) ─────
+    // 목표: 헤더 A~G / 데이터 A~G 보존(E 원곡가 불변) / H열 이후 잔재 전부 제거 /
+    //       우측 M·N 작업비 단가표 보존 / F열 검증 과세·면세, G열 검증 O·X
+    if (action === 'init3') {
+      const LAST = 1000 // 데이터 정리 하한 행
+
+      // 1. 헤더 A~G 보장(멱등)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A4:G4`,
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [['원료ID', '구분', '품목', '품종', '1kg당 원곡가', '과세여부', '취급상태']],
+        },
+      })
+
+      // 2. H:L 잔재(값·수식·#REF!) 클리어 — M·N 작업비 단가표는 보존(제외)
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!H4:L${LAST}`,
+        requestBody: {},
+      })
+
+      // 3. 우측 작업비 단가표 보장(멱등) — 소포장 800 / 벌크 450
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!M4:N6`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['작업비 단가', ''], ['소포장', 800], ['벌크', 450]] },
+      })
+
+      // 4. 데이터검증 재설정 — 탭의 숫자 sheetId 필요
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find(
+        (s) => s.properties?.title === COST_TAB,
+      )?.properties?.sheetId
+      if (sheetId == null) {
+        return NextResponse.json(
+          { ok: false, error: `탭 '${COST_TAB}' sheetId를 찾지 못했습니다.` },
+          { status: 500 },
+        )
+      }
+
+      // 데이터 영역 F5:F, G5:G (0-based: row5→4, F열→5, G열→6)
+      const listRule = (values: string[]) => ({
+        condition: {
+          type: 'ONE_OF_LIST',
+          values: values.map((v) => ({ userEnteredValue: v })),
+        },
+        showCustomUi: true,
+        strict: false,
+      })
+      const gridF = { sheetId, startRowIndex: 4, endRowIndex: LAST, startColumnIndex: 5, endColumnIndex: 6 }
+      const gridG = { sheetId, startRowIndex: 4, endRowIndex: LAST, startColumnIndex: 6, endColumnIndex: 7 }
+      const gridHL = { sheetId, startRowIndex: 4, endRowIndex: LAST, startColumnIndex: 7, endColumnIndex: 12 }
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          requests: [
+            // 옛 소포장/벌크 등 잔여 검증 제거(H:L)
+            { setDataValidation: { range: gridHL } },
+            // F열: 과세/면세 (옛 소포장/벌크 규칙 덮어씀)
+            { setDataValidation: { range: gridF, rule: listRule(['과세', '면세']) } },
+            // G열: O/X
+            { setDataValidation: { range: gridG, rule: listRule(['O', 'X']) } },
+          ],
+        },
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '원가표 정리 완료(H이후 클리어·F 과세/면세·G O/X 검증 재설정, M·N 단가표 보존)',
+      })
+    }
+
     // ── 기존 원료 수정 ────────────────────────────────────────────
     if (action === 'update') {
       const { gubun, item, variety, field, oldValue, newValue, applyFrom, role } = body
