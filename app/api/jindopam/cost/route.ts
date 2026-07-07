@@ -221,6 +221,53 @@ export async function POST(req: Request) {
       })
     }
 
+    // ── 가공비·배송비 참고 기준표 배치 (수동 1회) ─────────────────
+    // 우측 옛 M/N 작업비 단가표 제거 후 P~R에 가공비/배송비 기준표 배치.
+    // 원곡 데이터(A:G)·원곡가는 건드리지 않음.
+    if (action === 'init4') {
+      // 1. 우측 구 단가표 영역 클리어 (M~R)
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!M4:R100`,
+        requestBody: {},
+      })
+
+      // 2. 가공비 블록 P4:Q9 · 배송비 블록 P11:R14 (행 오프셋 고정 → 클라 read가 이 배치 가정)
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            {
+              range: `${quote(COST_TAB)}!P4:Q9`,
+              values: [
+                ['가공비', '단가'],
+                ['작업비(소포장)', 800],
+                ['작업비(벌크)', 450],
+                ['파쇄비', 600],
+                ['혼합비(5곡까지)', 350],
+                ['혼합비(추가1곡당)', 70],
+              ],
+            },
+            {
+              range: `${quote(COST_TAB)}!P11:R14`,
+              values: [
+                ['규격', '박스', '택배'],
+                ['소', 371, 2100],
+                ['중', 1123, 2800],
+                ['대', 1300, 4400],
+              ],
+            },
+          ],
+        },
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '가공비·배송비 참고표 배치 완료 (가공비 P4:Q9 · 배송비 P11:R14)',
+      })
+    }
+
     // ── 기존 원료 수정 ────────────────────────────────────────────
     if (action === 'update') {
       const { gubun, item, variety, field, oldValue, newValue, applyFrom, role } = body

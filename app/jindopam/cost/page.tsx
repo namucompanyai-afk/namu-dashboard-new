@@ -6,6 +6,20 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
 const RANGE = "'진도팜 원가표'!A4:G"
+// 가공비(P5:Q9)·배송비(P12:R14) 참고 기준표 (init4가 배치한 고정 오프셋)
+const RANGE_REF = "'진도팜 원가표'!P4:R14"
+
+// 참고표 값 (시트에서 read, 하드코딩 아님)
+type RefCost = {
+  작업비소포장: number
+  작업비벌크: number
+  파쇄비: number
+  혼합비기본: number
+  혼합비추가: number
+}
+type RefShip = { 규격: string; 박스: number; 택배: number }
+// 배송비 규격별 기준(무게) 표기 — UI 라벨(값 아님)
+const SHIP_STD: Record<string, string> = { 소: '1~3kg', 중: '4~10kg', 대: '11~20kg' }
 
 // R4 헤더 순서(원곡가 중심): A 원료ID / B 구분 / C 품목 / D 품종 /
 //                            E 1kg당 원곡가 / F 과세여부 / G 취급상태
@@ -101,6 +115,9 @@ export default function JindopamCostPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editorLabel, setEditorLabel] = useState('나무') // 변동로그 변경자 표기
+  const [refCost, setRefCost] = useState<RefCost | null>(null)
+  const [refShip, setRefShip] = useState<RefShip[]>([])
+  const [showRef, setShowRef] = useState(false) // 참고표 펼침 (기본 접힘)
   const device = useDevice()
 
   // 로그인 role로 변경자 표기만 판별 (뷰 자체는 통합, 분기 없음)
@@ -126,13 +143,13 @@ export default function JindopamCostPage() {
       setLoading(false)
       return
     }
-    const url =
-      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/` +
-      `${encodeURIComponent(RANGE)}?key=${key}`
+    const base = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/`
+    const url = `${base}${encodeURIComponent(RANGE)}?key=${key}`
+    const refUrl = `${base}${encodeURIComponent(RANGE_REF)}?key=${key}`
     try {
       setLoading(true)
       setError(null)
-      const res = await fetch(url)
+      const [res, refRes] = await Promise.all([fetch(url), fetch(refUrl)])
       if (!res.ok) throw new Error(`시트 응답 오류 (${res.status})`)
       const json = await res.json()
       const values: string[][] = json.values || []
@@ -150,6 +167,24 @@ export default function JindopamCostPage() {
           status: (r[6] || '').trim(),
         }))
       setRows(data)
+      // 참고 기준표 (P4:R14 고정 오프셋: 0=가공비헤더, 1~5=가공비, 7=배송비헤더, 8~10=배송비)
+      if (refRes.ok) {
+        const rj = await refRes.json()
+        const rv: string[][] = rj.values || []
+        setRefCost({
+          작업비소포장: toNum(rv[1]?.[1]),
+          작업비벌크: toNum(rv[2]?.[1]),
+          파쇄비: toNum(rv[3]?.[1]),
+          혼합비기본: toNum(rv[4]?.[1]),
+          혼합비추가: toNum(rv[5]?.[1]),
+        })
+        setRefShip(
+          [8, 9, 10]
+            .map((i) => rv[i])
+            .filter((r) => r && (r[0] || '').trim() !== '')
+            .map((r) => ({ 규격: (r[0] || '').trim(), 박스: toNum(r[1]), 택배: toNum(r[2]) })),
+        )
+      }
       setLoading(false)
     } catch (e: any) {
       setError(e?.message || '데이터를 불러오지 못했습니다.')
@@ -202,6 +237,80 @@ export default function JindopamCostPage() {
         >
           ＋ 신규 원료 추가
         </button>
+      </div>
+
+      {/* 가공비·배송비 참고표 (기본 접힘) */}
+      <div>
+        <button
+          onClick={() => setShowRef((v) => !v)}
+          className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <span className={'inline-block transition-transform ' + (showRef ? 'rotate-90' : '')}>▶</span>
+          가공비·배송비 참고표
+        </button>
+
+        {showRef && (
+          <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* 가공비 */}
+            <div className="rounded-lg border border-gray-200 bg-white">
+              <div className="border-b border-gray-100 px-4 py-2 text-sm font-semibold">가공비</div>
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">항목</th>
+                    <th className="px-3 py-2 text-right font-medium">단가</th>
+                    <th className="px-3 py-2 text-left font-medium">단위</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    { label: '작업비(소포장)', v: refCost?.작업비소포장 },
+                    { label: '작업비(벌크)', v: refCost?.작업비벌크 },
+                    { label: '파쇄비', v: refCost?.파쇄비 },
+                    { label: '혼합비(5곡까지)', v: refCost?.혼합비기본 },
+                    { label: '혼합비(추가1곡당)', v: refCost?.혼합비추가 },
+                  ].map((r) => (
+                    <tr key={r.label} className="border-t border-gray-100">
+                      <td className="px-3 py-2 text-left">{r.label}</td>
+                      <td className="px-3 py-2 text-right font-mono">{(r.v ?? 0).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-left text-gray-400">원/kg</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 배송비 */}
+            <div className="rounded-lg border border-gray-200 bg-white">
+              <div className="flex items-center gap-2 border-b border-gray-100 px-4 py-2 text-sm font-semibold">
+                배송비
+                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-normal text-gray-500">참고</span>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">규격</th>
+                    <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-right font-medium">택배</th>
+                    <th className="px-3 py-2 text-left font-medium">기준</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {refShip.map((s) => (
+                    <tr key={s.규격} className="border-t border-gray-100">
+                      <td className="px-3 py-2 text-left">{s.규격}</td>
+                      <td className="px-3 py-2 text-right font-mono">{s.박스.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right font-mono">{s.택배.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-left text-gray-400">
+                        {SHIP_STD[s.규격] || ''}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 본문 카드 */}
