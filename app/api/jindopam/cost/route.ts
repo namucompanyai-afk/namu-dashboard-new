@@ -88,6 +88,21 @@ function bumpFormula(f: unknown, from: number, to: number): string | null {
 
 const quote = (tab: string) => `'${tab.replace(/'/g, "''")}'`
 
+// 슬랙 알림 (#거래처-관련-진도팜) — 부가 기능. URL 없거나 실패해도 저장에 영향 없음
+async function notifySlack(text: string): Promise<void> {
+  const url = process.env.SLACK_WEBHOOK_URL
+  if (!url) return
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+  } catch (e) {
+    console.error('[jindopam/cost] slack 알림 실패(무시):', (e as any)?.message || e)
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
@@ -402,6 +417,20 @@ export async function POST(req: Request) {
         },
       })
 
+      // 슬랙 알림 (저장 성공 후 · 실패 무시)
+      if (kind === 'cost') {
+        await notifySlack(
+          `가공비 변경\n항목: ${item}\n${oldValue ?? ''} → ${newValue ?? ''}\n변경자: ${editor || ''} · 적용일: ${applyFrom || ''}`,
+        )
+      } else {
+        // 배송비 item 예: '박스(소)' → 규격/필드 분해
+        const m = /^(박스|택배)\((소|중|대)\)$/.exec(String(item))
+        const seg = m ? `${m[2]} · ${m[1]}` : item
+        await notifySlack(
+          `배송비 변경\n${seg}\n${oldValue ?? ''} → ${newValue ?? ''}\n변경자: ${editor || ''} · 적용일: ${applyFrom || ''}`,
+        )
+      }
+
       return NextResponse.json({ ok: true, message: `${item} 수정 완료` })
     }
 
@@ -468,6 +497,11 @@ export async function POST(req: Request) {
         },
       })
 
+      // 슬랙 알림 (저장 성공 후 · 실패 무시)
+      await notifySlack(
+        `원가표 · 원곡가 변경\n품목: ${gubun} ${item}\n${oldValue ?? ''} → ${newValue ?? ''}\n변경자: ${role || ''} · 적용일: ${applyFrom || ''}`,
+      )
+
       return NextResponse.json({ ok: true, row: targetRow })
     }
 
@@ -510,6 +544,11 @@ export async function POST(req: Request) {
         spreadsheetId: SHEET_ID,
         requestBody: { valueInputOption: 'USER_ENTERED', data },
       })
+
+      // 슬랙 알림 (저장 성공 후 · 실패 무시)
+      await notifySlack(
+        `원가표 · 신규 원료 추가\n${gubun} ${item} · 원곡가 ${wongok ?? ''}\n등록: ${body?.role || ''}`,
+      )
 
       return NextResponse.json({ ok: true, row: newRow, rawId: makeRawId(gubun, item, variety || '') })
     }
