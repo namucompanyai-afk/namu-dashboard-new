@@ -4,13 +4,8 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 
-// 진도팜 계정(role='진도팜') 허용 경로 화이트리스트 (진도팜 그룹 4개만)
-const JINDO_ALLOWED = [
-  '/jindopam/cost',
-  '/jindopam/settlement',
-  '/jindopam/orders',
-  '/jindopam/shared',
-];
+// 진도팜 계정(role='진도팜') 허용 경로 화이트리스트 (원가표 하나로 축소)
+const JINDO_ALLOWED = ['/jindopam/cost'];
 
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

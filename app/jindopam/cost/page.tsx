@@ -6,13 +6,11 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
 const RANGE = "'진도팜 원가표'!A4:G"
-// 작업비 단가표: N5=소포장, N6=벌크
-const RANGE_WORK = "'진도팜 원가표'!N5:N6"
 
 // R4 헤더 순서(원곡가 중심): A 원료ID / B 구분 / C 품목 / D 품종 /
 //                            E 1kg당 원곡가 / F 과세여부 / G 취급상태
 type CostRow = {
-  rawId: string      // A 원료ID
+  rawId: string      // A 원료ID (내부 키, 표시 안 함)
   category: string   // B 구분
   item: string       // C 품목
   variety: string    // D 품종
@@ -20,10 +18,6 @@ type CostRow = {
   tax: string        // F 과세여부
   status: string     // G 취급상태
 }
-
-// 포장별 작업비 단가
-type Pack = '소포장' | '벌크'
-type WorkTable = Record<Pack, number>
 
 // 콤마/원 제거 후 숫자화
 const toNum = (v: string | undefined): number => {
@@ -39,51 +33,25 @@ const catRank = (c: string) => {
   return i === -1 ? CATEGORY_ORDER.length : i
 }
 
-// ── 역할 판별 (기존 인증에 진도팜/나무 역할 없음 → 상단 토글) ──────
-type Role = 'jindo' | 'namu'
 type Device = 'pc' | 'phone'
 
-// 컬럼 정의 — workCost·finalCost 는 나무 뷰 계산 컬럼(시트에 없음)
-type ColKey =
-  | 'rawId'
-  | 'category'
-  | 'item'
-  | 'variety'
-  | 'price'
-  | 'workCost'
-  | 'finalCost'
-  | 'tax'
-  | 'status'
+// 컬럼 정의 (통합 원곡표 · 진도팜/나무 뷰 구분 없음)
+type ColKey = 'category' | 'item' | 'variety' | 'price' | 'tax' | 'status'
 const COL_LABEL: Record<ColKey, string> = {
-  rawId: '원료ID',
   category: '구분',
   item: '품목',
   variety: '품종',
   price: '1kg당 원곡가',
-  workCost: '작업비',
-  finalCost: '최종 원가',
   tax: '과세여부',
   status: '취급상태',
 }
-const NUM_COLS: ColKey[] = ['price', 'workCost', 'finalCost']
+const NUM_COLS: ColKey[] = ['price']
 
-// 역할 × 기기별 노출 컬럼
-function visibleCols(role: Role, device: Device): ColKey[] {
-  if (device === 'pc') {
-    return role === 'jindo'
-      ? ['category', 'item', 'variety', 'price', 'tax', 'status']
-      : ['category', 'item', 'variety', 'price', 'workCost', 'finalCost', 'tax', 'status']
-  }
-  // phone
-  return role === 'jindo'
-    ? ['category', 'item', 'variety', 'price']
-    : ['category', 'item', 'variety', 'price', 'workCost', 'finalCost', 'tax']
-}
-
-// 최종원가 = 과세면 (원곡가+작업비)×1.1 반올림, 면세면 원곡가+작업비
-function calcFinal(price: number, work: number, tax: string): number {
-  const base = price + work
-  return tax.includes('과세') ? Math.round(base * 1.1) : base
+// 기기별 노출 컬럼 — 폰은 취급상태 숨김
+function visibleCols(device: Device): ColKey[] {
+  return device === 'pc'
+    ? ['category', 'item', 'variety', 'price', 'tax', 'status']
+    : ['category', 'item', 'variety', 'price', 'tax']
 }
 
 // 기기 감지 (md 브레이크포인트 768px)
@@ -132,23 +100,17 @@ export default function JindopamCostPage() {
   const [rows, setRows] = useState<CostRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [role, setRole] = useState<Role>('namu')
-  const [isJindoAccount, setIsJindoAccount] = useState(false) // 진도팜 role 계정 여부(토글 숨김)
-  const [pack, setPack] = useState<Pack>('소포장')
-  const [workTable, setWorkTable] = useState<WorkTable>({ 소포장: 0, 벌크: 0 })
+  const [editorLabel, setEditorLabel] = useState('나무') // 변동로그 변경자 표기
   const device = useDevice()
 
-  // 로그인 role 자동 판별: '진도팜'→jindo 고정(토글 숨김), 그 외→namu
+  // 로그인 role로 변경자 표기만 판별 (뷰 자체는 통합, 분기 없음)
   useEffect(() => {
     try {
       const userStr = localStorage.getItem('user')
       const userRole = userStr ? JSON.parse(userStr)?.role : null
-      if (userRole === '진도팜') {
-        setRole('jindo')
-        setIsJindoAccount(true)
-      }
+      setEditorLabel(userRole === '진도팜' ? '진도팜' : '나무')
     } catch {
-      /* 파싱 실패 시 기본 나무 뷰 */
+      /* 파싱 실패 시 기본 '나무' */
     }
   }, [])
 
@@ -156,7 +118,7 @@ export default function JindopamCostPage() {
   const [editRow, setEditRow] = useState<CostRow | null>(null)
   const [showCreate, setShowCreate] = useState(false)
 
-  // 원가표 + 작업비 단가 read (저장 후 재호출용으로 함수화)
+  // 원가표 read (저장 후 재호출용으로 함수화)
   const loadData = useCallback(async () => {
     const key = process.env.NEXT_PUBLIC_GSHEET_API_KEY
     if (!key) {
@@ -164,13 +126,13 @@ export default function JindopamCostPage() {
       setLoading(false)
       return
     }
-    const base = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/`
-    const url = `${base}${encodeURIComponent(RANGE)}?key=${key}`
-    const workUrl = `${base}${encodeURIComponent(RANGE_WORK)}?key=${key}`
+    const url =
+      `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/` +
+      `${encodeURIComponent(RANGE)}?key=${key}`
     try {
       setLoading(true)
       setError(null)
-      const [res, workRes] = await Promise.all([fetch(url), fetch(workUrl)])
+      const res = await fetch(url)
       if (!res.ok) throw new Error(`시트 응답 오류 (${res.status})`)
       const json = await res.json()
       const values: string[][] = json.values || []
@@ -187,12 +149,6 @@ export default function JindopamCostPage() {
           tax: (r[5] || '').trim(),
           status: (r[6] || '').trim(),
         }))
-      // 작업비 단가 (N5 소포장 / N6 벌크)
-      if (workRes.ok) {
-        const wj = await workRes.json()
-        const wv: string[][] = wj.values || []
-        setWorkTable({ 소포장: toNum(wv[0]?.[0]), 벌크: toNum(wv[1]?.[0]) })
-      }
       setRows(data)
       setLoading(false)
     } catch (e: any) {
@@ -205,9 +161,7 @@ export default function JindopamCostPage() {
     loadData()
   }, [loadData])
 
-  const roleLabel = role === 'jindo' ? '진도팜' : '나무'
-  const cols = visibleCols(role, device)
-  const workCost = workTable[pack]
+  const cols = visibleCols(device)
 
   const view = useMemo(() => {
     // 정렬: 구분(고정순서) → 품목(ko) → 품종(ko). 포장 필터 없음(토글로 대체)
@@ -241,58 +195,14 @@ export default function JindopamCostPage() {
           <h1 className="text-2xl font-semibold">원가표</h1>
           <p className="text-sm text-gray-500 mt-1">진도팜 → 나무 공급 단가</p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* 역할 토글 (진도팜/나무) — 나무 계정만 노출, 진도팜은 뷰 고정 */}
-          {!isJindoAccount && (
-            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
-              {(['jindo', 'namu'] as Role[]).map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRole(r)}
-                  className={
-                    'px-3 py-1.5 rounded-md font-medium transition-colors ' +
-                    (role === r ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
-                  }
-                >
-                  {r === 'jindo' ? '진도팜' : '나무'}
-                </button>
-              ))}
-            </div>
-          )}
-          {/* 신규 추가 — 진도팜·나무 공통 */}
-          <button
-            onClick={() => setShowCreate(true)}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
-          >
-            ＋ 신규 원료 추가
-          </button>
-        </div>
+        {/* 신규 추가 (진도팜·나무 공통) */}
+        <button
+          onClick={() => setShowCreate(true)}
+          className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+        >
+          ＋ 신규 원료 추가
+        </button>
       </div>
-
-      {/* 나무 뷰: 포장 토글 (최종원가에 얹는 작업비 기준) */}
-      {role === 'namu' && (
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm">
-            {(['소포장', '벌크'] as Pack[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPack(p)}
-                className={
-                  'px-3 py-1.5 rounded-md font-medium transition-colors ' +
-                  (pack === p ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100')
-                }
-              >
-                {p}
-              </button>
-            ))}
-          </div>
-          <span className="text-sm text-gray-500">
-            작업비 <span className="font-mono font-medium text-gray-700">{workCost.toLocaleString()}</span>원
-            <span className="text-gray-400"> · 최종원가 = (원곡가+작업비){' '}
-            <span className="text-gray-500">과세 시 ×1.1</span></span>
-          </span>
-        </div>
-      )}
 
       {/* 본문 카드 */}
       <div className="rounded-lg border border-gray-200 bg-white">
@@ -314,9 +224,6 @@ export default function JindopamCostPage() {
           <>
             <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
               <span className="text-sm text-gray-500">총 {view.length}건</span>
-              {role === 'namu' && device === 'phone' && (
-                <span className="text-xs text-gray-400">소포장 견적 뷰</span>
-              )}
             </div>
             <div className="max-h-[70vh] overflow-auto">
               <table className="w-full text-sm">
@@ -365,22 +272,17 @@ export default function JindopamCostPage() {
                             key={k}
                             className={
                               'whitespace-nowrap px-3 py-2 ' +
-                              (NUM_COLS.includes(k) ? 'text-right font-mono' : 'text-left') +
-                              (k === 'finalCost' ? ' font-semibold text-gray-900' : '')
+                              (NUM_COLS.includes(k) ? 'text-right font-mono' : 'text-left')
                             }
                           >
                             {k === 'tax' ? (
                               <TaxBadge value={row.tax} />
                             ) : k === 'status' ? (
                               <StatusMark value={row.status} />
-                            ) : k === 'workCost' ? (
-                              workCost.toLocaleString()
-                            ) : k === 'finalCost' ? (
-                              calcFinal(row.price, workCost, row.tax).toLocaleString()
                             ) : k === 'price' ? (
                               row.price.toLocaleString()
                             ) : (
-                              (row[k as 'rawId' | 'item' | 'variety'] as string) || '-'
+                              (row[k as 'item' | 'variety'] as string) || '-'
                             )}
                           </td>
                         )
@@ -405,7 +307,7 @@ export default function JindopamCostPage() {
       {editRow && (
         <EditModal
           row={editRow}
-          roleLabel={roleLabel}
+          roleLabel={editorLabel}
           onClose={() => setEditRow(null)}
           onSaved={async () => {
             setEditRow(null)
@@ -415,7 +317,7 @@ export default function JindopamCostPage() {
       )}
       {showCreate && (
         <CreateModal
-          roleLabel={roleLabel}
+          roleLabel={editorLabel}
           onClose={() => setShowCreate(false)}
           onSaved={async () => {
             setShowCreate(false)
