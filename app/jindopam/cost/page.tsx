@@ -6,8 +6,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
 const RANGE = "'진도팜 원가표'!A4:G"
-// 가공비(P5:Q9)·배송비(P12:R14) 참고 기준표 (init4가 배치한 고정 오프셋)
-const RANGE_REF = "'진도팜 원가표'!P4:R14"
+// 가공비(J5:K9)·배송비(J12:L14) 참고 기준표 (init5가 배치한 고정 오프셋)
+const RANGE_REF = "'진도팜 원가표'!J4:L14"
 
 // 참고표 값 (시트에서 read, 하드코딩 아님)
 type RefCost = {
@@ -118,6 +118,8 @@ export default function JindopamCostPage() {
   const [refCost, setRefCost] = useState<RefCost | null>(null)
   const [refShip, setRefShip] = useState<RefShip[]>([])
   const [showRef, setShowRef] = useState(false) // 참고표 펼침 (기본 접힘)
+  const [editRefCost, setEditRefCost] = useState(false) // 가공비 수정 모달
+  const [editRefShip, setEditRefShip] = useState(false) // 배송비 수정 모달
   const device = useDevice()
 
   // 로그인 role로 변경자 표기만 판별 (뷰 자체는 통합, 분기 없음)
@@ -253,7 +255,15 @@ export default function JindopamCostPage() {
           <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* 가공비 */}
             <div className="rounded-lg border border-gray-200 bg-white">
-              <div className="border-b border-gray-100 px-4 py-2 text-sm font-semibold">가공비</div>
+              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 text-sm font-semibold">
+                <span>가공비</span>
+                <button
+                  onClick={() => setEditRefCost(true)}
+                  className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                >
+                  수정
+                </button>
+              </div>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-600">
                   <tr>
@@ -282,9 +292,17 @@ export default function JindopamCostPage() {
 
             {/* 배송비 */}
             <div className="rounded-lg border border-gray-200 bg-white">
-              <div className="flex items-center gap-2 border-b border-gray-100 px-4 py-2 text-sm font-semibold">
-                배송비
-                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-normal text-gray-500">참고</span>
+              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 text-sm font-semibold">
+                <span className="flex items-center gap-2">
+                  배송비
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-normal text-gray-500">참고</span>
+                </span>
+                <button
+                  onClick={() => setEditRefShip(true)}
+                  className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                >
+                  수정
+                </button>
               </div>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-600">
@@ -430,6 +448,26 @@ export default function JindopamCostPage() {
           onClose={() => setShowCreate(false)}
           onSaved={async () => {
             setShowCreate(false)
+            await loadData()
+          }}
+        />
+      )}
+      {editRefCost && (
+        <RefCostModal
+          current={refCost}
+          onClose={() => setEditRefCost(false)}
+          onSaved={async () => {
+            setEditRefCost(false)
+            await loadData()
+          }}
+        />
+      )}
+      {editRefShip && (
+        <RefShipModal
+          current={refShip}
+          onClose={() => setEditRefShip(false)}
+          onSaved={async () => {
+            setEditRefShip(false)
             await loadData()
           }}
         />
@@ -703,6 +741,179 @@ function CreateModal({
             className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-white hover:bg-gray-700 disabled:opacity-50"
           >
             {saving ? '저장 중…' : '추가'}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+const REF_INPUT =
+  'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400'
+
+// ── 가공비 참고표 수정 모달 ───────────────────────────────────────
+function RefCostModal({
+  current,
+  onClose,
+  onSaved,
+}: {
+  current: RefCost | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const FIELDS: { key: keyof RefCost; label: string }[] = [
+    { key: '작업비소포장', label: '작업비(소포장)' },
+    { key: '작업비벌크', label: '작업비(벌크)' },
+    { key: '파쇄비', label: '파쇄비' },
+    { key: '혼합비기본', label: '혼합비(5곡까지)' },
+    { key: '혼합비추가', label: '혼합비(추가1곡당)' },
+  ]
+  const [vals, setVals] = useState<Record<keyof RefCost, string>>({
+    작업비소포장: String(current?.작업비소포장 ?? ''),
+    작업비벌크: String(current?.작업비벌크 ?? ''),
+    파쇄비: String(current?.파쇄비 ?? ''),
+    혼합비기본: String(current?.혼합비기본 ?? ''),
+    혼합비추가: String(current?.혼합비추가 ?? ''),
+  })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const num = (s: string) => Number(String(s).replace(/[^0-9.-]/g, '')) || 0
+
+  const handleSave = async () => {
+    setSaving(true)
+    setErr(null)
+    try {
+      const res = await fetch(POST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update-ref',
+          kind: 'cost',
+          작업비소포장: num(vals.작업비소포장),
+          작업비벌크: num(vals.작업비벌크),
+          파쇄비: num(vals.파쇄비),
+          혼합비기본: num(vals.혼합비기본),
+          혼합비추가: num(vals.혼합비추가),
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+      onSaved()
+    } catch (e: any) {
+      setErr(e?.message || '저장 중 오류가 발생했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell title="가공비 수정" onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        {FIELDS.map((f) => (
+          <label key={f.key} className="flex items-center gap-3">
+            <span className="w-32 shrink-0 text-gray-600">{f.label}</span>
+            <input
+              type="number"
+              value={vals[f.key]}
+              onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))}
+              className={REF_INPUT + ' text-right font-mono'}
+            />
+            <span className="shrink-0 text-gray-400">원/kg</span>
+          </label>
+        ))}
+        {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50">
+            취소
+          </button>
+          <button onClick={handleSave} disabled={saving} className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-white hover:bg-gray-700 disabled:opacity-50">
+            {saving ? '저장 중…' : '저장'}
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── 배송비 참고표 수정 모달 ───────────────────────────────────────
+function RefShipModal({
+  current,
+  onClose,
+  onSaved,
+}: {
+  current: RefShip[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const SIZES = ['소', '중', '대']
+  const init = (sz: string) => current.find((s) => s.규격 === sz)
+  const [rows, setRows] = useState<Record<string, { 박스: string; 택배: string }>>(() => {
+    const o: Record<string, { 박스: string; 택배: string }> = {}
+    for (const sz of SIZES) {
+      const c = init(sz)
+      o[sz] = { 박스: String(c?.박스 ?? ''), 택배: String(c?.택배 ?? '') }
+    }
+    return o
+  })
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const num = (s: string) => Number(String(s).replace(/[^0-9.-]/g, '')) || 0
+
+  const handleSave = async () => {
+    setSaving(true)
+    setErr(null)
+    try {
+      const res = await fetch(POST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update-ref',
+          kind: 'ship',
+          ship: SIZES.map((sz) => ({ 규격: sz, 박스: num(rows[sz].박스), 택배: num(rows[sz].택배) })),
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+      onSaved()
+    } catch (e: any) {
+      setErr(e?.message || '저장 중 오류가 발생했습니다.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <ModalShell title="배송비 수정" onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-[2rem_1fr_1fr] items-center gap-2 text-xs text-gray-400">
+          <span>규격</span>
+          <span className="text-right">박스</span>
+          <span className="text-right">택배</span>
+        </div>
+        {SIZES.map((sz) => (
+          <div key={sz} className="grid grid-cols-[2rem_1fr_1fr] items-center gap-2">
+            <span className="font-medium text-gray-700">{sz}</span>
+            <input
+              type="number"
+              value={rows[sz].박스}
+              onChange={(e) => setRows((v) => ({ ...v, [sz]: { ...v[sz], 박스: e.target.value } }))}
+              className={REF_INPUT + ' text-right font-mono'}
+            />
+            <input
+              type="number"
+              value={rows[sz].택배}
+              onChange={(e) => setRows((v) => ({ ...v, [sz]: { ...v[sz], 택배: e.target.value } }))}
+              className={REF_INPUT + ' text-right font-mono'}
+            />
+          </div>
+        ))}
+        {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50">
+            취소
+          </button>
+          <button onClick={handleSave} disabled={saving} className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-white hover:bg-gray-700 disabled:opacity-50">
+            {saving ? '저장 중…' : '저장'}
           </button>
         </div>
       </div>

@@ -268,6 +268,84 @@ export async function POST(req: Request) {
       })
     }
 
+    // ── 참고표 J열 이동 (수동 1회) ────────────────────────────────
+    // P4:R14(옛 위치) → J4:L14. H·I열·원곡 데이터(A:G)는 건드리지 않음.
+    if (action === 'init5') {
+      // 1. 새 위치 J4:K9(가공비) · J11:L14(배송비)
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            {
+              range: `${quote(COST_TAB)}!J4:K9`,
+              values: [
+                ['가공비', '단가'],
+                ['작업비(소포장)', 800],
+                ['작업비(벌크)', 450],
+                ['파쇄비', 600],
+                ['혼합비(5곡까지)', 350],
+                ['혼합비(추가1곡당)', 70],
+              ],
+            },
+            {
+              range: `${quote(COST_TAB)}!J11:L14`,
+              values: [
+                ['규격', '박스', '택배'],
+                ['소', 371, 2100],
+                ['중', 1123, 2800],
+                ['대', 1300, 4400],
+              ],
+            },
+          ],
+        },
+      })
+      // 2. 옛 위치 P4:R14 클리어
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!P4:R100`,
+        requestBody: {},
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '참고표 J열 이동 완료 (가공비 J4:K9 · 배송비 J11:L14, 옛 P:R 클리어)',
+      })
+    }
+
+    // ── 참고표 수정 (변동로그 미기록) ─────────────────────────────
+    // kind='cost': 가공비 5항목 단가 → K5:K9 / kind='ship': 배송비 소·중·대 박스·택배 → K12:L14
+    if (action === 'update-ref') {
+      const kind = body?.kind as string
+      if (kind === 'cost') {
+        const { 작업비소포장, 작업비벌크, 파쇄비, 혼합비기본, 혼합비추가 } = body
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID,
+          range: `${quote(COST_TAB)}!K5:K9`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: {
+            values: [[작업비소포장], [작업비벌크], [파쇄비], [혼합비기본], [혼합비추가]],
+          },
+        })
+        return NextResponse.json({ ok: true, message: '가공비 참고표 수정 완료' })
+      }
+      if (kind === 'ship') {
+        // ship: [{규격,박스,택배}...] → 고정 순서 소·중·대(K12:L14)
+        const ship = Array.isArray(body?.ship) ? body.ship : []
+        const bySize: Record<string, { 박스: any; 택배: any }> = {}
+        for (const s of ship) bySize[String(s?.규격 ?? '').trim()] = { 박스: s?.박스, 택배: s?.택배 }
+        const rowFor = (sz: string) => [bySize[sz]?.박스 ?? '', bySize[sz]?.택배 ?? '']
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID,
+          range: `${quote(COST_TAB)}!K12:L14`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [rowFor('소'), rowFor('중'), rowFor('대')] },
+        })
+        return NextResponse.json({ ok: true, message: '배송비 참고표 수정 완료' })
+      }
+      return NextResponse.json({ ok: false, error: `알 수 없는 kind: ${kind}` }, { status: 400 })
+    }
+
     // ── 기존 원료 수정 ────────────────────────────────────────────
     if (action === 'update') {
       const { gubun, item, variety, field, oldValue, newValue, applyFrom, role } = body
