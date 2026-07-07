@@ -118,8 +118,12 @@ export default function JindopamCostPage() {
   const [refCost, setRefCost] = useState<RefCost | null>(null)
   const [refShip, setRefShip] = useState<RefShip[]>([])
   const [showRef, setShowRef] = useState(false) // 참고표 펼침 (기본 접힘)
-  const [editRefCost, setEditRefCost] = useState(false) // 가공비 수정 모달
-  const [editRefShip, setEditRefShip] = useState(false) // 배송비 수정 모달
+  // 참고표 항목별 수정 모달 (가공비/배송비 공용)
+  const [refEdit, setRefEdit] = useState<null | {
+    title: string
+    kind: 'cost' | 'ship'
+    fields: { item: string; label: string; current: number }[]
+  }>(null)
   const device = useDevice()
 
   // 로그인 role로 변경자 표기만 판별 (뷰 자체는 통합, 분기 없음)
@@ -255,35 +259,42 @@ export default function JindopamCostPage() {
           <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
             {/* 가공비 */}
             <div className="rounded-lg border border-gray-200 bg-white">
-              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 text-sm font-semibold">
-                <span>가공비</span>
-                <button
-                  onClick={() => setEditRefCost(true)}
-                  className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                >
-                  수정
-                </button>
-              </div>
+              <div className="border-b border-gray-100 px-4 py-2 text-sm font-semibold">가공비</div>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-600">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">항목</th>
                     <th className="px-3 py-2 text-right font-medium">단가</th>
                     <th className="px-3 py-2 text-left font-medium">단위</th>
+                    <th className="px-3 py-2 text-right font-medium">수정</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[
-                    { label: '작업비(소포장)', v: refCost?.작업비소포장 },
-                    { label: '작업비(벌크)', v: refCost?.작업비벌크 },
-                    { label: '파쇄비', v: refCost?.파쇄비 },
-                    { label: '혼합비(5곡까지)', v: refCost?.혼합비기본 },
-                    { label: '혼합비(추가1곡당)', v: refCost?.혼합비추가 },
+                    { item: '작업비(소포장)', v: refCost?.작업비소포장 },
+                    { item: '작업비(벌크)', v: refCost?.작업비벌크 },
+                    { item: '파쇄비', v: refCost?.파쇄비 },
+                    { item: '혼합비(5곡까지)', v: refCost?.혼합비기본 },
+                    { item: '혼합비(추가1곡당)', v: refCost?.혼합비추가 },
                   ].map((r) => (
-                    <tr key={r.label} className="border-t border-gray-100">
-                      <td className="px-3 py-2 text-left">{r.label}</td>
+                    <tr key={r.item} className="border-t border-gray-100">
+                      <td className="px-3 py-2 text-left">{r.item}</td>
                       <td className="px-3 py-2 text-right font-mono">{(r.v ?? 0).toLocaleString()}</td>
                       <td className="px-3 py-2 text-left text-gray-400">원/kg</td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          onClick={() =>
+                            setRefEdit({
+                              title: `${r.item} 수정`,
+                              kind: 'cost',
+                              fields: [{ item: r.item, label: '단가', current: r.v ?? 0 }],
+                            })
+                          }
+                          className="rounded-md border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                        >
+                          수정
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -292,17 +303,9 @@ export default function JindopamCostPage() {
 
             {/* 배송비 */}
             <div className="rounded-lg border border-gray-200 bg-white">
-              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2 text-sm font-semibold">
-                <span className="flex items-center gap-2">
-                  배송비
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-normal text-gray-500">참고</span>
-                </span>
-                <button
-                  onClick={() => setEditRefShip(true)}
-                  className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
-                >
-                  수정
-                </button>
+              <div className="flex items-center gap-2 border-b border-gray-100 px-4 py-2 text-sm font-semibold">
+                배송비
+                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs font-normal text-gray-500">참고</span>
               </div>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-600">
@@ -311,6 +314,7 @@ export default function JindopamCostPage() {
                     <th className="px-3 py-2 text-right font-medium">박스</th>
                     <th className="px-3 py-2 text-right font-medium">택배</th>
                     <th className="px-3 py-2 text-left font-medium">기준</th>
+                    <th className="px-3 py-2 text-right font-medium">수정</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -321,6 +325,23 @@ export default function JindopamCostPage() {
                       <td className="px-3 py-2 text-right font-mono">{s.택배.toLocaleString()}</td>
                       <td className="px-3 py-2 text-left text-gray-400">
                         {SHIP_STD[s.규격] || ''}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          onClick={() =>
+                            setRefEdit({
+                              title: `배송비(${s.규격}) 수정`,
+                              kind: 'ship',
+                              fields: [
+                                { item: `박스(${s.규격})`, label: '박스', current: s.박스 },
+                                { item: `택배(${s.규격})`, label: '택배', current: s.택배 },
+                              ],
+                            })
+                          }
+                          className="rounded-md border border-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-100"
+                        >
+                          수정
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -452,22 +473,15 @@ export default function JindopamCostPage() {
           }}
         />
       )}
-      {editRefCost && (
-        <RefCostModal
-          current={refCost}
-          onClose={() => setEditRefCost(false)}
+      {refEdit && (
+        <RefEditModal
+          title={refEdit.title}
+          kind={refEdit.kind}
+          fields={refEdit.fields}
+          editor={editorLabel}
+          onClose={() => setRefEdit(null)}
           onSaved={async () => {
-            setEditRefCost(false)
-            await loadData()
-          }}
-        />
-      )}
-      {editRefShip && (
-        <RefShipModal
-          current={refShip}
-          onClose={() => setEditRefShip(false)}
-          onSaved={async () => {
-            setEditRefShip(false)
+            setRefEdit(null)
             await loadData()
           }}
         />
@@ -748,56 +762,60 @@ function CreateModal({
   )
 }
 
-const REF_INPUT =
-  'w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400'
-
-// ── 가공비 참고표 수정 모달 ───────────────────────────────────────
-function RefCostModal({
-  current,
+// ── 참고표 항목별 수정 모달 (변경전/후·적용시작일, 원곡가 모달과 통일) ──
+function RefEditModal({
+  title,
+  kind,
+  fields,
+  editor,
   onClose,
   onSaved,
 }: {
-  current: RefCost | null
+  title: string
+  kind: 'cost' | 'ship'
+  fields: { item: string; label: string; current: number }[]
+  editor: string
   onClose: () => void
   onSaved: () => void
 }) {
-  const FIELDS: { key: keyof RefCost; label: string }[] = [
-    { key: '작업비소포장', label: '작업비(소포장)' },
-    { key: '작업비벌크', label: '작업비(벌크)' },
-    { key: '파쇄비', label: '파쇄비' },
-    { key: '혼합비기본', label: '혼합비(5곡까지)' },
-    { key: '혼합비추가', label: '혼합비(추가1곡당)' },
-  ]
-  const [vals, setVals] = useState<Record<keyof RefCost, string>>({
-    작업비소포장: String(current?.작업비소포장 ?? ''),
-    작업비벌크: String(current?.작업비벌크 ?? ''),
-    파쇄비: String(current?.파쇄비 ?? ''),
-    혼합비기본: String(current?.혼합비기본 ?? ''),
-    혼합비추가: String(current?.혼합비추가 ?? ''),
-  })
+  const [next, setNext] = useState<Record<string, string>>({})
+  const [applyFrom, setApplyFrom] = useState('')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const num = (s: string) => Number(String(s).replace(/[^0-9.-]/g, '')) || 0
+  const num = (s: string) => Number(String(s).replace(/[^0-9.-]/g, ''))
 
   const handleSave = async () => {
     setSaving(true)
     setErr(null)
     try {
-      const res = await fetch(POST_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update-ref',
-          kind: 'cost',
-          작업비소포장: num(vals.작업비소포장),
-          작업비벌크: num(vals.작업비벌크),
-          파쇄비: num(vals.파쇄비),
-          혼합비기본: num(vals.혼합비기본),
-          혼합비추가: num(vals.혼합비추가),
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+      // 값이 입력되고 현재값과 다른 항목만 개별 update (로그도 항목마다)
+      const changes = fields
+        .map((f) => ({ f, raw: (next[f.item] ?? '').trim() }))
+        .filter(({ raw }) => raw !== '')
+        .map(({ f, raw }) => ({ f, nv: num(raw) }))
+        .filter(({ f, nv }) => Number.isFinite(nv) && nv !== f.current)
+
+      if (changes.length === 0) {
+        onClose()
+        return
+      }
+      for (const { f, nv } of changes) {
+        const res = await fetch(POST_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update-ref',
+            kind,
+            item: f.item,
+            oldValue: String(f.current),
+            newValue: String(nv),
+            applyFrom,
+            editor,
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+      }
       onSaved()
     } catch (e: any) {
       setErr(e?.message || '저장 중 오류가 발생했습니다.')
@@ -807,106 +825,44 @@ function RefCostModal({
   }
 
   return (
-    <ModalShell title="가공비 수정" onClose={onClose}>
+    <ModalShell title={title} onClose={onClose}>
       <div className="space-y-3 text-sm">
-        {FIELDS.map((f) => (
-          <label key={f.key} className="flex items-center gap-3">
-            <span className="w-32 shrink-0 text-gray-600">{f.label}</span>
-            <input
-              type="number"
-              value={vals[f.key]}
-              onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))}
-              className={REF_INPUT + ' text-right font-mono'}
-            />
-            <span className="shrink-0 text-gray-400">원/kg</span>
-          </label>
-        ))}
-        {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50">
-            취소
-          </button>
-          <button onClick={handleSave} disabled={saving} className="rounded-lg bg-gray-900 px-4 py-2 font-medium text-white hover:bg-gray-700 disabled:opacity-50">
-            {saving ? '저장 중…' : '저장'}
-          </button>
-        </div>
-      </div>
-    </ModalShell>
-  )
-}
-
-// ── 배송비 참고표 수정 모달 ───────────────────────────────────────
-function RefShipModal({
-  current,
-  onClose,
-  onSaved,
-}: {
-  current: RefShip[]
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const SIZES = ['소', '중', '대']
-  const init = (sz: string) => current.find((s) => s.규격 === sz)
-  const [rows, setRows] = useState<Record<string, { 박스: string; 택배: string }>>(() => {
-    const o: Record<string, { 박스: string; 택배: string }> = {}
-    for (const sz of SIZES) {
-      const c = init(sz)
-      o[sz] = { 박스: String(c?.박스 ?? ''), 택배: String(c?.택배 ?? '') }
-    }
-    return o
-  })
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-  const num = (s: string) => Number(String(s).replace(/[^0-9.-]/g, '')) || 0
-
-  const handleSave = async () => {
-    setSaving(true)
-    setErr(null)
-    try {
-      const res = await fetch(POST_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update-ref',
-          kind: 'ship',
-          ship: SIZES.map((sz) => ({ 규격: sz, 박스: num(rows[sz].박스), 택배: num(rows[sz].택배) })),
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
-      onSaved()
-    } catch (e: any) {
-      setErr(e?.message || '저장 중 오류가 발생했습니다.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <ModalShell title="배송비 수정" onClose={onClose}>
-      <div className="space-y-3 text-sm">
-        <div className="grid grid-cols-[2rem_1fr_1fr] items-center gap-2 text-xs text-gray-400">
-          <span>규격</span>
-          <span className="text-right">박스</span>
-          <span className="text-right">택배</span>
-        </div>
-        {SIZES.map((sz) => (
-          <div key={sz} className="grid grid-cols-[2rem_1fr_1fr] items-center gap-2">
-            <span className="font-medium text-gray-700">{sz}</span>
-            <input
-              type="number"
-              value={rows[sz].박스}
-              onChange={(e) => setRows((v) => ({ ...v, [sz]: { ...v[sz], 박스: e.target.value } }))}
-              className={REF_INPUT + ' text-right font-mono'}
-            />
-            <input
-              type="number"
-              value={rows[sz].택배}
-              onChange={(e) => setRows((v) => ({ ...v, [sz]: { ...v[sz], 택배: e.target.value } }))}
-              className={REF_INPUT + ' text-right font-mono'}
-            />
+        {fields.map((f) => (
+          <div key={f.item}>
+            <span className="mb-1 block text-gray-600">{f.label}</span>
+            <div className="flex items-center gap-2">
+              <label className="flex-1">
+                <span className="mb-1 block text-xs text-gray-400">변경 전</span>
+                <input
+                  type="text"
+                  value={f.current.toLocaleString()}
+                  readOnly
+                  className="w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-100 px-3 py-2 text-gray-500 focus:outline-none"
+                />
+              </label>
+              <span className="mt-5 text-gray-400">→</span>
+              <label className="flex-1">
+                <span className="mb-1 block text-xs text-gray-400">변경 후</span>
+                <input
+                  type="number"
+                  value={next[f.item] ?? ''}
+                  onChange={(e) => setNext((v) => ({ ...v, [f.item]: e.target.value }))}
+                  placeholder="새 값"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+                />
+              </label>
+            </div>
           </div>
         ))}
+        <label className="block">
+          <span className="mb-1 block text-gray-600">적용 시작일</span>
+          <input
+            type="date"
+            value={applyFrom}
+            onChange={(e) => setApplyFrom(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          />
+        </label>
         {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} disabled={saving} className="rounded-lg border border-gray-200 px-4 py-2 font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50">

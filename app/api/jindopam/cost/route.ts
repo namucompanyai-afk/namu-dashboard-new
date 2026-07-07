@@ -22,6 +22,7 @@ export const revalidate = 0
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 const COST_TAB = '진도팜 원가표'
 const LOG_TAB = '단가 변동 로그'
+const REFLOG_TAB = '가공비 변동 로그' // 가공비·배송비 참고표 변동 (원료용 LOG_TAB과 별개)
 const HEADER_ROW = 4 // R4 헤더, R5~ 데이터
 
 const LOG_HEADERS = [
@@ -34,6 +35,25 @@ const LOG_HEADERS = [
   '적용 시작일',
   '변경자',
 ]
+
+const REFLOG_HEADERS = ['일시', '종류', '항목', '변경 전', '변경 후', '적용 시작일', '변경자']
+
+// 참고표 항목명 → 셀 (가공비 K5:K9 / 배송비 K·L 12:14)
+const REF_COST_CELL: Record<string, string> = {
+  '작업비(소포장)': 'K5',
+  '작업비(벌크)': 'K6',
+  파쇄비: 'K7',
+  '혼합비(5곡까지)': 'K8',
+  '혼합비(추가1곡당)': 'K9',
+}
+const REF_SHIP_CELL: Record<string, string> = {
+  '박스(소)': 'K12',
+  '택배(소)': 'L12',
+  '박스(중)': 'K13',
+  '택배(중)': 'L13',
+  '박스(대)': 'K14',
+  '택배(대)': 'L14',
+}
 
 // 서비스 계정 → sheets 클라이언트
 function getSheets() {
@@ -313,37 +333,76 @@ export async function POST(req: Request) {
       })
     }
 
-    // ── 참고표 수정 (변동로그 미기록) ─────────────────────────────
-    // kind='cost': 가공비 5항목 단가 → K5:K9 / kind='ship': 배송비 소·중·대 박스·택배 → K12:L14
+    // ── 가공비 변동 로그 탭 신설/헤더 세팅 (수동 1회) ─────────────
+    if (action === 'init6') {
+      // 탭 없으면 생성
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(title))',
+      })
+      const exists = meta.data.sheets?.some((s) => s.properties?.title === REFLOG_TAB)
+      if (!exists) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          requestBody: { requests: [{ addSheet: { properties: { title: REFLOG_TAB } } }] },
+        })
+      }
+      // 헤더 R4 보장 (기존 데이터 보존)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(REFLOG_TAB)}!A${HEADER_ROW}:G${HEADER_ROW}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [REFLOG_HEADERS] },
+      })
+      return NextResponse.json({
+        ok: true,
+        message: exists ? '가공비 변동 로그 헤더 보장' : '가공비 변동 로그 탭 생성+헤더 세팅',
+      })
+    }
+
+    // ── 참고표 항목단위 수정 + '가공비 변동 로그' append ──────────
+    // body: { kind('cost'|'ship'), item, oldValue, newValue, applyFrom, editor }
     if (action === 'update-ref') {
-      const kind = body?.kind as string
-      if (kind === 'cost') {
-        const { 작업비소포장, 작업비벌크, 파쇄비, 혼합비기본, 혼합비추가 } = body
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: SHEET_ID,
-          range: `${quote(COST_TAB)}!K5:K9`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: {
-            values: [[작업비소포장], [작업비벌크], [파쇄비], [혼합비기본], [혼합비추가]],
-          },
-        })
-        return NextResponse.json({ ok: true, message: '가공비 참고표 수정 완료' })
+      const { kind, item, oldValue, newValue, applyFrom, editor } = body
+      const cell =
+        kind === 'cost' ? REF_COST_CELL[item] : kind === 'ship' ? REF_SHIP_CELL[item] : undefined
+      if (!cell) {
+        return NextResponse.json(
+          { ok: false, error: `알 수 없는 항목(kind=${kind}, item=${item})` },
+          { status: 400 },
+        )
       }
-      if (kind === 'ship') {
-        // ship: [{규격,박스,택배}...] → 고정 순서 소·중·대(K12:L14)
-        const ship = Array.isArray(body?.ship) ? body.ship : []
-        const bySize: Record<string, { 박스: any; 택배: any }> = {}
-        for (const s of ship) bySize[String(s?.규격 ?? '').trim()] = { 박스: s?.박스, 택배: s?.택배 }
-        const rowFor = (sz: string) => [bySize[sz]?.박스 ?? '', bySize[sz]?.택배 ?? '']
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: SHEET_ID,
-          range: `${quote(COST_TAB)}!K12:L14`,
-          valueInputOption: 'USER_ENTERED',
-          requestBody: { values: [rowFor('소'), rowFor('중'), rowFor('대')] },
-        })
-        return NextResponse.json({ ok: true, message: '배송비 참고표 수정 완료' })
-      }
-      return NextResponse.json({ ok: false, error: `알 수 없는 kind: ${kind}` }, { status: 400 })
+
+      // 해당 셀 하나만 update
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!${cell}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[newValue]] },
+      })
+
+      // 가공비 변동 로그 append (원료용 LOG_TAB과 별개)
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(REFLOG_TAB)}!A:G`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [
+            [
+              nowKst(),
+              kind === 'cost' ? '가공비' : '배송비',
+              item,
+              oldValue ?? '',
+              newValue ?? '',
+              applyFrom || '',
+              editor || '',
+            ],
+          ],
+        },
+      })
+
+      return NextResponse.json({ ok: true, message: `${item} 수정 완료` })
     }
 
     // ── 기존 원료 수정 ────────────────────────────────────────────
