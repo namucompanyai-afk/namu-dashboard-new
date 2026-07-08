@@ -6,14 +6,15 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
 const RANGE = "'진도팜 원가표'!A4:G"
-// 가공비(J5:K9)·배송비(J12:L14) 참고 기준표 (init5가 배치한 고정 오프셋)
-const RANGE_REF = "'진도팜 원가표'!J4:L14"
+// 가공비(J5:K10 6항목)·배송비(J13:L15) 참고 기준표 (init7이 배치한 고정 오프셋)
+const RANGE_REF = "'진도팜 원가표'!J4:L15"
 
 // 참고표 값 (시트에서 read, 하드코딩 아님)
 type RefCost = {
   작업비소포장: number
   작업비벌크: number
   파쇄비: number
+  제분비: number
   혼합비기본: number
   혼합비추가: number
 }
@@ -173,7 +174,7 @@ export default function JindopamCostPage() {
           status: (r[6] || '').trim(),
         }))
       setRows(data)
-      // 참고 기준표 (P4:R14 고정 오프셋: 0=가공비헤더, 1~5=가공비, 7=배송비헤더, 8~10=배송비)
+      // 참고 기준표 (J4:L15 고정 오프셋: 0=가공비헤더, 1~6=가공비 6항목, 7=빈행, 8=배송비헤더, 9~11=배송비)
       if (refRes.ok) {
         const rj = await refRes.json()
         const rv: string[][] = rj.values || []
@@ -181,11 +182,12 @@ export default function JindopamCostPage() {
           작업비소포장: toNum(rv[1]?.[1]),
           작업비벌크: toNum(rv[2]?.[1]),
           파쇄비: toNum(rv[3]?.[1]),
-          혼합비기본: toNum(rv[4]?.[1]),
-          혼합비추가: toNum(rv[5]?.[1]),
+          제분비: toNum(rv[4]?.[1]),
+          혼합비기본: toNum(rv[5]?.[1]),
+          혼합비추가: toNum(rv[6]?.[1]),
         })
         setRefShip(
-          [8, 9, 10]
+          [9, 10, 11]
             .map((i) => rv[i])
             .filter((r) => r && (r[0] || '').trim() !== '')
             .map((r) => ({ 규격: (r[0] || '').trim(), 박스: toNum(r[1]), 택배: toNum(r[2]) })),
@@ -274,6 +276,7 @@ export default function JindopamCostPage() {
                     { item: '작업비(소포장)', v: refCost?.작업비소포장 },
                     { item: '작업비(벌크)', v: refCost?.작업비벌크 },
                     { item: '파쇄비', v: refCost?.파쇄비 },
+                    { item: '제분비', v: refCost?.제분비 },
                     { item: '혼합비(5곡까지)', v: refCost?.혼합비기본 },
                     { item: '혼합비(추가1곡당)', v: refCost?.혼합비추가 },
                   ].map((r) => (

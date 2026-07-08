@@ -38,21 +38,22 @@ const LOG_HEADERS = [
 
 const REFLOG_HEADERS = ['일시', '종류', '항목', '변경 전', '변경 후', '적용 시작일', '변경자']
 
-// 참고표 항목명 → 셀 (가공비 K5:K9 / 배송비 K·L 12:14)
+// 참고표 항목명 → 셀 (가공비 K5:K10 6항목 / 배송비 K·L 13:15 · init7 배치 기준)
 const REF_COST_CELL: Record<string, string> = {
   '작업비(소포장)': 'K5',
   '작업비(벌크)': 'K6',
   파쇄비: 'K7',
-  '혼합비(5곡까지)': 'K8',
-  '혼합비(추가1곡당)': 'K9',
+  제분비: 'K8',
+  '혼합비(5곡까지)': 'K9',
+  '혼합비(추가1곡당)': 'K10',
 }
 const REF_SHIP_CELL: Record<string, string> = {
-  '박스(소)': 'K12',
-  '택배(소)': 'L12',
-  '박스(중)': 'K13',
-  '택배(중)': 'L13',
-  '박스(대)': 'K14',
-  '택배(대)': 'L14',
+  '박스(소)': 'K13',
+  '택배(소)': 'L13',
+  '박스(중)': 'K14',
+  '택배(중)': 'L14',
+  '박스(대)': 'K15',
+  '택배(대)': 'L15',
 }
 
 // 서비스 계정 → sheets 클라이언트
@@ -372,6 +373,52 @@ export async function POST(req: Request) {
       return NextResponse.json({
         ok: true,
         message: exists ? '가공비 변동 로그 헤더 보장' : '가공비 변동 로그 탭 생성+헤더 세팅',
+      })
+    }
+
+    // ── 참고표 재배치: 가공비 6항목(제분비 추가) + 배송비 한 행 아래로 (수동 1회) ─
+    // 가공비 J4:K10 / 배송비 J12:L15. H·I열·원곡 데이터(A:G)는 건드리지 않음.
+    if (action === 'init7') {
+      // 1. 기존 J열 참고표 영역 클리어
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!J4:L100`,
+        requestBody: {},
+      })
+      // 2. 새 배치 (가공비 6항목·배송비 3규격)
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            {
+              range: `${quote(COST_TAB)}!J4:K10`,
+              values: [
+                ['가공비', '단가'],
+                ['작업비(소포장)', 800],
+                ['작업비(벌크)', 450],
+                ['파쇄비', 600],
+                ['제분비', 1000],
+                ['혼합비(5곡까지)', 350],
+                ['혼합비(추가1곡당)', 70],
+              ],
+            },
+            {
+              range: `${quote(COST_TAB)}!J12:L15`,
+              values: [
+                ['규격', '박스', '택배'],
+                ['소', 371, 2100],
+                ['중', 1123, 2800],
+                ['대', 1300, 4400],
+              ],
+            },
+          ],
+        },
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '참고표 재배치 완료 (가공비 J4:K10 6항목·제분비 추가 · 배송비 J12:L15)',
       })
     }
 
