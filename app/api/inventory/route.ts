@@ -37,7 +37,8 @@ export async function GET(request: Request) {
         return NextResponse.json({ message: "모든 품목 정상 - 알림 없음" });
       }
       const dateStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
-      await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
+      // 그로스 미운영으로 재고 메일 발송 중단 (2026-07)
+      // await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
       return NextResponse.json({ ok: true, message: `알림 발송 완료 - 입고필요: ${restockItems.length}건` });
     } catch (err) {
       return NextResponse.json({ error: String(err) }, { status: 500 });

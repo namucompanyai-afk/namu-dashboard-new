@@ -46,7 +46,8 @@ export async function GET(request: Request) {
     }
 
     const dateStr = today.toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
-    await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
+    // 그로스 미운영으로 재고 메일 발송 중단 (2026-07)
+    // await sendEmail(dateStr, restockItems, urgentItems, normalItems, elapsedDays);
 
     return NextResponse.json({
       ok: true,
