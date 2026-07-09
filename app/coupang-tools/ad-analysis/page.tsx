@@ -311,6 +311,13 @@ export default function AdAnalysisPage() {
     () => buildAdAnalysisView(sourceRows, marginMaster as any),
     [sourceRows, marginMaster],
   )
+  // 마진마스터 없으면 광고 전용 렌더(매출=revenue14d, BEP·판정·추천입찰가 숨김)
+  const marginOff = !marginMaster
+  const marginOffBanner = marginOff ? (
+    <div style={{ ...noticeBoxOrange, fontSize: 13 }}>
+      마진마스터 없이 광고 지표만 표시 중 · ROAS는 쿠팡 표기 매출(14일 전환) 기준이라 무프/쿠폰·오가닉 미보정
+    </div>
+  ) : null
 
   // 추이 차트 점 클릭 → 해당 시점 raw 광고 데이터로 view swap.
   //   saved 모드 → store.rawAdCampaign 갱신 (수익 진단 mount 자동 로드와 동일 경로)
@@ -382,21 +389,6 @@ export default function AdAnalysisPage() {
 
   // ── 라이브 모드 ──
   if (mode === 'live') {
-    if (!marginMaster) {
-      return (
-        <div style={pageWrap}>
-          <Style />
-          {headerNode}
-          <div style={noticeBoxOrange}>
-            마진마스터가 없습니다. 「수익 진단」 페이지에서 마진분석.xlsx 를 먼저 업로드해주세요.
-            <br />
-            <span style={{ fontSize: 12, color: '#B45309' }}>
-              (라이브 모드는 마진마스터의 옵션ID → 실판매가 룩업으로 매출을 산출합니다.)
-            </span>
-          </div>
-        </div>
-      )
-    }
     if (!adAnalysisLive) {
       return (
         <div style={pageWrap}>
@@ -421,17 +413,19 @@ export default function AdAnalysisPage() {
           onClear={() => { clearAdAnalysisLive(); setUploadError(null) }}
         />
         {uploadError && <div style={errorBox}>{uploadError}</div>}
-        <KpiSection view={view} />
+        {marginOffBanner}
+        <KpiSection view={view} marginOff={marginOff} />
         <HintBanner />
         <PairWarnings view={view} master={marginMaster as any} />
         <WeeklyTrendChart onPointClick={handleTrendPointClick} />
-        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
-        <KeywordParetoChart view={view} master={marginMaster as any} />
+        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} marginOff={marginOff} />
+        {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
         <PairRoasComparisonChart view={view} />
         <HistoryNotesSection />
         <CampaignSection
           view={view}
           master={marginMaster as any}
+          marginOff={marginOff}
           openCampId={openCampId}
           onOpen={toggleCampaign}
           selectedOptionId={selectedOptionId}
@@ -441,8 +435,8 @@ export default function AdAnalysisPage() {
         />
         {openCampaign && (
           openCampaign.type === 'manual'
-            ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-            : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
         )}
       </div>
     )
@@ -480,17 +474,19 @@ export default function AdAnalysisPage() {
     }}>
       <Style />
       {headerNode}
-      <KpiSection view={view} />
+      {marginOffBanner}
+      <KpiSection view={view} marginOff={marginOff} />
       <HintBanner />
       <PairWarnings view={view} master={marginMaster as any} />
       <WeeklyTrendChart onPointClick={handleTrendPointClick} />
-      <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} />
-      <KeywordParetoChart view={view} master={marginMaster as any} />
+      <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} marginOff={marginOff} />
+      {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
       <PairRoasComparisonChart view={view} />
       <HistoryNotesSection />
       <CampaignSection
         view={view}
         master={marginMaster as any}
+        marginOff={marginOff}
         openCampId={openCampId}
         onOpen={toggleCampaign}
         selectedOptionId={selectedOptionId}
@@ -500,8 +496,8 @@ export default function AdAnalysisPage() {
       />
       {openCampaign && (
         openCampaign.type === 'manual'
-          ? <ManualSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-          : <AiSection campaign={openCampaign} master={marginMaster as any} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+          ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+          : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
       )}
     </div>
   )
@@ -645,19 +641,19 @@ function Header({ mode, onMode, adPeriodLabel }: {
 }
 
 // ── KPI ───────────────────────────────────────────────────────
-function KpiSection({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
-  const roasUnder = view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
+function KpiSection({ view, marginOff = false }: { view: ReturnType<typeof buildAdAnalysisView>; marginOff?: boolean }) {
+  const roasUnder = !marginOff && view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
   const u = view.unmatched
   return (
     <>
       <div className="aa-kpi-grid">
         <KpiCard label="광고비 (+VAT)" value={fmtMan(view.totalAdCostVat)} sub={`캠페인 ${view.campaignCount}개`} />
-        <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub="광고 판매수 × 실판매가" />
+        <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub={marginOff ? '쿠팡 표기 매출(14일 전환)' : '광고 판매수 × 실판매가'} />
         <KpiCard
           label="평균 ROAS"
           value={fmtRoas(view.avgRoasPct)}
           valueClass={roasUnder ? 'text-bad' : undefined}
-          sub={view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음'}
+          sub={marginOff ? '쿠팡표기 기준' : (view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음')}
         />
         <KpiCard
           label="광고 판매수"
@@ -665,7 +661,7 @@ function KpiSection({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) 
           sub={view.avgUnitPrice ? `평균 단가 ${fmtNum(view.avgUnitPrice)}원` : ''}
         />
       </div>
-      {u.adCount > 0 && (
+      {!marginOff && u.adCount > 0 && (
         <div style={{
           margin: '8px 0 16px', padding: '8px 12px',
           background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6,
@@ -1097,9 +1093,11 @@ function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void })
 function CampaignScatterChart({
   view,
   onCampaignClick,
+  marginOff = false,
 }: {
   view: ReturnType<typeof buildAdAnalysisView>
   onCampaignClick: (campaignId: string) => void
+  marginOff?: boolean
 }) {
   const [expanded, setExpanded] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
@@ -1184,7 +1182,7 @@ function CampaignScatterChart({
           <div className="aa-section-title">🎯 캠페인별 광고비 × ROAS</div>
           <div className="aa-section-desc">
             점 크기 = 광고매출 · 점 클릭 시 해당 캠페인 펼침
-            {avgBepCost != null && <span style={{ marginLeft: 8, color: '#64748B' }}>· BEP 평균 {Math.round(avgBepCost)}% (광고비 가중)</span>}
+            {!marginOff && avgBepCost != null && <span style={{ marginLeft: 8, color: '#64748B' }}>· BEP 평균 {Math.round(avgBepCost)}% (광고비 가중)</span>}
           </div>
         </div>
         <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
@@ -1215,7 +1213,7 @@ function CampaignScatterChart({
                   <ZAxis type="number" dataKey="z" range={[60, 600]} name="광고매출" />
                   <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<ScatterTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {avgBepCost != null && (
+                  {!marginOff && avgBepCost != null && (
                     <ReferenceLine
                       y={avgBepCost} yAxisId={0}
                       stroke="#94A3B8" strokeDasharray="4 4"
@@ -1678,9 +1676,10 @@ function HistoryNotesSection() {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange }: {
+function CampaignSection({ view, master, marginOff = false, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
+  marginOff?: boolean
   openCampId: string | null
   onOpen: (id: string) => void
   selectedOptionId: string | null
@@ -1738,9 +1737,9 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
               <TH label={<>타상품 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'otherProductRevenue'} num minWidth={110} />
               <TH label="광고 판매수" k={'orders'} num />
               <th className="num" style={{ minWidth: 96 }} title="prefix+타입 단위 저장 · 분석 갱신 후에도 유지">목표 ROAS</th>
-              <TH label="ROAS" k={'roasPct'} num />
-              <TH label="BEP" k={'bepPct'} num />
-              <TH label="갭" k={'gapPct'} num />
+              <TH label={marginOff ? <>ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(쿠팡표기)</span></> : 'ROAS'} k={'roasPct'} num />
+              {!marginOff && <TH label="BEP" k={'bepPct'} num />}
+              {!marginOff && <TH label="갭" k={'gapPct'} num />}
               <TH label="전환율" k={'clicks'} num />
               <TH label="검색/비검색" k={'searchShare'} minWidth={200} />
             </tr>
@@ -1749,13 +1748,14 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
             {sorted.map((c) => {
               const isOpen = c.campaignId === openCampId
               const isExpanded = expandedCampIds.has(c.campaignId)
-              const opts = isExpanded
+              const opts = !marginOff && isExpanded
                 ? computeOptions(c.rows, bepMap, priceMap, rowMap, exposureMap)
                 : []
               return (
                 <CampaignRowGroup
                   key={c.campaignId}
                   c={c}
+                  marginOff={marginOff}
                   isOpen={isOpen}
                   isExpanded={isExpanded}
                   onToggle={() => onOpen(c.campaignId)}
@@ -1775,8 +1775,9 @@ function CampaignSection({ view, master, openCampId, onOpen, selectedOptionId, o
   )
 }
 
-function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange }: {
+function CampaignRowGroup({ c, marginOff = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange }: {
   c: CampaignDiag
+  marginOff?: boolean
   isOpen: boolean
   isExpanded: boolean
   onToggle: () => void
@@ -1788,7 +1789,8 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
   onTargetChange: (key: string, value: number | null) => void
 }) {
   const roasUnder = c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct
-  const roasClass = roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : '')
+  // 마진 없으면 BEP 기반 색상 없이 중립
+  const roasClass = marginOff ? '' : (roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : ''))
   const gapClass = c.gapPct != null && c.gapPct < 0 ? 'text-bad' : c.gapPct != null && c.gapPct > 0 ? 'text-good' : ''
 
   const typeBadge =
@@ -1829,8 +1831,8 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
             : <span className="text-muted">—</span>}
         </td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
-        <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>
-        <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>
+        {!marginOff && <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>}
+        {!marginOff && <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>}
         <td className="num">{cvrPct != null ? `${cvrPct.toFixed(1)}%` : <span className="text-muted">—</span>}</td>
         <td>
           {c.adCostRaw > 0 ? (
@@ -1842,7 +1844,7 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
           ) : <span className="text-muted">—</span>}
         </td>
       </tr>
-      {isExpanded && options.map((o) => (
+      {!marginOff && isExpanded && options.map((o) => (
         <OptionInlineRow
           key={`${c.campaignId}::${o.optionId}`}
           o={o}
@@ -1850,9 +1852,14 @@ function CampaignRowGroup({ c, isOpen, isExpanded, onToggle, onToggleExpand, opt
           onClick={() => onSelectOption(o.optionId)}
         />
       ))}
-      {isExpanded && options.length === 0 && (
+      {!marginOff && isExpanded && options.length === 0 && (
         <tr className="aa-option-row">
           <td className="sticky-left aa-option-cell" colSpan={12} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
+        </tr>
+      )}
+      {marginOff && isExpanded && (
+        <tr className="aa-option-row">
+          <td className="sticky-left aa-option-cell" colSpan={10} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요</td>
         </tr>
       )}
     </>
@@ -1904,9 +1911,10 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
 }
 
 // ── AI Section ────────────────────────────────────────────────
-function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOption, onClose }: {
+function AiSection({ campaign, master, marginOff = false, periodLabel, selectedOptionId, onClearOption, onClose }: {
   campaign: CampaignDiag
   master: any
+  marginOff?: boolean
   periodLabel: string
   selectedOptionId: string | null
   onClearOption: () => void
@@ -1926,8 +1934,8 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
     ? (options.find((o) => o.optionId === selectedOptionId)?.optionName ?? selectedOptionId)
     : null
 
-  const { search, nonSearch } = useMemo(() => buildKeywordRows(filteredCampaign, bepMap, priceMap, exposureMap), [filteredCampaign, bepMap, priceMap, exposureMap])
-  const cpcEntries = useMemo(() => buildBepCpcForCampaign(campaign, master), [campaign, master])
+  const { search, nonSearch } = useMemo(() => buildKeywordRows(filteredCampaign, bepMap, priceMap, exposureMap, marginOff), [filteredCampaign, bepMap, priceMap, exposureMap, marginOff])
+  const cpcEntries = useMemo(() => marginOff ? [] : buildBepCpcForCampaign(campaign, master), [campaign, master, marginOff])
   const searchSold = useMemo(() => search.reduce((s, r) => s + (r.orders || 0), 0), [search])
   const nonSearchSold = useMemo(() => nonSearch.reduce((s, r) => s + (r.orders || 0), 0), [nonSearch])
 
@@ -1971,8 +1979,8 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
             <Row label="광고 매출" value={fmtMan(campaign.searchRevenue)} />
             <Row label="판매건수" value={`${fmtNum(searchSold)}건`} />
             <Row label="ROAS" value={fmtRoas(campaign.searchRoasPct)} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
-            <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />
-            <Row label="BEP 갭" value={campaign.searchRoasPct != null && campaign.bepPct != null ? `${Math.round(campaign.searchRoasPct - campaign.bepPct)}%p` : '—'} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : 'text-good'} />
+            {!marginOff && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            {!marginOff && <Row label="BEP 갭" value={campaign.searchRoasPct != null && campaign.bepPct != null ? `${Math.round(campaign.searchRoasPct - campaign.bepPct)}%p` : '—'} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : 'text-good'} />}
           </div>
           <div className="aa-metric-box nonsearch">
             <div className="aa-metric-box-label">🎯 비검색 영역 (통제 불가)</div>
@@ -1980,7 +1988,7 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
             <Row label="광고 매출" value={fmtMan(campaign.nonSearchRevenue)} />
             <Row label="판매건수" value={`${fmtNum(nonSearchSold)}건`} />
             <Row label="ROAS" value={fmtRoas(campaign.nonSearchRoasPct)} valueClass={campaign.nonSearchRoasPct != null && campaign.bepPct != null && campaign.nonSearchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
-            <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />
+            {!marginOff && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
@@ -1988,7 +1996,8 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
         <KeywordTable
           rows={search}
           campaignRows={campaign.rows}
-          campaignBep={campaign.bepPct}
+          campaignBep={marginOff ? null : campaign.bepPct}
+          marginOff={marginOff}
           checked={checked}
           onToggle={toggleCheck}
           nonSearchCount={nonSearch.length}
@@ -2001,7 +2010,8 @@ function AiSection({ campaign, master, periodLabel, selectedOptionId, onClearOpt
         />
         <NonSearchKeywordTable
           rows={nonSearch}
-          campaignBep={campaign.bepPct}
+          campaignBep={marginOff ? null : campaign.bepPct}
+          marginOff={marginOff}
           campaignName={campaign.campaignName || campaign.campaignId}
           periodLabel={periodLabel}
         />
@@ -2236,10 +2246,11 @@ function KeywordOptionRow({ entry }: { entry: KeywordOption }) {
   )
 }
 
-function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap, selectedOptionName }: {
+function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap, selectedOptionName }: {
   rows: KeywordRow[]
   campaignRows: AdCampaignRow[]
   campaignBep: number | null
+  marginOff?: boolean
   checked: Set<string>
   onToggle: (k: string) => void
   nonSearchCount: number
@@ -2341,7 +2352,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
   return (
     <div className="aa-sub-section">
       <div className="aa-sub-section-title">
-        <span>🔍 검색 키워드 ({sorted.length}개 · BEP 미달 {belowBepCount}개 · 광고비 {fmtMan(totalCost)})</span>
+        <span>🔍 검색 키워드 ({sorted.length}개{!marginOff && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
@@ -2376,13 +2387,13 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
               <TH label={<>현재 CPC<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(+VAT)</span></>} k="currentCpcVatIncl" num minWidth={100} />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
               <TH label="광고 매출" k="revenue" num />
-              <th><ActionGuideHeader /></th>
-              <TH label={<>추천 입찰가<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />
+              {!marginOff && <th><ActionGuideHeader /></th>}
+              {!marginOff && <TH label={<>추천 입찰가<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />}
             </tr>
           </thead>
           <tbody>
             {sorted.map((r) => {
-              const isExpanded = expandedKws.has(r.keyword)
+              const isExpanded = !marginOff && expandedKws.has(r.keyword)
               const opts = isExpanded
                 ? computeKeywordOptions(r.keyword, campaignRows, bepMap, priceMap, rowMap, campaignAvgCvr)
                 : []
@@ -2390,6 +2401,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
                 <React.Fragment key={r.keyword}>
                   <KeywordRowComp
                     r={r}
+                    marginOff={marginOff}
                     checked={checked.has(r.keyword)}
                     onToggle={() => onToggle(r.keyword)}
                     isExpanded={isExpanded}
@@ -2407,7 +2419,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, checked, onToggle, nonS
               )
             })}
             {sorted.length === 0 && (
-              <tr><td colSpan={13} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
+              <tr><td colSpan={marginOff ? 11 : 13} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
             )}
           </tbody>
         </table>
@@ -2519,7 +2531,7 @@ function actionBadge(action: KeywordRow['action']): React.ReactElement {
   }
 }
 
-function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { r: KeywordRow; checked: boolean; onToggle: () => void; isExpanded: boolean; onToggleExpand: () => void }) {
+function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand, marginOff = false }: { r: KeywordRow; checked: boolean; onToggle: () => void; isExpanded: boolean; onToggleExpand: () => void; marginOff?: boolean }) {
   const roasClass =
     r.roasPct == null || r.bepPct == null ? '' :
     r.roasPct < r.bepPct ? 'text-bad' :
@@ -2573,16 +2585,17 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand }: { 
       <td className={`num ${currentCpcColorClass(r)}`}>{r.currentCpcVatIncl != null ? `${Math.round(r.currentCpcVatIncl).toLocaleString('ko-KR')}원` : '—'}</td>
       <td className="num">{fmtMan(r.adCostVat)}</td>
       <td className="num">{fmtMan(r.revenue)}</td>
-      <td>{actionBadge(r.action)}</td>
-      <td className="num">{bidCell}</td>
+      {!marginOff && <td>{actionBadge(r.action)}</td>}
+      {!marginOff && <td className="num">{bidCell}</td>}
     </tr>
   )
 }
 
 // ── 비검색 키워드 표 ──────────────────────────────────────────
-function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }: {
+function NonSearchKeywordTable({ rows, campaignBep, marginOff = false, campaignName, periodLabel }: {
   rows: KeywordRow[]
   campaignBep: number | null
+  marginOff?: boolean
   campaignName: string
   periodLabel: string
 }) {
@@ -2631,7 +2644,7 @@ function NonSearchKeywordTable({ rows, campaignBep, campaignName, periodLabel }:
   return (
     <div className="aa-sub-section" style={{ marginTop: 16 }}>
       <div className="aa-sub-section-title">
-        <span>🎯 비검색 키워드 ({sorted.length}개 · BEP 미달 {belowBepCount}개 · 광고비 {fmtMan(totalCost)})</span>
+        <span>🎯 비검색 키워드 ({sorted.length}개{!marginOff && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
@@ -2727,9 +2740,10 @@ function ActionLegend() {
 }
 
 // ── Manual Section ────────────────────────────────────────────
-function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClearOption, onClose }: {
+function ManualSection({ campaign, master, marginOff = false, periodLabel, selectedOptionId, onClearOption, onClose }: {
   campaign: CampaignDiag
   master: any
+  marginOff?: boolean
   periodLabel: string
   selectedOptionId: string | null
   onClearOption: () => void
@@ -2836,6 +2850,26 @@ function ManualSection({ campaign, master, periodLabel, selectedOptionId, onClea
     const fileLabel = selectedOptionName ? selectedOptionName : campaign.campaignName
     const filename = `광고분석_수동키워드_${sanitizeFile(fileLabel)}_${periodLabel}.xlsx`
     exportXlsx(data, filename, '수동키워드')
+  }
+
+  // 마진 없으면 수동 점검(추천입찰가·BEP·판정)은 의미 없음 → 안내만
+  if (marginOff) {
+    return (
+      <div className="aa-section" style={{ border: '2px solid #A855F7' }}>
+        <div className="aa-section-header" style={{ background: '#FAF5FF' }}>
+          <div>
+            <div className="aa-section-title">▼ {campaign.campaignName} · 입찰가 점검</div>
+            <div className="aa-section-desc">수동 점검(추천입찰가·BEP)은 마진마스터가 필요합니다.</div>
+          </div>
+          <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
+        </div>
+        <div className="aa-section-body">
+          <div style={{ ...noticeBoxOrange, fontSize: 13, margin: 0 }}>
+            마진마스터가 없어 추천 입찰가·BEP 점검은 표시하지 않습니다. 캠페인·키워드 기본 지표(광고비·ROAS 등)는 위 캠페인 진단 표에서 확인하세요.
+          </div>
+        </div>
+      </div>
+    )
   }
 
   return (

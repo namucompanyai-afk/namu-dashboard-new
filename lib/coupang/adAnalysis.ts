@@ -380,19 +380,30 @@ export function buildAdAnalysisView(
   const priceMap = buildActualPriceMapById(master)
   const exposureMap = buildExposureMapByOptionId(master)
 
-  // 미매칭 집계 — convOptionId(매출 기준) priceMap 에 없는 row 의 광고비/판매수 합
+  // 마진마스터 없으면(master=null) 매출은 광고 엑셀 revenue14d(총전환매출 14일)로 대체.
+  // self 만 사용하고 타상품 분리는 하지 않음. 마진 있으면 기존 실판매가 경로 그대로.
+  const marginOff = master == null
+  const rowSplit = (r: AdCampaignRow) =>
+    marginOff ? { self: r.revenue14d || 0, other: 0 } : splitRowRevenue(r, priceMap, exposureMap)
+  const rowRev = (r: AdCampaignRow) =>
+    marginOff ? (r.revenue14d || 0) : rowRevenue(r, priceMap, exposureMap)
+
+  // 미매칭 집계 — convOptionId(매출 기준) priceMap 에 없는 row 의 광고비/판매수 합.
+  // 마진 없으면 매칭 개념이 없으므로 빈 집계.
   let unmatchedAdCostRaw = 0
   let unmatchedSold = 0
   const unmatchedOptIds = new Set<string>()
-  for (const r of adRows) {
-    const convId = String(r.convOptionId || '').trim()
-    const adId = String(r.adOptionId || '').trim()
-    const key = convId || adId
-    if (!key) continue
-    if (convId && priceMap.has(convId)) continue
-    unmatchedAdCostRaw += r.adCost || 0
-    unmatchedSold += r.sold14d || 0
-    unmatchedOptIds.add(key)
+  if (!marginOff) {
+    for (const r of adRows) {
+      const convId = String(r.convOptionId || '').trim()
+      const adId = String(r.adOptionId || '').trim()
+      const key = convId || adId
+      if (!key) continue
+      if (convId && priceMap.has(convId)) continue
+      unmatchedAdCostRaw += r.adCost || 0
+      unmatchedSold += r.sold14d || 0
+      unmatchedOptIds.add(key)
+    }
   }
   const unmatched: UnmatchedSummary = {
     adCount: unmatchedOptIds.size,
@@ -418,7 +429,7 @@ export function buildAdAnalysisView(
     let revenue = 0
     let otherProductRevenue = 0
     for (const r of rows) {
-      const split = splitRowRevenue(r, priceMap, exposureMap)
+      const split = rowSplit(r)
       revenue += split.self
       otherProductRevenue += split.other
     }
@@ -431,7 +442,7 @@ export function buildAdAnalysisView(
     let searchRev = 0
     let nonSearchRev = 0
     for (const r of rows) {
-      const rev = rowRevenue(r, priceMap, exposureMap)
+      const rev = rowRev(r)
       if (isSearchPlacement(r.placement)) {
         searchRaw += r.adCost || 0
         searchRev += rev
@@ -510,6 +521,7 @@ export function buildKeywordRows(
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
   exposureByOptionId: Map<string, string>,
+  marginOff = false, // true면 매출을 광고 엑셀 revenue14d 로 집계 (마진마스터 없을 때)
 ): { search: KeywordRow[]; nonSearch: KeywordRow[] } {
   const search = new Map<string, AdCampaignRow[]>()
   const nonSearch = new Map<string, AdCampaignRow[]>()
@@ -530,8 +542,10 @@ export function buildKeywordRows(
     const orders = rows.reduce((s, r) => s + (r.sold14d || 0), 0)
     const adCostRaw = rows.reduce((s, r) => s + (r.adCost || 0), 0)
     const adCostVat = adCostRaw * 1.1
-    // 매출 = Σ (sold14d × 마진M 실판매가)
-    const revenue = rows.reduce((s, r) => s + rowRevenue(r, priceMap, exposureByOptionId), 0)
+    // 매출 = Σ (sold14d × 마진M 실판매가). 마진 없으면 광고 엑셀 revenue14d 합산.
+    const revenue = marginOff
+      ? rows.reduce((s, r) => s + (r.revenue14d || 0), 0)
+      : rows.reduce((s, r) => s + rowRevenue(r, priceMap, exposureByOptionId), 0)
     const ctr = safeDiv(clicks, impressions)
     const cvr = safeDiv(orders, clicks)
     const roas = safeDiv(revenue, adCostVat)
