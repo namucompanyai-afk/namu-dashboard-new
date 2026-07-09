@@ -184,7 +184,7 @@ export default function LeaveAdminPage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-auto max-h-[70vh]">
             {loading ? (
               <div className="p-12 text-center text-gray-500">
                 로딩 중...
@@ -198,13 +198,13 @@ export default function LeaveAdminPage() {
               <table className="w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">신청일시</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">신청자</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">휴가유형</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">기간</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">일수</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
-                    <th className="px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">작업</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">신청일시</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">신청자</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">휴가유형</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">기간</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">일수</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">상태</th>
+                    <th className="sticky top-0 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-medium text-gray-500 uppercase">작업</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
