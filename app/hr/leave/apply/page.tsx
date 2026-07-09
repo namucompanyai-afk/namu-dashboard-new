@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 
 export default function LeaveApplyPage() {
   const [leaveType, setLeaveType] = useState('연차');
+  const [halfPeriod, setHalfPeriod] = useState<'오전' | '오후'>('오전'); // 반차·생일 반차 오전/오후
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(false);
@@ -23,10 +24,10 @@ export default function LeaveApplyPage() {
   // 병가·경조휴가·보상휴가는 UI 카드만 숨김(과거 신청 이력·DB enum은 그대로 유지).
   const leaveTypes = [
     { id: '연차', label: '연차', icon: '🌴', days: 1 },
-    { id: '오전반차', label: '오전반차', icon: '🌅', days: 0.5 },
-    { id: '오후반차', label: '오후반차', icon: '🌆', days: 0.5 },
+    { id: '반차', label: '반차', icon: '🌗', days: 0.5 },
     { id: '생일 반차', label: '생일 반차', icon: '🎂', days: 0.5, noDeduct: true },
   ];
+  const isHalfType = leaveType === '반차' || leaveType === '생일 반차';
 
   useEffect(() => {
     const userStr = localStorage.getItem('user');
@@ -50,6 +51,13 @@ export default function LeaveApplyPage() {
       setEndDate(startDate);
     }
   }, [startDate]);
+
+  // 반차·생일 반차는 하루짜리 → 종료일을 시작일과 동일하게 고정
+  useEffect(() => {
+    if (isHalfType && startDate) {
+      setEndDate(startDate);
+    }
+  }, [leaveType, startDate]);
 
   const fetchEmployeeData = async () => {
     try {
@@ -108,6 +116,13 @@ export default function LeaveApplyPage() {
     const submitType = leaveTypes.find(t => t.id === leaveType);
     // 생일 반차는 기록(days)만 남기고 잔여 차감(deductDays)은 0.
     const deductDaysSubmit = submitType?.noDeduct ? 0 : days;
+    // 오전/오후를 기존 type 문자열에 녹여서 전송 (route는 pass-through)
+    const typeStr =
+      leaveType === '반차'
+        ? (halfPeriod === '오전' ? '오전반차' : '오후반차')
+        : leaveType === '생일 반차'
+        ? (halfPeriod === '오전' ? '생일 오전반차' : '생일 오후반차')
+        : '연차';
 
     setLoading(true);
 
@@ -120,7 +135,7 @@ export default function LeaveApplyPage() {
           payload: {
             name: currentUser.name,
             email: currentUser.email,
-            type: leaveType,
+            type: typeStr,
             startDate,
             endDate,
             days,
@@ -170,7 +185,7 @@ export default function LeaveApplyPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-4">
                   휴가 유형
                 </label>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   {leaveTypes.map((type) => (
                     <button
                       key={type.id}
@@ -189,6 +204,24 @@ export default function LeaveApplyPage() {
                     </button>
                   ))}
                 </div>
+
+                {/* 반차·생일 반차 오전/오후 선택 (연차면 숨김) */}
+                {isHalfType && (
+                  <div className="mt-4">
+                    <span className="block text-xs font-medium text-gray-500 mb-2">시간대</span>
+                    <div className="inline-flex rounded-xl border-2 border-gray-200 p-1">
+                      {(['오전', '오후'] as const).map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setHalfPeriod(p)}
+                          className={'px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ' + (halfPeriod === p ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100')}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
@@ -212,7 +245,7 @@ export default function LeaveApplyPage() {
                     value={endDate}
                     onChange={(e) => setEndDate(e.target.value)}
                     min={startDate || undefined}
-                    disabled={!startDate}
+                    disabled={!startDate || isHalfType}
                     className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   />
                 </div>
@@ -246,7 +279,7 @@ export default function LeaveApplyPage() {
                     {selectedType?.icon ?? '🌴'}
                   </div>
                   <div>
-                    <div className="font-medium text-gray-900">{leaveType}</div>
+                    <div className="font-medium text-gray-900">{leaveType}{isHalfType ? ` · ${halfPeriod}` : ''}</div>
                     <div className="text-sm text-gray-500">{deductDays}일 차감 (주말제외){selectedType?.noDeduct && days > 0 ? ` · 기록 ${days}일` : ''}</div>
                   </div>
                 </div>
