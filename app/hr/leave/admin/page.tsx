@@ -3,6 +3,41 @@
 import { useState, useEffect } from 'react';
 import { useConfirm } from '@/components/ui/useConfirm';
 
+// 기간 표기: UTC 자정 ISO(=KST 다음날)를 +9h 보정해 KST 날짜/요일로 표시 (화면 전용, 원본 미변형)
+const KST_DOW = ['일', '월', '화', '수', '목', '금', '토'];
+function formatLeavePeriod(startIso: string, endIso: string): string {
+  const toKst = (iso: string): Date | null => {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return new Date(d.getTime() + 9 * 60 * 60 * 1000); // KST 시각 → 이후 getUTC* 로 날짜 추출
+  };
+  const s = toKst(startIso);
+  const e = toKst(endIso);
+  if (!s || !e) return `${startIso} ~ ${endIso}`; // 빈 값/파싱 불가 시 원본 그대로
+
+  const yy = (d: Date) => String(d.getUTCFullYear()).slice(-2);
+  const mm = (d: Date) => String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = (d: Date) => String(d.getUTCDate()).padStart(2, '0');
+
+  // 시작~종료 하루씩 증가하며 요일 나열 (KST 기준)
+  const dows: string[] = [];
+  for (let t = s.getTime(); t <= e.getTime(); t += 24 * 60 * 60 * 1000) {
+    dows.push(KST_DOW[new Date(t).getUTCDay()]);
+  }
+  const dowStr = dows.join(',');
+
+  const sameDay =
+    s.getUTCFullYear() === e.getUTCFullYear() &&
+    s.getUTCMonth() === e.getUTCMonth() &&
+    s.getUTCDate() === e.getUTCDate();
+  if (sameDay) return `${yy(s)}-${mm(s)}-${dd(s)} (${dowStr})`;
+
+  const sameYearMonth =
+    s.getUTCFullYear() === e.getUTCFullYear() && s.getUTCMonth() === e.getUTCMonth();
+  const endPart = sameYearMonth ? dd(e) : `${mm(e)}-${dd(e)}`;
+  return `${yy(s)}-${mm(s)}-${dd(s)}~${endPart} (${dowStr})`;
+}
+
 export default function LeaveAdminPage() {
   const { confirm, confirmModal } = useConfirm();
   const [requests, setRequests] = useState([]);
@@ -184,7 +219,7 @@ export default function LeaveAdminPage() {
                       </td>
                       <td className="px-6 py-4 text-sm text-gray-900">{req.휴가유형}</td>
                       <td className="px-6 py-4 text-sm text-gray-900">
-                        {req.시작일} ~ {req.종료일}
+                        {formatLeavePeriod(req.시작일, req.종료일)}
                       </td>
                       <td className="px-6 py-4 text-sm font-semibold text-gray-900">{req.일수}일</td>
                       <td className="px-6 py-4">
