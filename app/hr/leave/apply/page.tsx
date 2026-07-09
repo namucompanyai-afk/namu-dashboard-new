@@ -18,6 +18,7 @@ export default function LeaveApplyPage() {
     total: 15,
     used: 0,
     remaining: 15,
+    birthdayUsed: 0, // 생일 반차 사용(표시 전용, 연차 사용/잔여와 별개)
   });
 
   // 생일 반차: 사용 기록은 0.5일로 남기되 연차 잔여는 차감하지 않는 복지 휴가(noDeduct).
@@ -69,6 +70,7 @@ export default function LeaveApplyPage() {
           total: data.data.총연차 ?? 15,
           used: data.data.사용연차 ?? 0,
           remaining: data.data.잔여연차 ?? 15,
+          birthdayUsed: data.data.생일반차사용 ?? 0,
         });
       }
     } catch (err) {
@@ -330,6 +332,10 @@ export default function LeaveApplyPage() {
                     <div className="w-full bg-gray-200 rounded-full h-2">
                       <div className={(leaveBalance.remaining < 0 ? 'bg-red-500' : 'bg-green-500') + ' h-2 rounded-full'} style={{ width: Math.min(Math.max(0, (leaveBalance.remaining / leaveBalance.total) * 100), 100) + '%' }}></div>
                     </div>
+                  </div>
+                  <div className="flex justify-between items-center pt-1 border-t border-blue-100">
+                    <span className="text-xs text-gray-600">🎂 생일 반차 사용</span>
+                    <span className="text-sm font-semibold text-gray-900">{leaveBalance.birthdayUsed}일</span>
                   </div>
                 </div>
               </div>

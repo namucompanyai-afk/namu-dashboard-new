@@ -6,6 +6,7 @@ interface LeaveBalance {
   total: number;
   used: number;
   remaining: number;
+  birthdayUsed: number; // 생일 반차 사용(표시 전용, 연차 사용/잔여와 별개)
 }
 
 interface LeaveRecord {
@@ -48,7 +49,7 @@ const typeColors: Record<string, string> = {
 
 export default function HRDashboardPage() {
   const [user, setUser] = useState<any>(null);
-  const [leaveBalance, setLeaveBalance] = useState<LeaveBalance>({ total: 15, used: 0, remaining: 15 });
+  const [leaveBalance, setLeaveBalance] = useState<LeaveBalance>({ total: 15, used: 0, remaining: 15, birthdayUsed: 0 });
   const [leaveHistory, setLeaveHistory] = useState<LeaveRecord[]>([]);
   const [todayOff, setTodayOff] = useState<TodayOff[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
@@ -75,6 +76,7 @@ export default function HRDashboardPage() {
           total: balanceData.data.총연차 ?? 15,
           used: balanceData.data.사용연차 ?? 0,
           remaining: balanceData.data.잔여연차 ?? 15,
+          birthdayUsed: balanceData.data.생일반차사용 ?? 0,
         });
       }
 
@@ -218,6 +220,11 @@ export default function HRDashboardPage() {
               <div style={{ fontSize: '11px', color: '#8c8478' }}>잔여</div>
               <div style={{ fontSize: '24px', fontWeight: 700, color: '#10b981' }}>{leaveBalance.remaining}<span style={{ fontSize: '12px', color: '#8c8478' }}>일</span></div>
             </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: '12px', marginBottom: '12px', borderTop: '1px solid #ece8e1' }}>
+            <span style={{ fontSize: '12px', color: '#8c8478' }}>🎂 생일 반차 사용</span>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#1a1815' }}>{leaveBalance.birthdayUsed}일</span>
           </div>
 
           <div style={{ background: '#f3f0ea', borderRadius: '8px', height: '8px', overflow: 'hidden' }}>
