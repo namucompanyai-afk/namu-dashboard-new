@@ -117,13 +117,14 @@ function weightedBep(
   bepByOptionId: Map<string, number>,
   priceMap: Map<string, number>,
   exposureByOptionId: Map<string, string>,
+  marginOff = false, // true면 가중치를 광고 엑셀 revenue14d 로 (마진 없이 수기 BEP)
 ): number | null {
   let num = 0
   let den = 0
   for (const r of rows) {
     const bep = bepByOptionId.get(r.adOptionId)
     if (bep == null || !Number.isFinite(bep) || bep <= 0) continue
-    const rev = rowRevenue(r, priceMap, exposureByOptionId)
+    const rev = marginOff ? (r.revenue14d || 0) : rowRevenue(r, priceMap, exposureByOptionId)
     if (rev <= 0) continue
     num += rev * bep
     den += rev
@@ -359,6 +360,7 @@ function safeDiv(a: number, b: number): number | null {
 export function buildAdAnalysisView(
   adRows: AdCampaignRow[] | null,
   master: CostMaster | null,
+  bepOverride?: Map<string, number>, // 마진 없이 수기 BEP(optionId→bep%) 주입 시 사용
 ): AdAnalysisView {
   const emptyUnmatched: UnmatchedSummary = { adCount: 0, adCostVat: 0, sold: 0 }
   if (!adRows || adRows.length === 0) {
@@ -376,7 +378,7 @@ export function buildAdAnalysisView(
     }
   }
 
-  const bepMap = buildBepMap(master)
+  const bepMap = bepOverride ?? buildBepMap(master)
   const priceMap = buildActualPriceMapById(master)
   const exposureMap = buildExposureMapByOptionId(master)
 
@@ -455,7 +457,7 @@ export function buildAdAnalysisView(
     const nonSearchAdCostVat = nonSearchRaw * 1.1
 
     const roasPct = safeDiv(revenue, adCostVat)
-    const bepPct = weightedBep(rows, bepMap, priceMap, exposureMap)
+    const bepPct = weightedBep(rows, bepMap, priceMap, exposureMap, marginOff)
     const gapPct = roasPct != null && bepPct != null ? roasPct * 100 - bepPct : null
 
     const searchRoas = safeDiv(searchRev, searchAdCostVat)
@@ -550,7 +552,7 @@ export function buildKeywordRows(
     const cvr = safeDiv(orders, clicks)
     const roas = safeDiv(revenue, adCostVat)
     const roasRaw = safeDiv(revenue, adCostRaw)
-    const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId)
+    const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId, marginOff)
     const roasPct = roas != null ? roas * 100 : null
     const cls = classifyKeyword(clicks, revenue, roasPct, bep)
     return {

@@ -307,16 +307,56 @@ export default function AdAnalysisPage() {
     ? `${sourcePeriod.startDate}_${sourcePeriod.endDate}`
     : new Date().toISOString().slice(0, 10)
 
-  const view = useMemo(
-    () => buildAdAnalysisView(sourceRows, marginMaster as any),
-    [sourceRows, marginMaster],
-  )
-  // 마진마스터 없으면 광고 전용 렌더(매출=revenue14d, BEP·판정·추천입찰가 숨김)
+  // 마진마스터 없으면 광고 전용 렌더(매출=revenue14d). 옵션별 수기 BEP 입력 시 판정 복원.
   const marginOff = !marginMaster
+  const [manualBep, setManualBep] = useState<Record<string, number>>({})
+  const manualBepMap = useMemo(() => {
+    const m = new Map<string, number>()
+    if (marginOff) {
+      for (const [k, v] of Object.entries(manualBep)) {
+        if (Number.isFinite(v) && v > 0) m.set(String(k).trim(), v)
+      }
+    }
+    return m
+  }, [manualBep, marginOff])
+  // BEP 판정/추천입찰가를 숨길지 — 마진 없고 수기 BEP도 하나도 없을 때만 숨김
+  const hideBep = marginOff && manualBepMap.size === 0
+
+  const view = useMemo(
+    () => buildAdAnalysisView(sourceRows, marginMaster as any, marginOff ? manualBepMap : undefined),
+    [sourceRows, marginMaster, marginOff, manualBepMap],
+  )
+
+  // 옵션 목록(수기 BEP 입력용) — raw 를 광고집행 옵션ID 로 group
+  const optionList = useMemo(() => {
+    if (!marginOff || !sourceRows) return [] as { adOptionId: string; name: string; clicks: number; adCostVat: number; revenue: number }[]
+    const map = new Map<string, { names: Map<string, number>; clicks: number; adCostRaw: number; revenue: number }>()
+    for (const r of sourceRows) {
+      const id = String(r.adOptionId || '').trim()
+      if (!id) continue
+      let e = map.get(id)
+      if (!e) { e = { names: new Map(), clicks: 0, adCostRaw: 0, revenue: 0 }; map.set(id, e) }
+      const nm = String(r.adProductName || '').trim()
+      if (nm) e.names.set(nm, (e.names.get(nm) || 0) + 1)
+      e.clicks += r.clicks || 0
+      e.adCostRaw += r.adCost || 0
+      e.revenue += r.revenue14d || 0
+    }
+    return Array.from(map.entries()).map(([adOptionId, e]) => {
+      let best = '', bestN = -1
+      for (const [nm, n] of e.names) if (n > bestN) { best = nm; bestN = n }
+      return { adOptionId, name: best || adOptionId, clicks: e.clicks, adCostVat: e.adCostRaw * 1.1, revenue: e.revenue }
+    }).sort((a, b) => b.adCostVat - a.adCostVat)
+  }, [marginOff, sourceRows])
+
   const marginOffBanner = marginOff ? (
     <div style={{ ...noticeBoxOrange, fontSize: 13 }}>
       마진마스터 없이 광고 지표만 표시 중 · ROAS는 쿠팡 표기 매출(14일 전환) 기준이라 무프/쿠폰·오가닉 미보정
+      {hideBep && <> · 아래 옵션별 <strong>BEP(%)</strong>를 입력하면 키워드 판정·추천입찰가가 표시됩니다</>}
     </div>
+  ) : null
+  const optionBepNode = marginOff ? (
+    <OptionBepInputCard options={optionList} manualBep={manualBep} onChange={(id, v) => setManualBep((prev) => ({ ...prev, [id]: v }))} />
   ) : null
 
   // 추이 차트 점 클릭 → 해당 시점 raw 광고 데이터로 view swap.
@@ -414,11 +454,12 @@ export default function AdAnalysisPage() {
         />
         {uploadError && <div style={errorBox}>{uploadError}</div>}
         {marginOffBanner}
-        <KpiSection view={view} marginOff={marginOff} />
+        {optionBepNode}
+        <KpiSection view={view} hideBep={hideBep} />
         <HintBanner />
         <PairWarnings view={view} master={marginMaster as any} />
         <WeeklyTrendChart onPointClick={handleTrendPointClick} />
-        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} marginOff={marginOff} />
+        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
         {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
         <PairRoasComparisonChart view={view} />
         <HistoryNotesSection />
@@ -426,6 +467,8 @@ export default function AdAnalysisPage() {
           view={view}
           master={marginMaster as any}
           marginOff={marginOff}
+          hideBep={hideBep}
+          manualBep={manualBepMap}
           openCampId={openCampId}
           onOpen={toggleCampaign}
           selectedOptionId={selectedOptionId}
@@ -436,7 +479,7 @@ export default function AdAnalysisPage() {
         {openCampaign && (
           openCampaign.type === 'manual'
             ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-            : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
         )}
       </div>
     )
@@ -475,11 +518,12 @@ export default function AdAnalysisPage() {
       <Style />
       {headerNode}
       {marginOffBanner}
-      <KpiSection view={view} marginOff={marginOff} />
+      {optionBepNode}
+      <KpiSection view={view} hideBep={hideBep} />
       <HintBanner />
       <PairWarnings view={view} master={marginMaster as any} />
       <WeeklyTrendChart onPointClick={handleTrendPointClick} />
-      <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} marginOff={marginOff} />
+      <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
       {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
       <PairRoasComparisonChart view={view} />
       <HistoryNotesSection />
@@ -487,6 +531,8 @@ export default function AdAnalysisPage() {
         view={view}
         master={marginMaster as any}
         marginOff={marginOff}
+        hideBep={hideBep}
+        manualBep={manualBepMap}
         openCampId={openCampId}
         onOpen={toggleCampaign}
         selectedOptionId={selectedOptionId}
@@ -497,7 +543,7 @@ export default function AdAnalysisPage() {
       {openCampaign && (
         openCampaign.type === 'manual'
           ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-          : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+          : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
       )}
     </div>
   )
@@ -640,20 +686,76 @@ function Header({ mode, onMode, adPeriodLabel }: {
   )
 }
 
+// ── 옵션별 BEP 입력 (마진마스터 대체) ─────────────────────────
+function OptionBepInputCard({ options, manualBep, onChange }: {
+  options: { adOptionId: string; name: string; clicks: number; adCostVat: number; revenue: number }[]
+  manualBep: Record<string, number>
+  onChange: (adOptionId: string, bepPct: number) => void
+}) {
+  const entered = options.filter((o) => (manualBep[o.adOptionId] ?? 0) > 0).length
+  return (
+    <div className="aa-section">
+      <div className="aa-section-header">
+        <div>
+          <div className="aa-section-title">옵션별 BEP 입력 (마진마스터 대체)</div>
+          <div className="aa-section-desc">광고집행 옵션ID 별 손익분기 ROAS(%)를 입력하면 키워드 판정·추천입찰가가 계산됩니다 · 입력 {entered}/{options.length}</div>
+        </div>
+      </div>
+      <div className="aa-table-wrap shorter">
+        <table>
+          <thead>
+            <tr>
+              <th className="sticky-left" style={{ minWidth: 130 }}>옵션ID</th>
+              <th style={{ minWidth: 220 }}>상품명</th>
+              <th className="num">클릭</th>
+              <th className="num">광고비 (+VAT)</th>
+              <th className="num">매출 (쿠팡표기)</th>
+              <th className="num" style={{ minWidth: 120 }}>BEP ROAS(%)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {options.map((o) => (
+              <tr key={o.adOptionId}>
+                <td className="sticky-left mono">{o.adOptionId}</td>
+                <td>{o.name}</td>
+                <td className="num">{fmtNum(o.clicks)}</td>
+                <td className="num">{fmtMan(o.adCostVat)}</td>
+                <td className="num">{fmtMan(o.revenue)}</td>
+                <td className="num">
+                  <input
+                    type="number"
+                    value={manualBep[o.adOptionId] ?? ''}
+                    placeholder="예: 340"
+                    onChange={(e) => onChange(o.adOptionId, Number(e.target.value.replace(/[^0-9.]/g, '')) || 0)}
+                    style={{ width: 90, textAlign: 'right', padding: '4px 8px', border: '1px solid #CBD5E1', borderRadius: 6 }}
+                  />
+                </td>
+              </tr>
+            ))}
+            {options.length === 0 && (
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>옵션 없음</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ── KPI ───────────────────────────────────────────────────────
-function KpiSection({ view, marginOff = false }: { view: ReturnType<typeof buildAdAnalysisView>; marginOff?: boolean }) {
-  const roasUnder = !marginOff && view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
+function KpiSection({ view, hideBep = false }: { view: ReturnType<typeof buildAdAnalysisView>; hideBep?: boolean }) {
+  const roasUnder = !hideBep && view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
   const u = view.unmatched
   return (
     <>
       <div className="aa-kpi-grid">
         <KpiCard label="광고비 (+VAT)" value={fmtMan(view.totalAdCostVat)} sub={`캠페인 ${view.campaignCount}개`} />
-        <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub={marginOff ? '쿠팡 표기 매출(14일 전환)' : '광고 판매수 × 실판매가'} />
+        <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub={hideBep ? '쿠팡 표기 매출(14일 전환)' : '광고 판매수 × 실판매가'} />
         <KpiCard
           label="평균 ROAS"
           value={fmtRoas(view.avgRoasPct)}
           valueClass={roasUnder ? 'text-bad' : undefined}
-          sub={marginOff ? '쿠팡표기 기준' : (view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음')}
+          sub={hideBep ? '쿠팡표기 기준' : (view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음')}
         />
         <KpiCard
           label="광고 판매수"
@@ -661,7 +763,7 @@ function KpiSection({ view, marginOff = false }: { view: ReturnType<typeof build
           sub={view.avgUnitPrice ? `평균 단가 ${fmtNum(view.avgUnitPrice)}원` : ''}
         />
       </div>
-      {!marginOff && u.adCount > 0 && (
+      {!hideBep && u.adCount > 0 && (
         <div style={{
           margin: '8px 0 16px', padding: '8px 12px',
           background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6,
@@ -1093,11 +1195,11 @@ function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void })
 function CampaignScatterChart({
   view,
   onCampaignClick,
-  marginOff = false,
+  hideBep = false,
 }: {
   view: ReturnType<typeof buildAdAnalysisView>
   onCampaignClick: (campaignId: string) => void
-  marginOff?: boolean
+  hideBep?: boolean
 }) {
   const [expanded, setExpanded] = useState<boolean>(() => {
     if (typeof window === 'undefined') return true
@@ -1182,7 +1284,7 @@ function CampaignScatterChart({
           <div className="aa-section-title">🎯 캠페인별 광고비 × ROAS</div>
           <div className="aa-section-desc">
             점 크기 = 광고매출 · 점 클릭 시 해당 캠페인 펼침
-            {!marginOff && avgBepCost != null && <span style={{ marginLeft: 8, color: '#64748B' }}>· BEP 평균 {Math.round(avgBepCost)}% (광고비 가중)</span>}
+            {!hideBep && avgBepCost != null && <span style={{ marginLeft: 8, color: '#64748B' }}>· BEP 평균 {Math.round(avgBepCost)}% (광고비 가중)</span>}
           </div>
         </div>
         <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
@@ -1213,7 +1315,7 @@ function CampaignScatterChart({
                   <ZAxis type="number" dataKey="z" range={[60, 600]} name="광고매출" />
                   <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<ScatterTooltip />} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {!marginOff && avgBepCost != null && (
+                  {!hideBep && avgBepCost != null && (
                     <ReferenceLine
                       y={avgBepCost} yAxisId={0}
                       stroke="#94A3B8" strokeDasharray="4 4"
@@ -1676,10 +1778,12 @@ function HistoryNotesSection() {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, marginOff = false, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange }: {
+function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
   marginOff?: boolean
+  hideBep?: boolean
+  manualBep?: Map<string, number>
   openCampId: string | null
   onOpen: (id: string) => void
   selectedOptionId: string | null
@@ -1698,7 +1802,7 @@ function CampaignSection({ view, master, marginOff = false, openCampId, onOpen, 
     })
   }
 
-  const bepMap = useMemo(() => buildBepMap(master), [master])
+  const bepMap = useMemo(() => marginOff ? (manualBep ?? new Map<string, number>()) : buildBepMap(master), [marginOff, manualBep, master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
   const exposureMap = useMemo(() => buildExposureMapByOptionId(master), [master])
@@ -1738,8 +1842,8 @@ function CampaignSection({ view, master, marginOff = false, openCampId, onOpen, 
               <TH label="광고 판매수" k={'orders'} num />
               <th className="num" style={{ minWidth: 96 }} title="prefix+타입 단위 저장 · 분석 갱신 후에도 유지">목표 ROAS</th>
               <TH label={marginOff ? <>ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(쿠팡표기)</span></> : 'ROAS'} k={'roasPct'} num />
-              {!marginOff && <TH label="BEP" k={'bepPct'} num />}
-              {!marginOff && <TH label="갭" k={'gapPct'} num />}
+              {!hideBep && <TH label="BEP" k={'bepPct'} num />}
+              {!hideBep && <TH label="갭" k={'gapPct'} num />}
               <TH label="전환율" k={'clicks'} num />
               <TH label="검색/비검색" k={'searchShare'} minWidth={200} />
             </tr>
@@ -1756,6 +1860,7 @@ function CampaignSection({ view, master, marginOff = false, openCampId, onOpen, 
                   key={c.campaignId}
                   c={c}
                   marginOff={marginOff}
+                  hideBep={hideBep}
                   isOpen={isOpen}
                   isExpanded={isExpanded}
                   onToggle={() => onOpen(c.campaignId)}
@@ -1775,9 +1880,10 @@ function CampaignSection({ view, master, marginOff = false, openCampId, onOpen, 
   )
 }
 
-function CampaignRowGroup({ c, marginOff = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange }: {
+function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange }: {
   c: CampaignDiag
   marginOff?: boolean
+  hideBep?: boolean
   isOpen: boolean
   isExpanded: boolean
   onToggle: () => void
@@ -1789,8 +1895,8 @@ function CampaignRowGroup({ c, marginOff = false, isOpen, isExpanded, onToggle, 
   onTargetChange: (key: string, value: number | null) => void
 }) {
   const roasUnder = c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct
-  // 마진 없으면 BEP 기반 색상 없이 중립
-  const roasClass = marginOff ? '' : (roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : ''))
+  // BEP 숨김이면 색상 없이 중립
+  const roasClass = hideBep ? '' : (roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : ''))
   const gapClass = c.gapPct != null && c.gapPct < 0 ? 'text-bad' : c.gapPct != null && c.gapPct > 0 ? 'text-good' : ''
 
   const typeBadge =
@@ -1831,8 +1937,8 @@ function CampaignRowGroup({ c, marginOff = false, isOpen, isExpanded, onToggle, 
             : <span className="text-muted">—</span>}
         </td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
-        {!marginOff && <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>}
-        {!marginOff && <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>}
+        {!hideBep && <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>}
+        {!hideBep && <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>}
         <td className="num">{cvrPct != null ? `${cvrPct.toFixed(1)}%` : <span className="text-muted">—</span>}</td>
         <td>
           {c.adCostRaw > 0 ? (
@@ -1859,7 +1965,7 @@ function CampaignRowGroup({ c, marginOff = false, isOpen, isExpanded, onToggle, 
       )}
       {marginOff && isExpanded && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={10} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요</td>
+          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 10 : 12} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP 입력값 기준)</td>
         </tr>
       )}
     </>
@@ -1911,16 +2017,18 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
 }
 
 // ── AI Section ────────────────────────────────────────────────
-function AiSection({ campaign, master, marginOff = false, periodLabel, selectedOptionId, onClearOption, onClose }: {
+function AiSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose }: {
   campaign: CampaignDiag
   master: any
   marginOff?: boolean
+  hideBep?: boolean
+  manualBep?: Map<string, number>
   periodLabel: string
   selectedOptionId: string | null
   onClearOption: () => void
   onClose: () => void
 }) {
-  const bepMap = useMemo(() => buildBepMap(master), [master])
+  const bepMap = useMemo(() => marginOff ? (manualBep ?? new Map<string, number>()) : buildBepMap(master), [marginOff, manualBep, master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
   const exposureMap = useMemo(() => buildExposureMapByOptionId(master), [master])
@@ -1979,8 +2087,8 @@ function AiSection({ campaign, master, marginOff = false, periodLabel, selectedO
             <Row label="광고 매출" value={fmtMan(campaign.searchRevenue)} />
             <Row label="판매건수" value={`${fmtNum(searchSold)}건`} />
             <Row label="ROAS" value={fmtRoas(campaign.searchRoasPct)} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
-            {!marginOff && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
-            {!marginOff && <Row label="BEP 갭" value={campaign.searchRoasPct != null && campaign.bepPct != null ? `${Math.round(campaign.searchRoasPct - campaign.bepPct)}%p` : '—'} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : 'text-good'} />}
+            {!hideBep && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            {!hideBep && <Row label="BEP 갭" value={campaign.searchRoasPct != null && campaign.bepPct != null ? `${Math.round(campaign.searchRoasPct - campaign.bepPct)}%p` : '—'} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : 'text-good'} />}
           </div>
           <div className="aa-metric-box nonsearch">
             <div className="aa-metric-box-label">🎯 비검색 영역 (통제 불가)</div>
@@ -1988,7 +2096,7 @@ function AiSection({ campaign, master, marginOff = false, periodLabel, selectedO
             <Row label="광고 매출" value={fmtMan(campaign.nonSearchRevenue)} />
             <Row label="판매건수" value={`${fmtNum(nonSearchSold)}건`} />
             <Row label="ROAS" value={fmtRoas(campaign.nonSearchRoasPct)} valueClass={campaign.nonSearchRoasPct != null && campaign.bepPct != null && campaign.nonSearchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
-            {!marginOff && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            {!hideBep && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
@@ -1996,8 +2104,9 @@ function AiSection({ campaign, master, marginOff = false, periodLabel, selectedO
         <KeywordTable
           rows={search}
           campaignRows={campaign.rows}
-          campaignBep={marginOff ? null : campaign.bepPct}
+          campaignBep={hideBep ? null : campaign.bepPct}
           marginOff={marginOff}
+          hideBep={hideBep}
           checked={checked}
           onToggle={toggleCheck}
           nonSearchCount={nonSearch.length}
@@ -2010,8 +2119,8 @@ function AiSection({ campaign, master, marginOff = false, periodLabel, selectedO
         />
         <NonSearchKeywordTable
           rows={nonSearch}
-          campaignBep={marginOff ? null : campaign.bepPct}
-          marginOff={marginOff}
+          campaignBep={hideBep ? null : campaign.bepPct}
+          hideBep={hideBep}
           campaignName={campaign.campaignName || campaign.campaignId}
           periodLabel={periodLabel}
         />
@@ -2246,11 +2355,12 @@ function KeywordOptionRow({ entry }: { entry: KeywordOption }) {
   )
 }
 
-function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap, selectedOptionName }: {
+function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hideBep = false, checked, onToggle, nonSearchCount: _nsc, campaignName, periodLabel, bepMap, priceMap, rowMap, selectedOptionName }: {
   rows: KeywordRow[]
   campaignRows: AdCampaignRow[]
   campaignBep: number | null
   marginOff?: boolean
+  hideBep?: boolean
   checked: Set<string>
   onToggle: (k: string) => void
   nonSearchCount: number
@@ -2352,7 +2462,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, chec
   return (
     <div className="aa-sub-section">
       <div className="aa-sub-section-title">
-        <span>🔍 검색 키워드 ({sorted.length}개{!marginOff && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
+        <span>🔍 검색 키워드 ({sorted.length}개{!hideBep && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
@@ -2387,8 +2497,8 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, chec
               <TH label={<>현재 CPC<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(+VAT)</span></>} k="currentCpcVatIncl" num minWidth={100} />
               <TH label="광고비 (+VAT)" k="adCostVat" num />
               <TH label="광고 매출" k="revenue" num />
-              {!marginOff && <th><ActionGuideHeader /></th>}
-              {!marginOff && <TH label={<>추천 입찰가<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />}
+              {!hideBep && <th><ActionGuideHeader /></th>}
+              {!hideBep && <TH label={<>추천 입찰가<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(이대로 입력 · 5% 안전마진 · VAT 별도)</span></>} k="recommendedBidVatExcl" num minWidth={170} />}
             </tr>
           </thead>
           <tbody>
@@ -2401,7 +2511,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, chec
                 <React.Fragment key={r.keyword}>
                   <KeywordRowComp
                     r={r}
-                    marginOff={marginOff}
+                    marginOff={hideBep}
                     checked={checked.has(r.keyword)}
                     onToggle={() => onToggle(r.keyword)}
                     isExpanded={isExpanded}
@@ -2419,7 +2529,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, chec
               )
             })}
             {sorted.length === 0 && (
-              <tr><td colSpan={marginOff ? 11 : 13} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
+              <tr><td colSpan={hideBep ? 11 : 13} style={{ textAlign: 'center', padding: 24, color: '#94A3B8' }}>검색 키워드 없음</td></tr>
             )}
           </tbody>
         </table>
@@ -2592,10 +2702,10 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand, marg
 }
 
 // ── 비검색 키워드 표 ──────────────────────────────────────────
-function NonSearchKeywordTable({ rows, campaignBep, marginOff = false, campaignName, periodLabel }: {
+function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignName, periodLabel }: {
   rows: KeywordRow[]
   campaignBep: number | null
-  marginOff?: boolean
+  hideBep?: boolean
   campaignName: string
   periodLabel: string
 }) {
@@ -2644,7 +2754,7 @@ function NonSearchKeywordTable({ rows, campaignBep, marginOff = false, campaignN
   return (
     <div className="aa-sub-section" style={{ marginTop: 16 }}>
       <div className="aa-sub-section-title">
-        <span>🎯 비검색 키워드 ({sorted.length}개{!marginOff && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
+        <span>🎯 비검색 키워드 ({sorted.length}개{!hideBep && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
