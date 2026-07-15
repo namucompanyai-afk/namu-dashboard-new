@@ -606,8 +606,9 @@ export function buildManualReviewRows(
   priceMap: Map<string, number>,
   currentBidByKeyword: Map<string, number>,
   exposureByOptionId: Map<string, string>,
+  marginOff = false, // true면 매출을 revenue14d 기준으로 집계 (수기 BEP 판정용)
 ): ManualKeywordRow[] {
-  const { search } = buildKeywordRows(campaign, bepMap, priceMap, exposureByOptionId)
+  const { search } = buildKeywordRows(campaign, bepMap, priceMap, exposureByOptionId, marginOff)
   return search.map<ManualKeywordRow>((k) => {
     const bid = recommendedBid(k.revenue, k.clicks, k.bepPct)
     // UI/다운로드 표시 단위와 동일하게 10원 단위 올림 (쿠팡 광고센터 정책). bidDiff 계산도 이 값 기준.

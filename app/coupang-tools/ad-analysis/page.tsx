@@ -478,7 +478,7 @@ export default function AdAnalysisPage() {
         />
         {openCampaign && (
           openCampaign.type === 'manual'
-            ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
             : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
         )}
       </div>
@@ -542,7 +542,7 @@ export default function AdAnalysisPage() {
       />
       {openCampaign && (
         openCampaign.type === 'manual'
-          ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+          ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
           : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
       )}
     </div>
@@ -2850,16 +2850,18 @@ function ActionLegend() {
 }
 
 // ── Manual Section ────────────────────────────────────────────
-function ManualSection({ campaign, master, marginOff = false, periodLabel, selectedOptionId, onClearOption, onClose }: {
+function ManualSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose }: {
   campaign: CampaignDiag
   master: any
   marginOff?: boolean
+  hideBep?: boolean
+  manualBep?: Map<string, number>
   periodLabel: string
   selectedOptionId: string | null
   onClearOption: () => void
   onClose: () => void
 }) {
-  const bepMap = useMemo(() => buildBepMap(master), [master])
+  const bepMap = useMemo(() => marginOff ? (manualBep ?? new Map<string, number>()) : buildBepMap(master), [marginOff, manualBep, master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
   const rowMap = useMemo(() => buildMarginRowMap(master), [master])
   const exposureMap = useMemo(() => buildExposureMapByOptionId(master), [master])
@@ -2874,7 +2876,7 @@ function ManualSection({ campaign, master, marginOff = false, periodLabel, selec
     : null
 
   const [bidByKeyword, setBidByKeyword] = useState<Map<string, number>>(new Map())
-  const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap), [filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap])
+  const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap, marginOff), [filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap, marginOff])
   const { sorted, key, dir, toggle } = useSort(rows, 'recommendedBidVatExcl' as keyof ManualKeywordRow, 'desc')
 
   const TH = ({ label, k, num, minWidth, sticky, sticky2 }: any) => (
@@ -2962,8 +2964,8 @@ function ManualSection({ campaign, master, marginOff = false, periodLabel, selec
     exportXlsx(data, filename, '수동키워드')
   }
 
-  // 마진 없으면 수동 점검(추천입찰가·BEP·판정)은 의미 없음 → 안내만
-  if (marginOff) {
+  // 수기 BEP도 없을 때만 안내. 수기 BEP 입력 시 정상 렌더(추천입찰가·판정).
+  if (hideBep) {
     return (
       <div className="aa-section" style={{ border: '2px solid #A855F7' }}>
         <div className="aa-section-header" style={{ background: '#FAF5FF' }}>
