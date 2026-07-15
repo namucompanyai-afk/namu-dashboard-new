@@ -142,6 +142,9 @@ export default function JindopamCostPage() {
   const [editRow, setEditRow] = useState<CostRow | null>(null)
   const [showCreate, setShowCreate] = useState(false)
 
+  // 구분 필터 ('전체' + 고정순서 구분). 화면 필터만, 시트/데이터 무변형.
+  const [catFilter, setCatFilter] = useState<string>('전체')
+
   // 원가표 read (저장 후 재호출용으로 함수화)
   const loadData = useCallback(async () => {
     const key = process.env.NEXT_PUBLIC_GSHEET_API_KEY
@@ -206,16 +209,25 @@ export default function JindopamCostPage() {
 
   const cols = visibleCols(device)
 
-  const view = useMemo(() => {
-    // 정렬: 구분(고정순서) → 품목(ko) → 품종(ko). 포장 필터 없음(토글로 대체)
-    return [...rows].sort((a, b) => {
-      const c = catRank(a.category) - catRank(b.category)
-      if (c !== 0) return c
-      const it = a.item.localeCompare(b.item, 'ko')
-      if (it !== 0) return it
-      return a.variety.localeCompare(b.variety, 'ko')
-    })
+  // 구분 탭별 건수 (로드된 전체 데이터 기준). 데이터 없는 구분도 0으로 노출.
+  const catCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of rows) m.set(r.category, (m.get(r.category) ?? 0) + 1)
+    return m
   }, [rows])
+
+  const view = useMemo(() => {
+    // 구분 필터('전체'는 전부) → 정렬: 구분(고정순서) → 품목(ko) → 품종(ko)
+    return rows
+      .filter((r) => catFilter === '전체' || r.category === catFilter)
+      .sort((a, b) => {
+        const c = catRank(a.category) - catRank(b.category)
+        if (c !== 0) return c
+        const it = a.item.localeCompare(b.item, 'ko')
+        if (it !== 0) return it
+        return a.variety.localeCompare(b.variety, 'ko')
+      })
+  }, [rows, catFilter])
 
   // 구분 rowspan 병합: 연속 같은 구분 구간의 첫 행에 span 길이, 나머지는 0(구분 td 생략)
   const catRowSpan = useMemo(() => {
@@ -373,7 +385,28 @@ export default function JindopamCostPage() {
 
         {!loading && !error && (
           <>
-            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-100 px-4 py-2">
+              {/* 구분 필터 탭 (전체 + 고정순서). 화면 필터만 */}
+              <div className="flex flex-wrap gap-1.5">
+                {['전체', ...CATEGORY_ORDER].map((c) => {
+                  const count = c === '전체' ? rows.length : (catCounts.get(c) ?? 0)
+                  const active = catFilter === c
+                  return (
+                    <button
+                      key={c}
+                      onClick={() => setCatFilter(c)}
+                      className={
+                        'rounded-full border px-3 py-1 text-xs font-medium transition-colors ' +
+                        (active
+                          ? 'border-gray-900 bg-gray-900 text-white'
+                          : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50')
+                      }
+                    >
+                      {c} <span className={active ? 'text-gray-300' : 'text-gray-400'}>{count}</span>
+                    </button>
+                  )
+                })}
+              </div>
               <span className="text-sm text-gray-500">총 {view.length}건</span>
             </div>
             <div className="max-h-[70vh] overflow-auto">
