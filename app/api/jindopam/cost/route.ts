@@ -710,6 +710,86 @@ export async function POST(req: Request) {
       })
     }
 
+    // ── init12 이후 잔여 서식 정리 (서식·데이터검증만 · 값 무변경 · 수동 1회) ──
+    // 옛 헤더 서식(R4 검정배경)·옛 과세/취급 드롭다운(F:G 상단)·빈구역 서식 제거 후 새 배치로 통일.
+    if (action === 'init13') {
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find((s) => s.properties?.title === COST_TAB)?.properties
+        ?.sheetId
+      if (sheetId == null) {
+        return NextResponse.json(
+          { ok: false, error: `탭 '${COST_TAB}' sheetId를 찾지 못했습니다.` },
+          { status: 500 },
+        )
+      }
+      const grid = (r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      const NUMFMT = { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } } }
+      const listRule = (values: string[]) => ({
+        condition: { type: 'ONE_OF_LIST', values: values.map((v) => ({ userEnteredValue: v })) },
+        showCustomUi: true,
+        strict: false,
+      })
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          requests: [
+            // 1. 작업영역 서식 전체 초기화 (옛 검정헤더·빈구역 서식 제거) — 값 불변
+            { repeatCell: { range: grid(0, 50, 0, 10), cell: {}, fields: 'userEnteredFormat' } },
+            { unmergeCells: { range: grid(0, 50, 0, 10) } },
+            // 2. 옛 과세/취급 데이터검증 F:G 전체 제거 (참고표·상단 잔여 드롭다운)
+            { setDataValidation: { range: grid(0, 1000, 5, 7) } },
+            // 3. 헤더 볼드 — 가공비 A1:B1 · 배송비 D1:F1
+            {
+              repeatCell: {
+                range: grid(0, 1, 0, 2),
+                cell: { userEnteredFormat: { textFormat: { bold: true } } },
+                fields: 'userEnteredFormat.textFormat.bold',
+              },
+            },
+            {
+              repeatCell: {
+                range: grid(0, 1, 3, 6),
+                cell: { userEnteredFormat: { textFormat: { bold: true } } },
+                fields: 'userEnteredFormat.textFormat.bold',
+              },
+            },
+            // 4. 마스터 헤더 A11:J11 — 볼드 + 옅은 회색 배경
+            {
+              repeatCell: {
+                range: grid(10, 11, 0, 10),
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: { bold: true },
+                    backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+                  },
+                },
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            // 5. 천단위 콤마 — 가공비 단가 B2:B8 · 배송비 박스/택배 E2:F4 · 마스터 원곡가 E12:E50
+            { repeatCell: { range: grid(1, 8, 1, 2), cell: NUMFMT, fields: 'userEnteredFormat.numberFormat' } },
+            { repeatCell: { range: grid(1, 4, 4, 6), cell: NUMFMT, fields: 'userEnteredFormat.numberFormat' } },
+            { repeatCell: { range: grid(11, 50, 4, 5), cell: NUMFMT, fields: 'userEnteredFormat.numberFormat' } },
+            // 6. 데이터검증 재설정 — 데이터 행에만 (과세 F12:F50 / 취급 G12:G50)
+            { setDataValidation: { range: grid(11, 50, 5, 6), rule: listRule(['과세', '면세']) } },
+            { setDataValidation: { range: grid(11, 50, 6, 7), rule: listRule(['O', 'X']) } },
+          ],
+        },
+      })
+
+      return NextResponse.json({ ok: true, message: 'init12 잔여 서식 정리 완료 (값 무변경)' })
+    }
+
     // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
     // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
     if (action === 'update-proc') {
