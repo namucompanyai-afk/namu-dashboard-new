@@ -88,6 +88,22 @@ const supplyBreakdown = (
   return parts.join(' + ')
 }
 
+// 공급가 내역 라인(툴팁/팝오버용 · 한 줄씩). 값은 calcBlendCost 재사용 — 계산 로직 중복 없음
+const supplyLines = (
+  price: number,
+  crush: boolean,
+  mill: boolean,
+  blend: number,
+  ref: RefCost,
+): string[] => {
+  const lines = [`원곡가 ${price.toLocaleString()}`, `작업비 ${ref.작업비소포장.toLocaleString()}`]
+  if (crush) lines.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
+  if (mill) lines.push(`제분 ${ref.제분비.toLocaleString()}`)
+  const bc = calcBlendCost(blend, ref)
+  if (bc > 0) lines.push(`혼합비(${blend}곡) ${bc.toLocaleString()}`)
+  return lines
+}
+
 // 구분 고정 정렬 순서 (그 외 맨 뒤)
 const CATEGORY_ORDER = ['유기농', '무농약', '관행', '수입']
 const catRank = (c: string) => {
@@ -159,6 +175,55 @@ function StatusMark({ value }: { value: string }) {
   )
 }
 
+// 공급가 셀 + 내역 툴팁(PC 호버) / 팝오버(모바일 탭). 표시 레이어만 (계산은 상위에서 주입)
+function SupplyCell({
+  value,
+  lines,
+  device,
+  open,
+  onToggle,
+}: {
+  value: number | null
+  lines: string[]
+  device: Device
+  open: boolean
+  onToggle: (e: React.MouseEvent) => void
+}) {
+  if (value == null) return <span className="text-gray-300">-</span>
+  const numCls =
+    'font-semibold text-gray-900 underline decoration-dotted decoration-gray-300 underline-offset-2'
+  const panel = (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="w-max max-w-[220px] rounded-lg border border-gray-200 bg-white p-2 text-left text-xs font-normal text-gray-600 shadow-lg"
+    >
+      {lines.map((l, i) => (
+        <div key={i} className="whitespace-nowrap leading-relaxed">
+          {l}
+        </div>
+      ))}
+    </div>
+  )
+  if (device === 'pc') {
+    return (
+      <div className="group relative inline-block cursor-help">
+        <span className={numCls}>{value.toLocaleString()}</span>
+        <div className="invisible absolute right-0 top-full z-20 mt-1 opacity-0 transition-opacity duration-100 group-hover:visible group-hover:opacity-100">
+          {panel}
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="relative inline-block">
+      <button type="button" onClick={onToggle} className={numCls}>
+        {value.toLocaleString()}
+      </button>
+      {open && <div className="absolute right-0 top-full z-20 mt-1">{panel}</div>}
+    </div>
+  )
+}
+
 export default function JindopamCostPage() {
   const [rows, setRows] = useState<CostRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -192,6 +257,15 @@ export default function JindopamCostPage() {
 
   // 구분 필터 ('전체' + 고정순서 구분). 화면 필터만, 시트/데이터 무변형.
   const [catFilter, setCatFilter] = useState<string>('전체')
+
+  // 모바일 공급가 내역 팝오버 (한 번에 하나만). 바깥 탭하면 닫힘.
+  const [openSupply, setOpenSupply] = useState<number | null>(null)
+  useEffect(() => {
+    if (device !== 'phone' || openSupply === null) return
+    const close = () => setOpenSupply(null)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [device, openSupply])
 
   // 원가표 read (저장 후 재호출용으로 함수화)
   const loadData = useCallback(async () => {
@@ -517,14 +591,20 @@ export default function JindopamCostPage() {
                             ) : k === 'price' ? (
                               row.price.toLocaleString()
                             ) : k === 'supply' ? (
-                              (() => {
-                                const s = calcSupply(row.price, row.crush, row.mill, row.blend, refCost)
-                                return s == null ? (
-                                  <span className="text-gray-300">-</span>
-                                ) : (
-                                  <span className="font-semibold text-gray-900">{s.toLocaleString()}</span>
-                                )
-                              })()
+                              <SupplyCell
+                                value={calcSupply(row.price, row.crush, row.mill, row.blend, refCost)}
+                                lines={
+                                  refCost
+                                    ? supplyLines(row.price, row.crush, row.mill, row.blend, refCost)
+                                    : []
+                                }
+                                device={device}
+                                open={openSupply === i}
+                                onToggle={(e) => {
+                                  e.stopPropagation()
+                                  setOpenSupply((prev) => (prev === i ? null : i))
+                                }}
+                              />
                             ) : (
                               (row[k as 'item' | 'variety'] as string) || '-'
                             )}
