@@ -899,6 +899,35 @@ export async function POST(req: Request) {
       })
     }
 
+    // ── 변동로그 특정 행 삭제 (테스트 기록 정리용 · body.rows=1-based 시트행) ──
+    if (action === 'admin-del-log') {
+      const rows: number[] = Array.isArray(body?.rows) ? body.rows.map((n: any) => Number(n)) : []
+      if (!rows.length || rows.some((n) => !Number.isInteger(n) || n < 1)) {
+        return NextResponse.json({ ok: false, error: 'rows(1-based 정수 배열) 필요' }, { status: 400 })
+      }
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find((s) => s.properties?.title === LOG_TAB)?.properties
+        ?.sheetId
+      if (sheetId == null) {
+        return NextResponse.json({ ok: false, error: `탭 '${LOG_TAB}' 없음` }, { status: 500 })
+      }
+      const sorted = [...new Set(rows)].sort((a, b) => b - a) // 내림차순 삭제(인덱스 밀림 방지)
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          requests: sorted.map((r) => ({
+            deleteDimension: {
+              range: { sheetId, dimension: 'ROWS', startIndex: r - 1, endIndex: r },
+            },
+          })),
+        },
+      })
+      return NextResponse.json({ ok: true, message: `로그 ${sorted.length}행 삭제 (${sorted.join(',')})` })
+    }
+
     // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
     // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
     if (action === 'update-proc') {
