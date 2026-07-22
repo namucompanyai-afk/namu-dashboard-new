@@ -23,7 +23,7 @@ const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 const COST_TAB = '진도팜 원가표'
 const LOG_TAB = '단가 변동 로그'
 const REFLOG_TAB = '가공비 변동 로그' // 가공비·배송비 참고표 변동 (원료용 LOG_TAB과 별개)
-const HEADER_ROW = 4 // R4 헤더, R5~ 데이터
+const HEADER_ROW = 11 // R11 헤더, R12~ 데이터 (init12 레이아웃: 상단 참고표 A1:F8)
 
 const LOG_HEADERS = [
   '일시',
@@ -38,23 +38,23 @@ const LOG_HEADERS = [
 
 const REFLOG_HEADERS = ['일시', '종류', '항목', '변경 전', '변경 후', '적용 시작일', '변경자']
 
-// 참고표 항목명 → 셀 (가공비 O5:O10 6항목 / 배송비 O·P 13:15 · init8 J→N 이동 기준)
+// 참고표 항목명 → 셀 (init12 배치: 가공비 A2:B8 · 배송비 D2:F4)
 const REF_COST_CELL: Record<string, string> = {
-  '작업비(소포장)': 'O5',
-  '작업비(벌크)': 'O6',
-  파쇄비: 'O7',
-  제분비: 'O8',
-  '혼합비(5곡까지)': 'O9',
-  '혼합비(추가1곡당)': 'O10',
-  물류대행비: 'O11', // 옛 빈 구분행(N11) → 물류대행비 (init11)
+  '작업비(소포장)': 'B2',
+  '작업비(벌크)': 'B3',
+  파쇄비: 'B4',
+  제분비: 'B5',
+  '혼합비(5곡까지)': 'B6',
+  '혼합비(추가1곡당)': 'B7',
+  물류대행비: 'B8',
 }
 const REF_SHIP_CELL: Record<string, string> = {
-  '박스(소)': 'O13',
-  '택배(소)': 'P13',
-  '박스(중)': 'O14',
-  '택배(중)': 'P14',
-  '박스(대)': 'O15',
-  '택배(대)': 'P15',
+  '박스(소)': 'E2',
+  '택배(소)': 'F2',
+  '박스(중)': 'E3',
+  '택배(중)': 'F3',
+  '박스(대)': 'E4',
+  '택배(대)': 'F4',
 }
 
 // 서비스 계정 → sheets 클라이언트
@@ -600,6 +600,113 @@ export async function POST(req: Request) {
       return NextResponse.json({
         ok: true,
         message: `물류대행비 항목 세팅 완료 (단가 ${curVal === '' ? 500 : row[1]})`,
+      })
+    }
+
+    // ── 레이아웃 이동 (참고표 N:P → 좌상단 A:F, 마스터 R4→R11 · 수동 1회) ──
+    // 옛 배치(상단 안내문 + 마스터 A4:J + 참고표 N:P)의 모든 값을 새 배치로 무손실 이동.
+    // 가공비 A1:B8 / 배송비 D1:F4 / 마스터 헤더 A11:J11 · 데이터 A12:J. A열 원료ID 수식은 +7행 bump.
+    if (action === 'init12') {
+      // 0. 라이브 백업 읽기 (참고표=UNFORMATTED 정확값, 마스터 값 + A 수식)
+      const refRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!N4:P15`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const rb = refRes.data.values || []
+      const mdRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A4:J`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const md = mdRes.data.values || []
+      const faRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A4:A`,
+        valueRenderOption: 'FORMULA',
+      })
+      const fa = faRes.data.values || []
+      const cell = (r: any[] | undefined, c: number) => (r && r[c] !== undefined ? r[c] : '')
+
+      // 1. 가공비 A1:B8 (헤더 + 7항목, 현재 값 그대로 보존)
+      const gongbi = [
+        [cell(rb[0], 0) || '가공비', cell(rb[0], 1) || '단가'],
+        ...[1, 2, 3, 4, 5, 6, 7].map((k) => [cell(rb[k], 0), cell(rb[k], 1)]),
+      ]
+      // 2. 배송비 D1:F4 (헤더 rb[8] + 소/중/대 rb[9..11])
+      const shipRows = [8, 9, 10, 11].map((k) => [cell(rb[k], 0), cell(rb[k], 1), cell(rb[k], 2)])
+      // 3. 마스터 헤더
+      const masterHeader = [
+        '원료ID', '구분', '품목', '품종', '1kg당 원곡가', '과세여부', '취급상태', '파쇄', '제분', '혼합곡수',
+      ]
+      // 4. 마스터 데이터 이동 (품목 non-empty만 · A 수식 oldRow→newRow bump)
+      const dataRows: any[][] = []
+      let kept = 0
+      for (let j = 1; j < md.length; j++) {
+        const row = md[j] || []
+        if (String(row[2] ?? '').trim() === '') continue
+        const oldRow = 4 + j
+        const newRow = 12 + kept
+        kept++
+        const aF = bumpFormula(cell(fa[j], 0), oldRow, newRow)
+        const aVal = aF != null ? aF : cell(md[j], 0) || ''
+        const rest: any[] = []
+        for (let c = 1; c <= 9; c++) rest.push(cell(row, c))
+        dataRows.push([aVal, ...rest])
+      }
+      const lastRow = 11 + dataRows.length
+
+      // 5. 작업영역 값 클리어 → 새 배치 기록 (참고표 RAW 정확보존 · 마스터 USER_ENTERED 수식평가)
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A1:P60`,
+        requestBody: {},
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(COST_TAB)}!A1:B8`, values: gongbi },
+            { range: `${quote(COST_TAB)}!D1:F4`, values: shipRows },
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(COST_TAB)}!A11:J11`, values: [masterHeader] },
+            { range: `${quote(COST_TAB)}!A12:J${lastRow}`, values: dataRows },
+          ],
+        },
+      })
+
+      // 6. 옛 참고표(N:P) 잔여 서식/병합 정리 (값은 이미 클리어됨)
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find((s) => s.properties?.title === COST_TAB)?.properties
+        ?.sheetId
+      if (sheetId != null) {
+        const gridNP = { sheetId, startRowIndex: 0, endRowIndex: 60, startColumnIndex: 13, endColumnIndex: 16 }
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          requestBody: {
+            requests: [
+              { unmergeCells: { range: gridNP } },
+              { repeatCell: { range: gridNP, cell: {}, fields: 'userEnteredFormat' } },
+            ],
+          },
+        })
+      }
+
+      return NextResponse.json({
+        ok: true,
+        message: `레이아웃 이동 완료 (가공비 A1:B8 · 배송비 D1:F4 · 마스터 A11:J${lastRow}, 데이터 ${dataRows.length}행)`,
+        moved: dataRows.length,
       })
     }
 

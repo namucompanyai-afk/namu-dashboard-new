@@ -6,10 +6,10 @@ import * as XLSX from 'xlsx'
 // ── 구글시트 설정 ────────────────────────────────────────────────
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
-// A4:J — G까지 원곡 데이터 + H 파쇄 / I 제분 / J 혼합곡수 (init8 추가)
-const RANGE = "'진도팜 원가표'!A4:J"
-// 가공비(N5:O10 6항목)·배송비(N13:P15) 참고 기준표 (init8이 J→N 이동한 고정 오프셋)
-const RANGE_REF = "'진도팜 원가표'!N4:P15"
+// 마스터: A11 헤더 + A12~ 데이터 (G까지 원곡 + H 파쇄 / I 제분 / J 혼합곡수) — init12 배치
+const RANGE = "'진도팜 원가표'!A11:J"
+// 참고표 좌상단 배치(init12): 가공비 A1:B8(헤더+7항목) · 배송비 D1:F4(헤더+소/중/대)
+const RANGE_REF = "'진도팜 원가표'!A1:F8"
 
 // 참고표 값 (시트에서 read, 하드코딩 아님)
 type RefCost = {
@@ -321,7 +321,8 @@ export default function JindopamCostPage() {
           blend: toNum(r[9]),
         }))
       setRows(data)
-      // 참고 기준표 (J4:L15 고정 오프셋: 0=가공비헤더, 1~6=가공비 6항목, 7=빈행, 8=배송비헤더, 9~11=배송비)
+      // 참고 기준표 A1:F8 (init12 배치)
+      // 가공비: A열 라벨·B열 단가 → rv[1..7]의 [1]. 배송비: D열 규격·E 박스·F 택배 → rv[1..3]의 [3],[4],[5]
       if (refRes.ok) {
         const rj = await refRes.json()
         const rv: string[][] = rj.values || []
@@ -332,13 +333,13 @@ export default function JindopamCostPage() {
           제분비: toNum(rv[4]?.[1]),
           혼합비기본: toNum(rv[5]?.[1]),
           혼합비추가: toNum(rv[6]?.[1]),
-          물류대행비: toNum(rv[7]?.[1]), // N11 (옛 빈 구분행 → 물류대행비, init11)
+          물류대행비: toNum(rv[7]?.[1]),
         })
         setRefShip(
-          [9, 10, 11]
+          [1, 2, 3]
             .map((i) => rv[i])
-            .filter((r) => r && (r[0] || '').trim() !== '')
-            .map((r) => ({ 규격: (r[0] || '').trim(), 박스: toNum(r[1]), 택배: toNum(r[2]) })),
+            .filter((r) => r && (r[3] || '').trim() !== '')
+            .map((r) => ({ 규격: (r[3] || '').trim(), 박스: toNum(r[4]), 택배: toNum(r[5]) })),
         )
       }
       setLoading(false)
