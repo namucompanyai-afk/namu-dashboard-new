@@ -76,6 +76,19 @@ function getSheets() {
 const makeRawId = (gubun: string, item: string, variety: string) =>
   [gubun, item, variety].filter((s) => (s || '').trim() !== '').join('_')
 
+// 마스터 F~K 비용분해·최종공급가 수식 (참고표 셀 B2/B4/B5/B6/B7/B8 참조 · 값 하드코딩 아님)
+// F 작업비 / G 파쇄비 / H 제분비 / I 혼합비 / J 물류대행비 / K 최종공급가. 빈 행(품목 없음)은 빈 값.
+function supplyFormulas(r: number): string[] {
+  return [
+    `=IF($C${r}="","",IF(OR($B${r}="톤백",$B${r}="물류대행"),0,$B$2))`,
+    `=IF($C${r}="","",IF($N${r}="O",$B$4,0))`,
+    `=IF($C${r}="","",IF($O${r}="O",$B$5,0))`,
+    `=IF($C${r}="","",IF(N($P${r})<=0,0,IF(N($P${r})<=5,$B$6,$B$6+(N($P${r})-5)*$B$7)))`,
+    `=IF($C${r}="","",IF($B${r}="물류대행",$B$8,0))`,
+    `=IF($C${r}="","",$E${r}+$F${r}+$G${r}+$H${r}+$I${r}+$J${r})`,
+  ]
+}
+
 // KST YYYY-MM-DD HH:mm
 function nowKst(): string {
   const kst = new Date(Date.now() + 9 * 3600 * 1000)
@@ -790,6 +803,102 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, message: 'init12 잔여 서식 정리 완료 (값 무변경)' })
     }
 
+    // ── 비용분해 컬럼 F~K 수식 추가 + 과세/취급/파쇄/제분/혼합곡수 F~J→L~P 이동 (수동 1회) ──
+    // (init13은 서식정리에 이미 사용 → 이 마이그레이션은 init14). 값 무손실: 옛 F~J 값 → L~P 복사, F~K는 수식.
+    if (action === 'init14') {
+      // 0. 라이브 백업 (현 마스터 A12:P50 · 옛 F~J 값 보존용)
+      const mdRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A12:P50`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const md = mdRes.data.values || []
+      const cell = (r: any[] | undefined, c: number) => (r && r[c] !== undefined ? r[c] : '')
+      const LAST = 50
+
+      // 1. 옛 F~J(과세·취급·파쇄·제분·혼합곡수) → L~P 값 복사 (RAW 정확보존)
+      const lp = md.map((row) => [cell(row, 5), cell(row, 6), cell(row, 7), cell(row, 8), cell(row, 9)])
+
+      // 2. 새 헤더 A11:P11
+      const header = [
+        '원료ID', '구분', '품목', '품종', '1kg당 원곡가',
+        '작업비', '파쇄비', '제분비', '혼합비', '물류대행비', '최종 공급가',
+        '과세여부', '취급상태', '파쇄', '제분', '혼합곡수',
+      ]
+
+      // 3. F~K 수식 (행별)
+      const fk: string[][] = []
+      for (let r = 12; r <= LAST; r++) fk.push(supplyFormulas(r))
+
+      // 4. 기록: L~P 값(RAW) → 헤더(RAW) → F~K 수식(USER_ENTERED)
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(COST_TAB)}!L12:P${11 + lp.length}`, values: lp },
+            { range: `${quote(COST_TAB)}!A11:P11`, values: [header] },
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [{ range: `${quote(COST_TAB)}!F12:K${LAST}`, values: fk }],
+        },
+      })
+
+      // 5. 서식·데이터검증 정리 (값 무변경)
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find((s) => s.properties?.title === COST_TAB)?.properties
+        ?.sheetId
+      if (sheetId != null) {
+        const grid = (r0: number, r1: number, c0: number, c1: number) => ({
+          sheetId, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1,
+        })
+        const NUMFMT = { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } } }
+        const listRule = (values: string[]) => ({
+          condition: { type: 'ONE_OF_LIST', values: values.map((v) => ({ userEnteredValue: v })) },
+          showCustomUi: true, strict: false,
+        })
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          requestBody: {
+            requests: [
+              // 헤더 A11:P11 볼드+회색
+              {
+                repeatCell: {
+                  range: grid(10, 11, 0, 16),
+                  cell: {
+                    userEnteredFormat: {
+                      textFormat: { bold: true },
+                      backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+                    },
+                  },
+                  fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+                },
+              },
+              // 콤마: 원곡가~최종공급가 E12:K50
+              { repeatCell: { range: grid(11, LAST, 4, 11), cell: NUMFMT, fields: 'userEnteredFormat.numberFormat' } },
+              // 옛 F:G 데이터검증 제거(이제 수식열) → 새 L(과세)·M(취급)에 설정
+              { setDataValidation: { range: grid(11, LAST, 5, 7) } },
+              { setDataValidation: { range: grid(11, LAST, 11, 12), rule: listRule(['과세', '면세']) } },
+              { setDataValidation: { range: grid(11, LAST, 12, 13), rule: listRule(['O', 'X']) } },
+            ],
+          },
+        })
+      }
+
+      return NextResponse.json({
+        ok: true,
+        message: `비용분해 컬럼 추가 완료 (F~K 수식 · 과세/취급/파쇄/제분/혼합곡수 L~P 이동, ${lp.length}행)`,
+      })
+    }
+
     // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
     // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
     if (action === 'update-proc') {
@@ -821,10 +930,10 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: '대상 원료 행을 찾지 못했습니다.' }, { status: 404 })
       }
 
-      // H~J 갱신 (파쇄/제분/혼합곡수)
+      // N~P 갱신 (파쇄/제분/혼합곡수 — init14 이동 배치)
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `${quote(COST_TAB)}!H${targetRow}:J${targetRow}`,
+        range: `${quote(COST_TAB)}!N${targetRow}:P${targetRow}`,
         valueInputOption: 'USER_ENTERED',
         requestBody: { values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0]] },
       })
@@ -958,14 +1067,24 @@ export async function POST(req: Request) {
       const fA = bumpFormula(lastIdx > 0 ? vals[lastIdx]?.[0] : undefined, lastFilled, newRow)
 
       const data: { range: string; values: any[][] }[] = [
-        // B~F: 구분·품목·품종·원곡가·과세여부 (G 취급상태는 빈칸 → 나무가 시트에서 직접 기입)
+        // B~E: 구분·품목·품종·원곡가 (init14 배치)
         {
-          range: `${quote(COST_TAB)}!B${newRow}:F${newRow}`,
-          values: [[gubun, item, variety || '', wongok ?? '', tax || '']],
+          range: `${quote(COST_TAB)}!B${newRow}:E${newRow}`,
+          values: [[gubun, item, variety || '', wongok ?? '']],
         },
-        // H~J: 파쇄·제분·혼합곡수 (가공옵션)
+        // F~K: 비용분해·최종공급가 수식
         {
-          range: `${quote(COST_TAB)}!H${newRow}:J${newRow}`,
+          range: `${quote(COST_TAB)}!F${newRow}:K${newRow}`,
+          values: [supplyFormulas(newRow)],
+        },
+        // L: 과세여부 (M 취급상태는 빈칸 → 나무가 시트에서 직접 기입)
+        {
+          range: `${quote(COST_TAB)}!L${newRow}`,
+          values: [[tax || '']],
+        },
+        // N~P: 파쇄·제분·혼합곡수 (가공옵션)
+        {
+          range: `${quote(COST_TAB)}!N${newRow}:P${newRow}`,
           values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0]],
         },
       ]

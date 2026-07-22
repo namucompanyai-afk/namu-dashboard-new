@@ -6,8 +6,9 @@ import * as XLSX from 'xlsx'
 // ── 구글시트 설정 ────────────────────────────────────────────────
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
-// 마스터: A11 헤더 + A12~ 데이터 (G까지 원곡 + H 파쇄 / I 제분 / J 혼합곡수) — init12 배치
-const RANGE = "'진도팜 원가표'!A11:J"
+// 마스터: A11 헤더 + A12~ 데이터. init14 배치: E 원곡가 / F~K 비용분해·최종공급가(시트수식) /
+// L 과세여부 · M 취급상태 · N 파쇄 · O 제분 · P 혼합곡수
+const RANGE = "'진도팜 원가표'!A11:P"
 // 참고표 좌상단 배치(init12): 가공비 A1:B8(헤더+7항목) · 배송비 D1:F4(헤더+소/중/대)
 const RANGE_REF = "'진도팜 원가표'!A1:F8"
 
@@ -139,7 +140,7 @@ const COL_LABEL: Record<ColKey, string> = {
   item: '품목',
   variety: '품종',
   price: '1kg당 원곡가',
-  supply: '공급가',
+  supply: '최종 공급가',
   tax: '과세여부',
   status: '취급상태',
 }
@@ -314,11 +315,12 @@ export default function JindopamCostPage() {
           item: (r[2] || '').trim(),
           variety: (r[3] || '').trim(),
           price: toNum(r[4]),
-          tax: (r[5] || '').trim(),
-          status: (r[6] || '').trim(),
-          crush: procOn(r[7]),
-          mill: procOn(r[8]),
-          blend: toNum(r[9]),
+          // F~K(5~10)는 시트 비용분해·최종공급가 수식 → 페이지는 읽지 않음(공급가는 client calcSupply로 통일)
+          tax: (r[11] || '').trim(),
+          status: (r[12] || '').trim(),
+          crush: procOn(r[13]),
+          mill: procOn(r[14]),
+          blend: toNum(r[15]),
         }))
       setRows(data)
       // 참고 기준표 A1:F8 (init12 배치)
@@ -359,7 +361,7 @@ export default function JindopamCostPage() {
   const handleDownload = () => {
     if (!refCost) return
     const header = [
-      '구분', '품목', '품종', '원곡가', '작업비', '물류대행비', '파쇄비', '제분비', '혼합비', '공급가', '과세여부', '취급상태',
+      '구분', '품목', '품종', '원곡가', '작업비', '물류대행비', '파쇄비', '제분비', '혼합비', '최종 공급가', '과세여부', '취급상태',
     ]
     const sorted = [...rows].sort((a, b) => {
       const c = catRank(a.category) - catRank(b.category)
