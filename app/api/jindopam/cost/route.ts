@@ -427,20 +427,14 @@ export async function POST(req: Request) {
     // J:L을 점유하던 참고표를 N:P로 옮긴다. 참고표 현재 단가(수정분)는 읽어서 보존.
     // 원곡 데이터(A:G)·기존 34행 값은 건드리지 않음(H:J는 빈칸 → 파쇄X/제분X/곡수0).
     if (action === 'init8') {
-      // 1. 데이터 헤더 H4:J4 (파쇄/제분/혼합곡수)
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SHEET_ID,
-        range: `${quote(COST_TAB)}!H4:J4`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [['파쇄', '제분', '혼합곡수']] },
-      })
-
-      // 2. 현재 참고표 J4:L15 읽어 N4:P15로 이동 (수정된 단가 그대로 보존)
+      // 1. 현재 참고표 J4:L15 먼저 읽기 (H:J 헤더 쓰기 전에 — J4가 참고표 '가공비' 헤더이므로 순서 중요)
       const refCur = await sheets.spreadsheets.values.get({
         spreadsheetId: SHEET_ID,
         range: `${quote(COST_TAB)}!J4:L15`,
       })
       const rv = refCur.data.values || []
+
+      // 2. 참고표 N4:P15로 이동 (수정된 단가 그대로 보존)
       if (rv.length > 0) {
         await sheets.spreadsheets.values.update({
           spreadsheetId: SHEET_ID,
@@ -457,10 +451,34 @@ export async function POST(req: Request) {
         requestBody: {},
       })
 
+      // 4. 데이터 헤더 H4:J4 (파쇄/제분/혼합곡수) — 클리어 뒤 마지막에
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!H4:J4`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['파쇄', '제분', '혼합곡수']] },
+      })
+
       return NextResponse.json({
         ok: true,
         message: '가공옵션 컬럼(H:J) 추가 · 참고표 J:L→N:P 이동 완료',
       })
+    }
+
+    // ── init8 헤더 보정 (버그 있던 최초 init8 실행분 정정 · 수동 1회) ──
+    // 최초 init8이 H:J 쓰기→참고표 읽기 순서 탓에 J4(혼합곡수)·N4(가공비) 헤더가 깨졌던 것 정정.
+    if (action === 'init9') {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(COST_TAB)}!J4`, values: [['혼합곡수']] },
+            { range: `${quote(COST_TAB)}!N4`, values: [['가공비']] },
+          ],
+        },
+      })
+      return NextResponse.json({ ok: true, message: 'J4=혼합곡수 · N4=가공비 헤더 보정 완료' })
     }
 
     // ── 참고표 항목단위 수정 + '가공비 변동 로그' append ──────────
