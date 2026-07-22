@@ -191,7 +191,7 @@ function SupplyCell({
 }) {
   if (value == null) return <span className="text-gray-300">-</span>
   const numCls =
-    'font-semibold text-gray-900 underline decoration-dotted decoration-gray-300 underline-offset-2'
+    'font-semibold text-red-600 underline decoration-dotted decoration-gray-300 underline-offset-2'
   const panel = (
     <div
       onClick={(e) => e.stopPropagation()}
