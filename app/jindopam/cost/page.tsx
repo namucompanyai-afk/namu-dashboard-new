@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import * as XLSX from 'xlsx'
 
 // ── 구글시트 설정 ────────────────────────────────────────────────
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
@@ -334,6 +335,43 @@ export default function JindopamCostPage() {
 
   const cols = visibleCols(device)
 
+  // 엑셀 다운로드 (필터 무관 전체 원료 · 공급가 계산 로직 재사용). PC 전용 버튼에서 호출.
+  const handleDownload = () => {
+    if (!refCost) return
+    const header = [
+      '구분', '품목', '품종', '원곡가', '작업비', '파쇄비', '제분비', '혼합비', '공급가', '과세여부', '취급상태',
+    ]
+    const sorted = [...rows].sort((a, b) => {
+      const c = catRank(a.category) - catRank(b.category)
+      if (c !== 0) return c
+      const it = a.item.localeCompare(b.item, 'ko')
+      if (it !== 0) return it
+      return a.variety.localeCompare(b.variety, 'ko')
+    })
+    const body = sorted.map((r) => [
+      r.category,
+      r.item,
+      r.variety,
+      r.price,
+      refCost.작업비소포장,
+      r.crush ? refCost.파쇄비 : 0,
+      r.mill ? refCost.제분비 : 0,
+      calcBlendCost(r.blend, refCost),
+      calcSupply(r.price, r.crush, r.mill, r.blend, refCost) ?? '',
+      r.tax,
+      r.status,
+    ])
+    const wb = XLSX.utils.book_new()
+    const ws = XLSX.utils.aoa_to_sheet([header, ...body])
+    XLSX.utils.book_append_sheet(wb, ws, '원가표')
+    const kst = new Date(Date.now() + 9 * 3600 * 1000)
+    const stamp =
+      String(kst.getUTCFullYear()).slice(2) +
+      String(kst.getUTCMonth() + 1).padStart(2, '0') +
+      String(kst.getUTCDate()).padStart(2, '0')
+    XLSX.writeFile(wb, `진도팜_원가표_${stamp}.xlsx`)
+  }
+
   // 구분 탭별 건수 (로드된 전체 데이터 기준). 데이터 없는 구분도 0으로 노출.
   const catCounts = useMemo(() => {
     const m = new Map<string, number>()
@@ -375,13 +413,23 @@ export default function JindopamCostPage() {
           <h1 className="text-2xl font-semibold">원가표</h1>
           <p className="text-sm text-gray-500 mt-1">진도팜 → 나무 공급 단가</p>
         </div>
-        {/* 신규 추가 (진도팜·나무 공통) */}
-        <button
-          onClick={() => setShowCreate(true)}
-          className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
-        >
-          ＋ 신규 원료 추가
-        </button>
+        <div className="flex items-center gap-2">
+          {/* 엑셀 다운로드 (PC 전용 · 필터 무관 전체) */}
+          <button
+            onClick={handleDownload}
+            disabled={loading || !!error || !refCost}
+            className="hidden rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 md:inline-flex"
+          >
+            ⬇ 엑셀 다운로드
+          </button>
+          {/* 신규 추가 (진도팜·나무 공통) */}
+          <button
+            onClick={() => setShowCreate(true)}
+            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+          >
+            ＋ 신규 원료 추가
+          </button>
+        </div>
       </div>
 
       {/* 가공비·배송비 참고표 (기본 접힘) */}
