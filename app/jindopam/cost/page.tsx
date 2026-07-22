@@ -65,8 +65,8 @@ const NUM_COLS: ColKey[] = ['price']
 // 기기별 노출 컬럼 — 폰은 취급상태 숨김
 function visibleCols(device: Device): ColKey[] {
   return device === 'pc'
-    ? ['category', 'item', 'variety', 'price', 'tax', 'status']
-    : ['category', 'item', 'variety', 'price', 'tax']
+    ? ['category', 'item', 'variety', 'price', 'status']
+    : ['category', 'item', 'variety', 'price']
 }
 
 // 기기 감지 (md 브레이크포인트 768px)
