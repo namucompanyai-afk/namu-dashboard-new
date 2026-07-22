@@ -36,9 +36,16 @@ type CostRow = {
   price: number      // E 1kg당 원곡가
   tax: string        // F 과세여부
   status: string     // G 취급상태
-  crush: boolean     // H 파쇄 (O/X, 빈칸=X)
-  mill: boolean      // I 제분 (O/X, 빈칸=X)
-  blend: number      // J 혼합곡수 (빈칸=0)
+  crush: boolean     // N 파쇄 (O/X, 빈칸=X)
+  mill: boolean      // O 제분 (O/X, 빈칸=X)
+  blend: number      // P 혼합곡수 (빈칸=0)
+  // F~K 시트 비용분해·최종공급가 수식 결과 (표시·툴팁·엑셀의 단일 소스)
+  labor: number      // F 작업비
+  crushCost: number  // G 파쇄비
+  millCost: number   // H 제분비
+  blendCost: number  // I 혼합비
+  logiCost: number   // J 물류대행비
+  supply: number     // K 최종 공급가
 }
 
 // 콤마/원 제거 후 숫자화
@@ -105,22 +112,14 @@ const supplyBreakdown = (
   return parts.join(' + ')
 }
 
-// 공급가 내역 라인(툴팁/팝오버용 · 한 줄씩). 값은 calcBlendCost 재사용 — 계산 로직 중복 없음
-const supplyLines = (
-  category: string,
-  price: number,
-  crush: boolean,
-  mill: boolean,
-  blend: number,
-  ref: RefCost,
-): string[] => {
-  const lines = [`원곡가 ${price.toLocaleString()}`]
-  if (hasLaborCost(category)) lines.push(`작업비 ${ref.작업비소포장.toLocaleString()}`)
-  if (isLogistics(category)) lines.push(`물류대행비 ${ref.물류대행비.toLocaleString()}`)
-  if (crush) lines.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
-  if (mill) lines.push(`제분 ${ref.제분비.toLocaleString()}`)
-  const bc = calcBlendCost(blend, ref)
-  if (bc > 0) lines.push(`혼합비(${blend}곡) ${bc.toLocaleString()}`)
+// 공급가 내역 라인(툴팁/팝오버용) — 시트 F~J 값 그대로 사용. 0인 항목은 라인 생략.
+const rowSupplyLines = (row: CostRow): string[] => {
+  const lines = [`원곡가 ${row.price.toLocaleString()}`]
+  if (row.labor > 0) lines.push(`작업비 ${row.labor.toLocaleString()}`)
+  if (row.logiCost > 0) lines.push(`물류대행비 ${row.logiCost.toLocaleString()}`)
+  if (row.crushCost > 0) lines.push(`파쇄 ${row.crushCost.toLocaleString()}`)
+  if (row.millCost > 0) lines.push(`제분 ${row.millCost.toLocaleString()}`)
+  if (row.blendCost > 0) lines.push(`혼합비(${row.blend}곡) ${row.blendCost.toLocaleString()}`)
   return lines
 }
 
@@ -315,7 +314,13 @@ export default function JindopamCostPage() {
           item: (r[2] || '').trim(),
           variety: (r[3] || '').trim(),
           price: toNum(r[4]),
-          // F~K(5~10)는 시트 비용분해·최종공급가 수식 → 페이지는 읽지 않음(공급가는 client calcSupply로 통일)
+          // F~K(5~10) 시트 비용분해·최종공급가 수식 결과 — 표시·툴팁·엑셀의 단일 소스
+          labor: toNum(r[5]),
+          crushCost: toNum(r[6]),
+          millCost: toNum(r[7]),
+          blendCost: toNum(r[8]),
+          logiCost: toNum(r[9]),
+          supply: toNum(r[10]),
           tax: (r[11] || '').trim(),
           status: (r[12] || '').trim(),
           crush: procOn(r[13]),
@@ -375,12 +380,12 @@ export default function JindopamCostPage() {
       r.item,
       r.variety,
       r.price,
-      hasLaborCost(r.category) ? refCost.작업비소포장 : 0,
-      isLogistics(r.category) ? refCost.물류대행비 : 0,
-      r.crush ? refCost.파쇄비 : 0,
-      r.mill ? refCost.제분비 : 0,
-      calcBlendCost(r.blend, refCost),
-      calcSupply(r.category, r.price, r.crush, r.mill, r.blend, refCost) ?? '',
+      r.labor, // F 작업비 (시트)
+      r.logiCost, // J 물류대행비 (시트)
+      r.crushCost, // G 파쇄비 (시트)
+      r.millCost, // H 제분비 (시트)
+      r.blendCost, // I 혼합비 (시트)
+      r.supply, // K 최종 공급가 (시트)
       r.tax,
       r.status,
     ])
@@ -664,12 +669,8 @@ export default function JindopamCostPage() {
                               row.price.toLocaleString()
                             ) : k === 'supply' ? (
                               <SupplyCell
-                                value={calcSupply(row.category, row.price, row.crush, row.mill, row.blend, refCost)}
-                                lines={
-                                  refCost
-                                    ? supplyLines(row.category, row.price, row.crush, row.mill, row.blend, refCost)
-                                    : []
-                                }
+                                value={row.supply}
+                                lines={rowSupplyLines(row)}
                                 device={device}
                                 open={openSupply === i}
                                 onToggle={(e) => {
