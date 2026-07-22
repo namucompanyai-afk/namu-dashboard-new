@@ -540,6 +540,46 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, message: `${item} 수정 완료` })
     }
 
+    // ── H:M 서식/테두리 정리 (옛 참고표 J:L 잔여 박스·헤더 제거 · 수동 1회) ──
+    // init8이 J:L 값만 클리어하고 테두리/배경 서식은 남겨 '빈 박스 블록'이 남음.
+    // 값은 보존(userEnteredFormat만 클리어)하고 병합 해제. N열 이후 참고표·E 원곡가는 손대지 않음.
+    if (action === 'init10') {
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find(
+        (s) => s.properties?.title === COST_TAB,
+      )?.properties?.sheetId
+      if (sheetId == null) {
+        return NextResponse.json(
+          { ok: false, error: `탭 '${COST_TAB}' sheetId를 찾지 못했습니다.` },
+          { status: 500 },
+        )
+      }
+      // H~M(0-based 7~12, endCol 13 → N 제외) · 행4~200(0-based 3~200)
+      const gridHM = { sheetId, startRowIndex: 3, endRowIndex: 200, startColumnIndex: 7, endColumnIndex: 13 }
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          requests: [
+            // 1. 영역 내 병합 해제 (빈 박스 블록이 병합셀일 수 있음)
+            { unmergeCells: { range: gridHM } },
+            // 2. 서식(테두리·배경 등) 초기화 — 값은 건드리지 않음
+            { repeatCell: { range: gridHM, cell: {}, fields: 'userEnteredFormat' } },
+          ],
+        },
+      })
+      // 3. 헤더 H4:J4 재보장 (멱등)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!H4:J4`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['파쇄', '제분', '혼합곡수']] },
+      })
+      return NextResponse.json({ ok: true, message: 'H:M 서식/병합 정리 완료 · H4:J4 헤더 보장' })
+    }
+
     // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
     // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
     if (action === 'update-proc') {
