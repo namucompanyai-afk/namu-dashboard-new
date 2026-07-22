@@ -57,8 +57,15 @@ const calcBlendCost = (count: number, ref: RefCost): number => {
   return ref.혼합비기본 + (count - 5) * ref.혼합비추가
 }
 
-// 공급가 = 원곡가 + 작업비(소포장) + (파쇄) + (제분) + 혼합비 (단가 전부 참고표 참조)
+// 톤백·물류대행은 작업비(소포장) 미적용. 그 외 구분은 기존과 동일하게 작업비 포함.
+const NO_LABOR_CATEGORIES = ['톤백', '물류대행']
+const hasLaborCost = (category: string): boolean =>
+  !NO_LABOR_CATEGORIES.includes((category || '').trim())
+
+// 공급가 = 원곡가 + (작업비 소포장) + (파쇄) + (제분) + 혼합비 (단가 전부 참고표 참조)
+// 작업비 포함 여부만 구분(category)에 따라 분기 — 표시·툴팁·미리보기·엑셀이 이 함수를 재사용
 const calcSupply = (
+  category: string,
   price: number,
   crush: boolean,
   mill: boolean,
@@ -66,7 +73,8 @@ const calcSupply = (
   ref: RefCost | null,
 ): number | null => {
   if (!ref) return null
-  let s = price + ref.작업비소포장
+  let s = price
+  if (hasLaborCost(category)) s += ref.작업비소포장
   if (crush) s += ref.파쇄비
   if (mill) s += ref.제분비
   s += calcBlendCost(blend, ref)
@@ -75,13 +83,15 @@ const calcSupply = (
 
 // 공급가 내역 한 줄 ("원곡가 8,000 + 작업비 800 + 파쇄 600 …")
 const supplyBreakdown = (
+  category: string,
   price: number,
   crush: boolean,
   mill: boolean,
   blend: number,
   ref: RefCost,
 ): string => {
-  const parts = [`원곡가 ${price.toLocaleString()}`, `작업비 ${ref.작업비소포장.toLocaleString()}`]
+  const parts = [`원곡가 ${price.toLocaleString()}`]
+  if (hasLaborCost(category)) parts.push(`작업비 ${ref.작업비소포장.toLocaleString()}`)
   if (crush) parts.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
   if (mill) parts.push(`제분 ${ref.제분비.toLocaleString()}`)
   const bc = calcBlendCost(blend, ref)
@@ -91,13 +101,15 @@ const supplyBreakdown = (
 
 // 공급가 내역 라인(툴팁/팝오버용 · 한 줄씩). 값은 calcBlendCost 재사용 — 계산 로직 중복 없음
 const supplyLines = (
+  category: string,
   price: number,
   crush: boolean,
   mill: boolean,
   blend: number,
   ref: RefCost,
 ): string[] => {
-  const lines = [`원곡가 ${price.toLocaleString()}`, `작업비 ${ref.작업비소포장.toLocaleString()}`]
+  const lines = [`원곡가 ${price.toLocaleString()}`]
+  if (hasLaborCost(category)) lines.push(`작업비 ${ref.작업비소포장.toLocaleString()}`)
   if (crush) lines.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
   if (mill) lines.push(`제분 ${ref.제분비.toLocaleString()}`)
   const bc = calcBlendCost(blend, ref)
@@ -106,7 +118,7 @@ const supplyLines = (
 }
 
 // 구분 고정 정렬 순서 (그 외 맨 뒤)
-const CATEGORY_ORDER = ['유기농', '무농약', '관행', '수입', '혼합']
+const CATEGORY_ORDER = ['유기농', '무농약', '관행', '수입', '혼합', '톤백', '물류대행']
 const catRank = (c: string) => {
   const i = CATEGORY_ORDER.indexOf((c || '').trim())
   return i === -1 ? CATEGORY_ORDER.length : i
@@ -353,11 +365,11 @@ export default function JindopamCostPage() {
       r.item,
       r.variety,
       r.price,
-      refCost.작업비소포장,
+      hasLaborCost(r.category) ? refCost.작업비소포장 : 0,
       r.crush ? refCost.파쇄비 : 0,
       r.mill ? refCost.제분비 : 0,
       calcBlendCost(r.blend, refCost),
-      calcSupply(r.price, r.crush, r.mill, r.blend, refCost) ?? '',
+      calcSupply(r.category, r.price, r.crush, r.mill, r.blend, refCost) ?? '',
       r.tax,
       r.status,
     ])
@@ -640,10 +652,10 @@ export default function JindopamCostPage() {
                               row.price.toLocaleString()
                             ) : k === 'supply' ? (
                               <SupplyCell
-                                value={calcSupply(row.price, row.crush, row.mill, row.blend, refCost)}
+                                value={calcSupply(row.category, row.price, row.crush, row.mill, row.blend, refCost)}
                                 lines={
                                   refCost
-                                    ? supplyLines(row.price, row.crush, row.mill, row.blend, refCost)
+                                    ? supplyLines(row.category, row.price, row.crush, row.mill, row.blend, refCost)
                                     : []
                                 }
                                 device={device}
@@ -764,6 +776,7 @@ function ToggleBtn({ label, on, onClick }: { label: string; on: boolean; onClick
 
 // 가공옵션 입력 묶음 (파쇄/제분 토글 · 혼합곡수 · 공급가 미리보기) — 추가/수정 모달 공용
 function ProcFields({
+  category,
   crush,
   mill,
   blend,
@@ -773,6 +786,7 @@ function ProcFields({
   setMill,
   setBlend,
 }: {
+  category: string
   crush: boolean
   mill: boolean
   blend: number
@@ -782,7 +796,7 @@ function ProcFields({
   setMill: (v: boolean) => void
   setBlend: (v: number) => void
 }) {
-  const supply = calcSupply(price, crush, mill, blend, refCost)
+  const supply = calcSupply(category, price, crush, mill, blend, refCost)
   return (
     <div className="space-y-3">
       <div>
@@ -808,7 +822,7 @@ function ProcFields({
           <>
             <div className="text-lg font-semibold text-gray-900">{supply.toLocaleString()} 원</div>
             <div className="mt-0.5 text-xs text-gray-500">
-              {supplyBreakdown(price, crush, mill, blend, refCost)}
+              {supplyBreakdown(category, price, crush, mill, blend, refCost)}
             </div>
           </>
         ) : (
@@ -950,6 +964,7 @@ function EditModal({
           </div>
         </div>
         <ProcFields
+          category={row.category}
           crush={crush}
           mill={mill}
           blend={blend}
@@ -1002,7 +1017,7 @@ function CreateModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const GUBUN_OPTIONS = ['유기농', '무농약', '관행', '수입', '혼합', '직접입력']
+  const GUBUN_OPTIONS = ['유기농', '무농약', '관행', '수입', '혼합', '톤백', '물류대행', '직접입력']
   const [gubunSelect, setGubunSelect] = useState('유기농')
   const [gubunCustom, setGubunCustom] = useState('')
   const [item, setItem] = useState('')
@@ -1100,6 +1115,7 @@ function CreateModal({
           </select>,
         )}
         <ProcFields
+          category={gubun}
           crush={crush}
           mill={mill}
           blend={blend}
