@@ -5,9 +5,10 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 // ── 구글시트 설정 ────────────────────────────────────────────────
 const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
-const RANGE = "'진도팜 원가표'!A4:G"
-// 가공비(J5:K10 6항목)·배송비(J13:L15) 참고 기준표 (init7이 배치한 고정 오프셋)
-const RANGE_REF = "'진도팜 원가표'!J4:L15"
+// A4:J — G까지 원곡 데이터 + H 파쇄 / I 제분 / J 혼합곡수 (init8 추가)
+const RANGE = "'진도팜 원가표'!A4:J"
+// 가공비(N5:O10 6항목)·배송비(N13:P15) 참고 기준표 (init8이 J→N 이동한 고정 오프셋)
+const RANGE_REF = "'진도팜 원가표'!N4:P15"
 
 // 참고표 값 (시트에서 read, 하드코딩 아님)
 type RefCost = {
@@ -32,6 +33,9 @@ type CostRow = {
   price: number      // E 1kg당 원곡가
   tax: string        // F 과세여부
   status: string     // G 취급상태
+  crush: boolean     // H 파쇄 (O/X, 빈칸=X)
+  mill: boolean      // I 제분 (O/X, 빈칸=X)
+  blend: number      // J 혼합곡수 (빈칸=0)
 }
 
 // 콤마/원 제거 후 숫자화
@@ -39,6 +43,49 @@ const toNum = (v: string | undefined): number => {
   if (!v) return 0
   const n = Number(String(v).replace(/[^0-9.-]/g, ''))
   return Number.isFinite(n) ? n : 0
+}
+
+// O/X 셀 파싱 (빈칸·X = false, O = true)
+const procOn = (v: string | undefined): boolean =>
+  (v || '').trim().toUpperCase().startsWith('O')
+
+// 혼합비 = 0곡 0 / 1~5곡 기본 / 6곡+ 기본 + (곡수-5)×추가
+const calcBlendCost = (count: number, ref: RefCost): number => {
+  if (count <= 0) return 0
+  if (count <= 5) return ref.혼합비기본
+  return ref.혼합비기본 + (count - 5) * ref.혼합비추가
+}
+
+// 공급가 = 원곡가 + 작업비(소포장) + (파쇄) + (제분) + 혼합비 (단가 전부 참고표 참조)
+const calcSupply = (
+  price: number,
+  crush: boolean,
+  mill: boolean,
+  blend: number,
+  ref: RefCost | null,
+): number | null => {
+  if (!ref) return null
+  let s = price + ref.작업비소포장
+  if (crush) s += ref.파쇄비
+  if (mill) s += ref.제분비
+  s += calcBlendCost(blend, ref)
+  return s
+}
+
+// 공급가 내역 한 줄 ("원곡가 8,000 + 작업비 800 + 파쇄 600 …")
+const supplyBreakdown = (
+  price: number,
+  crush: boolean,
+  mill: boolean,
+  blend: number,
+  ref: RefCost,
+): string => {
+  const parts = [`원곡가 ${price.toLocaleString()}`, `작업비 ${ref.작업비소포장.toLocaleString()}`]
+  if (crush) parts.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
+  if (mill) parts.push(`제분 ${ref.제분비.toLocaleString()}`)
+  const bc = calcBlendCost(blend, ref)
+  if (bc > 0) parts.push(`혼합 ${bc.toLocaleString()}`)
+  return parts.join(' + ')
 }
 
 // 구분 고정 정렬 순서 (그 외 맨 뒤)
@@ -51,22 +98,23 @@ const catRank = (c: string) => {
 type Device = 'pc' | 'phone'
 
 // 컬럼 정의 (통합 원곡표 · 진도팜/나무 뷰 구분 없음)
-type ColKey = 'category' | 'item' | 'variety' | 'price' | 'tax' | 'status'
+type ColKey = 'category' | 'item' | 'variety' | 'price' | 'supply' | 'tax' | 'status'
 const COL_LABEL: Record<ColKey, string> = {
   category: '구분',
   item: '품목',
   variety: '품종',
   price: '1kg당 원곡가',
+  supply: '공급가',
   tax: '과세여부',
   status: '취급상태',
 }
-const NUM_COLS: ColKey[] = ['price']
+const NUM_COLS: ColKey[] = ['price', 'supply']
 
-// 기기별 노출 컬럼 — 폰은 취급상태 숨김
+// 기기별 노출 컬럼 — 폰은 과세여부·취급상태 숨김 (공급가는 PC/폰 공통)
 function visibleCols(device: Device): ColKey[] {
   return device === 'pc'
-    ? ['category', 'item', 'variety', 'price', 'tax', 'status']
-    : ['category', 'item', 'variety', 'price']
+    ? ['category', 'item', 'variety', 'price', 'supply', 'tax', 'status']
+    : ['category', 'item', 'variety', 'price', 'supply']
 }
 
 // 기기 감지 (md 브레이크포인트 768px)
@@ -175,6 +223,9 @@ export default function JindopamCostPage() {
           price: toNum(r[4]),
           tax: (r[5] || '').trim(),
           status: (r[6] || '').trim(),
+          crush: procOn(r[7]),
+          mill: procOn(r[8]),
+          blend: toNum(r[9]),
         }))
       setRows(data)
       // 참고 기준표 (J4:L15 고정 오프셋: 0=가공비헤더, 1~6=가공비 6항목, 7=빈행, 8=배송비헤더, 9~11=배송비)
@@ -465,6 +516,15 @@ export default function JindopamCostPage() {
                               <StatusMark value={row.status} />
                             ) : k === 'price' ? (
                               row.price.toLocaleString()
+                            ) : k === 'supply' ? (
+                              (() => {
+                                const s = calcSupply(row.price, row.crush, row.mill, row.blend, refCost)
+                                return s == null ? (
+                                  <span className="text-gray-300">-</span>
+                                ) : (
+                                  <span className="font-semibold text-gray-900">{s.toLocaleString()}</span>
+                                )
+                              })()
                             ) : (
                               (row[k as 'item' | 'variety'] as string) || '-'
                             )}
@@ -492,6 +552,7 @@ export default function JindopamCostPage() {
         <EditModal
           row={editRow}
           roleLabel={editorLabel}
+          refCost={refCost}
           onClose={() => setEditRow(null)}
           onSaved={async () => {
             setEditRow(null)
@@ -502,6 +563,7 @@ export default function JindopamCostPage() {
       {showCreate && (
         <CreateModal
           roleLabel={editorLabel}
+          refCost={refCost}
           onClose={() => setShowCreate(false)}
           onSaved={async () => {
             setShowCreate(false)
@@ -554,56 +616,171 @@ function ModalShell({
 
 const POST_URL = '/api/jindopam/cost'
 
-// ── 수정 모달 (원곡가·과세여부·적용시작일) ─────────────────────────
+// 가공옵션 O/X 토글 버튼
+function ToggleBtn({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ' +
+        (on
+          ? 'border-gray-900 bg-gray-900 text-white'
+          : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50')
+      }
+    >
+      {label} {on ? 'O' : 'X'}
+    </button>
+  )
+}
+
+// 가공옵션 입력 묶음 (파쇄/제분 토글 · 혼합곡수 · 공급가 미리보기) — 추가/수정 모달 공용
+function ProcFields({
+  crush,
+  mill,
+  blend,
+  price,
+  refCost,
+  setCrush,
+  setMill,
+  setBlend,
+}: {
+  crush: boolean
+  mill: boolean
+  blend: number
+  price: number
+  refCost: RefCost | null
+  setCrush: (v: boolean) => void
+  setMill: (v: boolean) => void
+  setBlend: (v: number) => void
+}) {
+  const supply = calcSupply(price, crush, mill, blend, refCost)
+  return (
+    <div className="space-y-3">
+      <div>
+        <span className="mb-1 block text-gray-600">가공</span>
+        <div className="flex gap-2">
+          <ToggleBtn label="파쇄" on={crush} onClick={() => setCrush(!crush)} />
+          <ToggleBtn label="제분" on={mill} onClick={() => setMill(!mill)} />
+        </div>
+      </div>
+      <label className="block">
+        <span className="mb-1 block text-gray-600">혼합곡수</span>
+        <input
+          type="number"
+          min={0}
+          value={Number.isFinite(blend) ? blend : 0}
+          onChange={(e) => setBlend(Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400"
+        />
+      </label>
+      <div className="rounded-lg bg-gray-50 px-3 py-2">
+        <div className="text-xs text-gray-400">공급가 미리보기</div>
+        {refCost && supply != null ? (
+          <>
+            <div className="text-lg font-semibold text-gray-900">{supply.toLocaleString()} 원</div>
+            <div className="mt-0.5 text-xs text-gray-500">
+              {supplyBreakdown(price, crush, mill, blend, refCost)}
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-gray-400">참고표 로딩 후 표시</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── 수정 모달 (원곡가·가공옵션·적용시작일) ─────────────────────────
 function EditModal({
   row,
   roleLabel,
+  refCost,
   onClose,
   onSaved,
 }: {
   row: CostRow
   roleLabel: string
+  refCost: RefCost | null
   onClose: () => void
   onSaved: () => void
 }) {
   const [price, setPrice] = useState('')
+  const [crush, setCrush] = useState(row.crush)
+  const [mill, setMill] = useState(row.mill)
+  const [blend, setBlend] = useState(row.blend)
   const [applyFrom, setApplyFrom] = useState('')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const rawId = [row.category, row.item, row.variety].filter((s) => s.trim() !== '').join('_')
 
+  // 원곡가 입력 없으면 기존값으로 미리보기
+  const newPriceNum = Number(String(price).replace(/[^0-9.-]/g, ''))
+  const hasPriceInput = price.trim() !== ''
+  const previewPrice = hasPriceInput && Number.isFinite(newPriceNum) ? newPriceNum : row.price
+
   const handleSave = async () => {
     setSaving(true)
     setErr(null)
     try {
-      const newPrice = Number(String(price).replace(/[^0-9.-]/g, ''))
-      if (price.trim() === '' || !Number.isFinite(newPrice)) {
-        setErr('변경 후 원곡가를 입력해 주세요.')
+      if (hasPriceInput && !Number.isFinite(newPriceNum)) {
+        setErr('변경 후 원곡가를 올바르게 입력해 주세요.')
         setSaving(false)
         return
       }
-      if (newPrice === row.price) {
+      const priceChanged = hasPriceInput && newPriceNum !== row.price
+      const procChanged = crush !== row.crush || mill !== row.mill || blend !== row.blend
+      if (!priceChanged && !procChanged) {
         onClose()
         return
       }
-      const res = await fetch(POST_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'update',
-          gubun: row.category,
-          item: row.item,
-          variety: row.variety,
-          field: '원곡가',
-          oldValue: String(row.price),
-          newValue: String(newPrice),
-          applyFrom,
-          role: roleLabel,
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok || !json.ok) throw new Error(json.error || '저장 실패')
+
+      // 1) 원곡가 변경 (기존 저장 로직 그대로)
+      if (priceChanged) {
+        const res = await fetch(POST_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update',
+            gubun: row.category,
+            item: row.item,
+            variety: row.variety,
+            field: '원곡가',
+            oldValue: String(row.price),
+            newValue: String(newPriceNum),
+            applyFrom,
+            role: roleLabel,
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok || !json.ok) throw new Error(json.error || '원곡가 저장 실패')
+      }
+
+      // 2) 가공옵션(파쇄/제분/혼합곡수) 변경
+      if (procChanged) {
+        const res = await fetch(POST_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'update-proc',
+            gubun: row.category,
+            item: row.item,
+            variety: row.variety,
+            crush,
+            mill,
+            blend,
+            oldCrush: row.crush,
+            oldMill: row.mill,
+            oldBlend: row.blend,
+            applyFrom,
+            role: roleLabel,
+          }),
+        })
+        const json = await res.json()
+        if (!res.ok || !json.ok) throw new Error(json.error || '가공옵션 저장 실패')
+      }
+
       onSaved()
     } catch (e: any) {
       setErr(e?.message || '저장 중 오류가 발생했습니다.')
@@ -644,6 +821,16 @@ function EditModal({
             </label>
           </div>
         </div>
+        <ProcFields
+          crush={crush}
+          mill={mill}
+          blend={blend}
+          price={previewPrice}
+          refCost={refCost}
+          setCrush={setCrush}
+          setMill={setMill}
+          setBlend={setBlend}
+        />
         <label className="block">
           <span className="mb-1 block text-gray-600">적용 시작일</span>
           <input
@@ -678,10 +865,12 @@ function EditModal({
 // ── 신규 원료 추가 모달 ───────────────────────────────────────────
 function CreateModal({
   roleLabel,
+  refCost,
   onClose,
   onSaved,
 }: {
   roleLabel: string
+  refCost: RefCost | null
   onClose: () => void
   onSaved: () => void
 }) {
@@ -692,11 +881,15 @@ function CreateModal({
   const [variety, setVariety] = useState('')
   const [wongok, setWongok] = useState('')
   const [tax, setTax] = useState('면세')
+  const [crush, setCrush] = useState(false)
+  const [mill, setMill] = useState(false)
+  const [blend, setBlend] = useState(0)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const gubun = gubunSelect === '직접입력' ? gubunCustom : gubunSelect
   const rawId = [gubun, item, variety].filter((s) => s.trim() !== '').join('_') || '—'
+  const wongokNum = wongok ? Number(String(wongok).replace(/[^0-9.-]/g, '')) : 0
 
   const handleSave = async () => {
     if (!gubun.trim() || !item.trim()) {
@@ -716,6 +909,9 @@ function CreateModal({
           variety: variety.trim(),
           wongok: wongok ? Number(String(wongok).replace(/[^0-9.-]/g, '')) : '',
           tax,
+          crush,
+          mill,
+          blend,
           role: roleLabel,
         }),
       })
@@ -775,7 +971,17 @@ function CreateModal({
             <option value="과세">과세</option>
           </select>,
         )}
-        <p className="text-xs text-gray-400">원료ID·작업비·공급가는 시트 수식이 자동 계산합니다. 취급상태는 시트에서 직접 입력합니다.</p>
+        <ProcFields
+          crush={crush}
+          mill={mill}
+          blend={blend}
+          price={wongokNum}
+          refCost={refCost}
+          setCrush={setCrush}
+          setMill={setMill}
+          setBlend={setBlend}
+        />
+        <p className="text-xs text-gray-400">원료ID는 시트 수식이 자동 계산합니다. 공급가는 원곡가·가공옵션·참고표 단가로 대시보드가 자동 계산합니다. 취급상태는 시트에서 직접 입력합니다.</p>
         {err && <p className="text-sm text-red-600">⚠️ {err}</p>}
         <div className="flex justify-end gap-2 pt-2">
           <button

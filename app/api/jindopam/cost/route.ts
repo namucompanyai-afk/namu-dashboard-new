@@ -38,22 +38,22 @@ const LOG_HEADERS = [
 
 const REFLOG_HEADERS = ['일시', '종류', '항목', '변경 전', '변경 후', '적용 시작일', '변경자']
 
-// 참고표 항목명 → 셀 (가공비 K5:K10 6항목 / 배송비 K·L 13:15 · init7 배치 기준)
+// 참고표 항목명 → 셀 (가공비 O5:O10 6항목 / 배송비 O·P 13:15 · init8 J→N 이동 기준)
 const REF_COST_CELL: Record<string, string> = {
-  '작업비(소포장)': 'K5',
-  '작업비(벌크)': 'K6',
-  파쇄비: 'K7',
-  제분비: 'K8',
-  '혼합비(5곡까지)': 'K9',
-  '혼합비(추가1곡당)': 'K10',
+  '작업비(소포장)': 'O5',
+  '작업비(벌크)': 'O6',
+  파쇄비: 'O7',
+  제분비: 'O8',
+  '혼합비(5곡까지)': 'O9',
+  '혼합비(추가1곡당)': 'O10',
 }
 const REF_SHIP_CELL: Record<string, string> = {
-  '박스(소)': 'K13',
-  '택배(소)': 'L13',
-  '박스(중)': 'K14',
-  '택배(중)': 'L14',
-  '박스(대)': 'K15',
-  '택배(대)': 'L15',
+  '박스(소)': 'O13',
+  '택배(소)': 'P13',
+  '박스(중)': 'O14',
+  '택배(중)': 'P14',
+  '박스(대)': 'O15',
+  '택배(대)': 'P15',
 }
 
 // 서비스 계정 → sheets 클라이언트
@@ -422,6 +422,47 @@ export async function POST(req: Request) {
       })
     }
 
+    // ── 가공옵션 컬럼(H·I·J) 신설 + 참고표 J:L → N:P 이동 (수동 1회) ─────
+    // 데이터 우측에 파쇄(H)/제분(I)/혼합곡수(J) 3열을 붙이기 위해,
+    // J:L을 점유하던 참고표를 N:P로 옮긴다. 참고표 현재 단가(수정분)는 읽어서 보존.
+    // 원곡 데이터(A:G)·기존 34행 값은 건드리지 않음(H:J는 빈칸 → 파쇄X/제분X/곡수0).
+    if (action === 'init8') {
+      // 1. 데이터 헤더 H4:J4 (파쇄/제분/혼합곡수)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!H4:J4`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['파쇄', '제분', '혼합곡수']] },
+      })
+
+      // 2. 현재 참고표 J4:L15 읽어 N4:P15로 이동 (수정된 단가 그대로 보존)
+      const refCur = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!J4:L15`,
+      })
+      const rv = refCur.data.values || []
+      if (rv.length > 0) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SHEET_ID,
+          range: `${quote(COST_TAB)}!N4:P15`,
+          valueInputOption: 'RAW',
+          requestBody: { values: rv },
+        })
+      }
+
+      // 3. 옛 참고표 J:L 클리어
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!J4:L100`,
+        requestBody: {},
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '가공옵션 컬럼(H:J) 추가 · 참고표 J:L→N:P 이동 완료',
+      })
+    }
+
     // ── 참고표 항목단위 수정 + '가공비 변동 로그' append ──────────
     // body: { kind('cost'|'ship'), item, oldValue, newValue, applyFrom, editor }
     if (action === 'update-ref') {
@@ -479,6 +520,77 @@ export async function POST(req: Request) {
       }
 
       return NextResponse.json({ ok: true, message: `${item} 수정 완료` })
+    }
+
+    // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
+    // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
+    if (action === 'update-proc') {
+      const { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role } =
+        body
+      if (!gubun || !item) {
+        return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
+      }
+
+      // 대상 행 탐색 (구분+품목+품종 일치)
+      const cur = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!A${HEADER_ROW}:G`,
+      })
+      const vals = cur.data.values || []
+      let targetRow = -1
+      for (let i = 1; i < vals.length; i++) {
+        const r = vals[i] || []
+        if (
+          (r[1] || '').trim() === String(gubun).trim() &&
+          (r[2] || '').trim() === String(item).trim() &&
+          (r[3] || '').trim() === String(variety || '').trim()
+        ) {
+          targetRow = HEADER_ROW + i
+          break
+        }
+      }
+      if (targetRow === -1) {
+        return NextResponse.json({ ok: false, error: '대상 원료 행을 찾지 못했습니다.' }, { status: 404 })
+      }
+
+      // H~J 갱신 (파쇄/제분/혼합곡수)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!H${targetRow}:J${targetRow}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0]] },
+      })
+
+      const summary = (c: boolean, m: boolean, b: number) =>
+        `파쇄${c ? 'O' : 'X'}·제분${m ? 'O' : 'X'}·${Number(b) || 0}곡`
+
+      // 변동로그 append (원곡가와 동일 로그탭, 변경전/후에 가공옵션 요약)
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(LOG_TAB)}!A:H`,
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [
+            [
+              nowKst(),
+              makeRawId(gubun, item, variety || ''),
+              gubun,
+              item,
+              summary(!!oldCrush, !!oldMill, oldBlend),
+              summary(!!crush, !!mill, blend),
+              applyFrom || '',
+              role || '',
+            ],
+          ],
+        },
+      })
+
+      await notifySlack(
+        `원가표 · 가공옵션 변경\n품목: ${gubun} ${item}\n${summary(!!oldCrush, !!oldMill, oldBlend)} → ${summary(!!crush, !!mill, blend)}\n변경자: ${role || ''} · 적용일: ${applyFrom || ''}`,
+      )
+
+      return NextResponse.json({ ok: true, row: targetRow })
     }
 
     // ── 기존 원료 수정 ────────────────────────────────────────────
@@ -554,7 +666,7 @@ export async function POST(req: Request) {
 
     // ── 신규 원료 추가 ────────────────────────────────────────────
     if (action === 'create') {
-      const { gubun, item, variety, wongok, tax } = body
+      const { gubun, item, variety, wongok, tax, crush, mill, blend } = body
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
       }
@@ -582,6 +694,11 @@ export async function POST(req: Request) {
         {
           range: `${quote(COST_TAB)}!B${newRow}:F${newRow}`,
           values: [[gubun, item, variety || '', wongok ?? '', tax || '']],
+        },
+        // H~J: 파쇄·제분·혼합곡수 (가공옵션)
+        {
+          range: `${quote(COST_TAB)}!H${newRow}:J${newRow}`,
+          values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0]],
         },
       ]
       // 원료ID 자동수식은 이전 행 수식이 있을 때만 복사(없으면 시트 ARRAYFORMULA 등에 위임)
