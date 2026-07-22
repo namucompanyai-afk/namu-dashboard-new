@@ -106,7 +106,7 @@ const supplyLines = (
 }
 
 // 구분 고정 정렬 순서 (그 외 맨 뒤)
-const CATEGORY_ORDER = ['유기농', '무농약', '관행', '수입']
+const CATEGORY_ORDER = ['유기농', '무농약', '관행', '수입', '혼합']
 const catRank = (c: string) => {
   const i = CATEGORY_ORDER.indexOf((c || '').trim())
   return i === -1 ? CATEGORY_ORDER.length : i
@@ -1002,7 +1002,7 @@ function CreateModal({
   onClose: () => void
   onSaved: () => void
 }) {
-  const GUBUN_OPTIONS = ['유기농', '무농약', '관행', '수입', '직접입력']
+  const GUBUN_OPTIONS = ['유기농', '무농약', '관행', '수입', '혼합', '직접입력']
   const [gubunSelect, setGubunSelect] = useState('유기농')
   const [gubunCustom, setGubunCustom] = useState('')
   const [item, setItem] = useState('')
