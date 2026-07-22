@@ -46,6 +46,7 @@ const REF_COST_CELL: Record<string, string> = {
   제분비: 'O8',
   '혼합비(5곡까지)': 'O9',
   '혼합비(추가1곡당)': 'O10',
+  물류대행비: 'O11', // 옛 빈 구분행(N11) → 물류대행비 (init11)
 }
 const REF_SHIP_CELL: Record<string, string> = {
   '박스(소)': 'O13',
@@ -578,6 +579,28 @@ export async function POST(req: Request) {
         requestBody: { values: [['파쇄', '제분', '혼합곡수']] },
       })
       return NextResponse.json({ ok: true, message: 'H:M 서식/병합 정리 완료 · H4:J4 헤더 보장' })
+    }
+
+    // ── 물류대행비 항목 추가 (참고표 N11/O11 · 수동 1회) ──────────────
+    // 옛 빈 구분행(N11)에 '물류대행비' 라벨 + 단가 500. 기존 단가·위치는 건드리지 않음.
+    // 이미 단가가 입력돼 있으면(수정분) 보존하고 라벨만 보장.
+    if (action === 'init11') {
+      const cur = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!N11:O11`,
+      })
+      const row = cur.data.values?.[0] || []
+      const curVal = (row[1] ?? '').toString().trim()
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!N11:O11`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['물류대행비', curVal === '' ? 500 : row[1]]] },
+      })
+      return NextResponse.json({
+        ok: true,
+        message: `물류대행비 항목 세팅 완료 (단가 ${curVal === '' ? 500 : row[1]})`,
+      })
     }
 
     // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────

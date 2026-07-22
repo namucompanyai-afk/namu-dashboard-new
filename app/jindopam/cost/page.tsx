@@ -19,6 +19,7 @@ type RefCost = {
   제분비: number
   혼합비기본: number
   혼합비추가: number
+  물류대행비: number
 }
 type RefShip = { 규격: string; 박스: number; 택배: number }
 // 배송비 규격별 기준(무게) 표기 — UI 라벨(값 아님)
@@ -61,6 +62,8 @@ const calcBlendCost = (count: number, ref: RefCost): number => {
 const NO_LABOR_CATEGORIES = ['톤백', '물류대행']
 const hasLaborCost = (category: string): boolean =>
   !NO_LABOR_CATEGORIES.includes((category || '').trim())
+// 물류대행 구분은 물류대행비 가산 (작업비는 위에서 이미 제외됨)
+const isLogistics = (category: string): boolean => (category || '').trim() === '물류대행'
 
 // 공급가 = 원곡가 + (작업비 소포장) + (파쇄) + (제분) + 혼합비 (단가 전부 참고표 참조)
 // 작업비 포함 여부만 구분(category)에 따라 분기 — 표시·툴팁·미리보기·엑셀이 이 함수를 재사용
@@ -75,6 +78,7 @@ const calcSupply = (
   if (!ref) return null
   let s = price
   if (hasLaborCost(category)) s += ref.작업비소포장
+  if (isLogistics(category)) s += ref.물류대행비
   if (crush) s += ref.파쇄비
   if (mill) s += ref.제분비
   s += calcBlendCost(blend, ref)
@@ -92,6 +96,7 @@ const supplyBreakdown = (
 ): string => {
   const parts = [`원곡가 ${price.toLocaleString()}`]
   if (hasLaborCost(category)) parts.push(`작업비 ${ref.작업비소포장.toLocaleString()}`)
+  if (isLogistics(category)) parts.push(`물류대행비 ${ref.물류대행비.toLocaleString()}`)
   if (crush) parts.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
   if (mill) parts.push(`제분 ${ref.제분비.toLocaleString()}`)
   const bc = calcBlendCost(blend, ref)
@@ -110,6 +115,7 @@ const supplyLines = (
 ): string[] => {
   const lines = [`원곡가 ${price.toLocaleString()}`]
   if (hasLaborCost(category)) lines.push(`작업비 ${ref.작업비소포장.toLocaleString()}`)
+  if (isLogistics(category)) lines.push(`물류대행비 ${ref.물류대행비.toLocaleString()}`)
   if (crush) lines.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
   if (mill) lines.push(`제분 ${ref.제분비.toLocaleString()}`)
   const bc = calcBlendCost(blend, ref)
@@ -326,6 +332,7 @@ export default function JindopamCostPage() {
           제분비: toNum(rv[4]?.[1]),
           혼합비기본: toNum(rv[5]?.[1]),
           혼합비추가: toNum(rv[6]?.[1]),
+          물류대행비: toNum(rv[7]?.[1]), // N11 (옛 빈 구분행 → 물류대행비, init11)
         })
         setRefShip(
           [9, 10, 11]
@@ -351,7 +358,7 @@ export default function JindopamCostPage() {
   const handleDownload = () => {
     if (!refCost) return
     const header = [
-      '구분', '품목', '품종', '원곡가', '작업비', '파쇄비', '제분비', '혼합비', '공급가', '과세여부', '취급상태',
+      '구분', '품목', '품종', '원곡가', '작업비', '물류대행비', '파쇄비', '제분비', '혼합비', '공급가', '과세여부', '취급상태',
     ]
     const sorted = [...rows].sort((a, b) => {
       const c = catRank(a.category) - catRank(b.category)
@@ -366,6 +373,7 @@ export default function JindopamCostPage() {
       r.variety,
       r.price,
       hasLaborCost(r.category) ? refCost.작업비소포장 : 0,
+      isLogistics(r.category) ? refCost.물류대행비 : 0,
       r.crush ? refCost.파쇄비 : 0,
       r.mill ? refCost.제분비 : 0,
       calcBlendCost(r.blend, refCost),
@@ -470,17 +478,18 @@ export default function JindopamCostPage() {
                 </thead>
                 <tbody>
                   {[
-                    { item: '작업비(소포장)', v: refCost?.작업비소포장 },
-                    { item: '작업비(벌크)', v: refCost?.작업비벌크 },
-                    { item: '파쇄비', v: refCost?.파쇄비 },
-                    { item: '제분비', v: refCost?.제분비 },
-                    { item: '혼합비(5곡까지)', v: refCost?.혼합비기본 },
-                    { item: '혼합비(추가1곡당)', v: refCost?.혼합비추가 },
+                    { item: '작업비(소포장)', v: refCost?.작업비소포장, unit: '원/kg' },
+                    { item: '작업비(벌크)', v: refCost?.작업비벌크, unit: '원/kg' },
+                    { item: '파쇄비', v: refCost?.파쇄비, unit: '원/kg' },
+                    { item: '제분비', v: refCost?.제분비, unit: '원/kg' },
+                    { item: '혼합비(5곡까지)', v: refCost?.혼합비기본, unit: '원/kg' },
+                    { item: '혼합비(추가1곡당)', v: refCost?.혼합비추가, unit: '원/kg' },
+                    { item: '물류대행비', v: refCost?.물류대행비, unit: '원/건' },
                   ].map((r) => (
                     <tr key={r.item} className="border-t border-gray-100">
                       <td className="px-3 py-2 text-left">{r.item}</td>
                       <td className="px-3 py-2 text-right font-mono">{(r.v ?? 0).toLocaleString()}</td>
-                      <td className="px-3 py-2 text-left text-gray-400">원/kg</td>
+                      <td className="px-3 py-2 text-left text-gray-400">{r.unit}</td>
                       <td className="px-3 py-2 text-right">
                         <button
                           onClick={() =>
