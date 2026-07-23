@@ -61,8 +61,12 @@ export async function POST(request: Request) {
     await saveData(KEY, { items });
 
     return NextResponse.json({ ok: true, item: newItem });
-  } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+  } catch (err: any) {
+    // PostgREST 에러는 {message, code, details, hint} 객체 → String()이면 [object Object]. 실제 내용 노출.
+    return NextResponse.json(
+      { error: err?.message || String(err), code: err?.code, details: err?.details, hint: err?.hint },
+      { status: 500 },
+    );
   }
 }
 
