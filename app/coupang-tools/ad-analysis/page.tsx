@@ -179,9 +179,24 @@ export default function AdAnalysisPage() {
   const [autoLoading, setAutoLoading] = useState(true)
   const [uploadError, setUploadError] = useState<string | null>(null)
 
+  // 게스트 계정(role='게스트'): 라이브 탭만 사용. 저장 탭·추세차트·저장데이터 로드 전부 차단.
+  const [isGuest, setIsGuest] = useState(false)
+  useEffect(() => {
+    try {
+      if (JSON.parse(localStorage.getItem('user') || '{}')?.role === '게스트') {
+        setIsGuest(true)
+        setMode('live') // 라이브 고정
+      }
+    } catch {
+      /* 파싱 실패 무시 */
+    }
+  }, [])
+
   // 목표 ROAS — 사용자 입력값 (prefix::타입 → %). 분석 갱신과 무관하게 유지.
   const [targets, setTargets] = useState<Record<string, number>>({})
   useEffect(() => {
+    // 게스트는 회사 저장데이터(목표 ROAS 포함) 미조회
+    try { if (JSON.parse(localStorage.getItem('user') || '{}')?.role === '게스트') return } catch {}
     let cancelled = false
     ;(async () => {
       try {
@@ -228,6 +243,13 @@ export default function AdAnalysisPage() {
   // settle/price/savedAnalyses 등 광고 분석에서 안 쓰는 것은 생략.
   // 이미 store 에 데이터가 있으면 fetch 안 함 (다른 페이지에서 먼저 로드된 경우).
   useEffect(() => {
+    // 게스트는 저장 분석(마진마스터·주차 진단) 자동 로드 차단 — 라이브 업로드만 사용
+    try {
+      if (JSON.parse(localStorage.getItem('user') || '{}')?.role === '게스트') {
+        setAutoLoading(false)
+        return
+      }
+    } catch {}
     let cancelled = false
     const needMaster = !marginMaster
     const needAd = !rawAdCampaign || rawAdCampaign.length === 0 || !adPeriod
@@ -363,6 +385,7 @@ export default function AdAnalysisPage() {
   //   saved 모드 → store.rawAdCampaign 갱신 (수익 진단 mount 자동 로드와 동일 경로)
   //   live 모드  → adAnalysisLive 갱신 (라이브 탭 유지하면서 데이터만 swap)
   const handleTrendPointClick = async (a: any) => {
+    if (isGuest) return // 게스트는 저장분 로드 경로 비활성
     if (!a?.id) { alert('이 분석은 ID가 없어 로드할 수 없습니다.'); return }
     try {
       const [itemRes, rawRes] = await Promise.all([
@@ -423,6 +446,7 @@ export default function AdAnalysisPage() {
     <Header
       mode={mode}
       onMode={setMode}
+      isGuest={isGuest}
       adPeriodLabel={sourcePeriod ? `${sourcePeriod.startDate} ~ ${sourcePeriod.endDate} (${sourcePeriod.days}일)` : undefined}
     />
   )
@@ -458,7 +482,8 @@ export default function AdAnalysisPage() {
         <KpiSection view={view} hideBep={hideBep} />
         <HintBanner />
         <PairWarnings view={view} master={marginMaster as any} />
-        <WeeklyTrendChart onPointClick={handleTrendPointClick} />
+        {/* 게스트: 저장 히스토리 기반 추세차트 숨김(회사 저장데이터) */}
+        {!isGuest && <WeeklyTrendChart onPointClick={handleTrendPointClick} />}
         <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
         {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
         <PairRoasComparisonChart view={view} />
@@ -653,15 +678,18 @@ function LiveActiveBar({ meta, onReplace, onClear }: {
 }
 
 // ── Header ────────────────────────────────────────────────────
-function Header({ mode, onMode, adPeriodLabel }: {
+function Header({ mode, onMode, adPeriodLabel, isGuest }: {
   mode: Mode
   onMode: (m: Mode) => void
   adPeriodLabel?: string
+  isGuest?: boolean
 }) {
-  const tabs: { id: Mode; label: string; sub: string }[] = [
+  const allTabs: { id: Mode; label: string; sub: string }[] = [
     { id: 'saved', label: '저장 (7일)', sub: '진단 페이지 자동 저장' },
     { id: 'live', label: '라이브', sub: '광고 엑셀 직접 업로드' },
   ]
+  // 게스트는 라이브 탭만 노출 (저장 탭 숨김)
+  const tabs = isGuest ? allTabs.filter((t) => t.id === 'live') : allTabs
   return (
     <div className="aa-page-header">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>

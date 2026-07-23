@@ -35,8 +35,12 @@ export default function LoginPage() {
 
       if (data.ok) {
         localStorage.setItem('user', JSON.stringify(data.user));
-        // 진도팜 계정은 통합 포털 대신 원가표로 랜딩
-        window.location.href = data.user?.role === '진도팜' ? '/jindopam/cost' : '/';
+        const role = data.user?.role;
+        // 미들웨어 게이팅용 ASCII 마커 쿠키 (게스트만 서버측 제한). 한글 role은 localStorage 유지.
+        document.cookie = `nd_role=${role === '게스트' ? 'guest' : 'member'}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
+        // 게스트 → 광고 분석 / 진도팜 → 원가표 / 그 외 → 통합 포털
+        window.location.href =
+          role === '게스트' ? '/coupang-tools/ad-analysis' : role === '진도팜' ? '/jindopam/cost' : '/';
       } else {
         setError(data.error || '로그인에 실패했습니다.');
       }

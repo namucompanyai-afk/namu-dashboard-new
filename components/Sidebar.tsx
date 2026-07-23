@@ -37,11 +37,13 @@ export default function Sidebar() {
   const handleLogout = async () => {
     if (!(await confirm({ title: '로그아웃', message: '로그아웃 하시겠습니까?', confirmText: '로그아웃' }))) return;
     localStorage.removeItem('user');
+    document.cookie = 'nd_role=; path=/; max-age=0'; // 미들웨어 게이팅 쿠키 제거
     router.push('/login');
   };
 
   const isActive = (path: string) => pathname === path;
   const isJindoAccount = userRole === '진도팜'; // 원가표만 접근 가능한 진도팜 계정
+  const isGuest = userRole === '게스트'; // 쿠팡 광고 분석(라이브)만 접근 가능한 게스트 계정
 
   const sidebarContent = (
     <>
@@ -65,6 +67,15 @@ export default function Sidebar() {
             <Link href="/jindopam/cost" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/cost') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
               <span>🧾</span>
               <span>원가표</span>
+            </Link>
+          </div>
+        ) : isGuest ? (
+          // 게스트 계정: 쿠팡 광고 분석(라이브) 하나만 노출
+          <div className="space-y-1">
+            <div className="text-xs text-gray-400 px-3 py-2 uppercase tracking-wider">쿠팡</div>
+            <Link href="/coupang-tools/ad-analysis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/coupang-tools/ad-analysis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+              <span>📈</span>
+              <span>광고 분석</span>
             </Link>
           </div>
         ) : (
