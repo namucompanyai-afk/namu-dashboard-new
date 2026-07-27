@@ -446,20 +446,30 @@ function computeDelivery(rows: any[][] | null):
   const countsByChannel: Record<string, SizeCount> = {}
   for (const b of blocks) countsByChannel[b.key] = { 소: 0, 중: 0, 대: 0 }
 
-  // 일자별 오전/오후 행 합산 (소스 오브 트루스). 계 행/기타 요약행은 제외.
-  let dailyRows = 0
+  // 셀에 실제 숫자가 있는지 (빈칸·텍스트 제외)
+  const cellHasNumber = (raw: any): boolean => {
+    if (raw === '' || raw == null) return false
+    const s = String(raw).replace(/[^0-9.-]/g, '')
+    return s !== '' && Number.isFinite(Number(s))
+  }
+
+  // 일자 데이터 행 합산: A열 값 무관. B열이 "계"가 아니고 규격 컬럼에 숫자가 있는 모든 행.
+  // 제외: "계" 행(중복 합산 방지)·헤더·빈 행(규격 컬럼에 숫자 없음).
+  let dataRows = 0
   for (let i = hdrIdx + 1; i < rows.length; i++) {
-    const c0 = String(rows[i]?.[0] || '').trim()
-    if (c0 !== '오전' && c0 !== '오후') continue
-    dailyRows++
+    const r = rows[i] || []
+    if (String(r[1] ?? '').trim() === '계') continue
+    const hasNum = blocks.some((b) => b.sizeCols.some((sc) => cellHasNumber(r[sc.col])))
+    if (!hasNum) continue
+    dataRows++
     for (const b of blocks) {
-      for (const sc of b.sizeCols) countsByChannel[b.key][sc.size] += numCell(rows[i][sc.col])
+      for (const sc of b.sizeCols) countsByChannel[b.key][sc.size] += numCell(r[sc.col])
     }
   }
 
-  // 폴백: 일자행이 없으면(포맷 상이) "계" 행 사용
+  // 폴백: 데이터 행이 하나도 없으면(포맷 상이) "계" 행 사용
   let source: '계' | '일자합산' = '일자합산'
-  if (dailyRows === 0) {
+  if (dataRows === 0) {
     const gyeh = rows.find((r) => String(r?.[1] || '').trim() === '계')
     if (!gyeh) return null
     for (const b of blocks) for (const sc of b.sizeCols) countsByChannel[b.key][sc.size] += numCell(gyeh[sc.col])
