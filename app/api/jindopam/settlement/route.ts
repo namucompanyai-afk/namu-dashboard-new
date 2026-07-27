@@ -64,10 +64,14 @@ function monthKeyFromName(name: string): string | null {
   return `${y}-${mo}`
 }
 
-// 2026 폴더 ID 탐색: env 우선, 없으면 이름으로 진도팜 → 2026 순차 탐색
+// 진도팜/2026 폴더 ID (서비스계정에 공유됨). 연도 폴더라 2027부터는 갱신/이름탐색 필요.
+const DEFAULT_2026_FOLDER = '17uWnQkj3pSGJkDrejtmMuup6NKaR18za'
+
+// 2026 폴더 ID 탐색: env > 상수 > sharedWithMe > 이름탐색
 async function find2026FolderId(drive: ReturnType<typeof getDrive>): Promise<string> {
   const envId = process.env.JINDOPAM_DRIVE_FOLDER_ID
   if (envId) return envId
+  if (DEFAULT_2026_FOLDER) return DEFAULT_2026_FOLDER
 
   const folderQ = "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
   // 1) 직접 공유(sharedWithMe)된 폴더 우선 — 폴더만 공유하면 여기로 들어옴

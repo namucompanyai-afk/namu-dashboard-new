@@ -7,9 +7,13 @@ import { formatKRW } from '@/components/pnl/format'
 
 // ── 타입 (API /api/jindopam/settlement 응답) ──────────────────────────
 type Product = { name: string; qty: number; unitPrice: number | null; subtotal: number | null }
+type SizeCount = { 소: number; 중: number; 대: number }
 type Delivery = {
-  takbae: { total: number; bySize: Record<string, number> }
-  box: { total: number; bySize: Record<string, number> }
+  takbae: { total: number; byChannel: Record<string, number> }
+  box: { total: number; bySize: SizeCount }
+  countsByChannel: Record<string, SizeCount>
+  source: '계' | '일자합산'
+  note: string
 } | null
 type SettleData = {
   ok: boolean
@@ -231,25 +235,67 @@ export default function JindopamSettlementPage() {
         )}
       </section>
 
-      {/* 택배비 / 박스비 — 택배 시트 스키마 확인 후 (현재 미연동) */}
+      {/* 택배비 / 박스비 — 택배 시트 규격별 건수 × 참고표 단가 (실집계) */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {[
-          { title: '택배비 디테일', unit: '소 2,100 · 중 2,800 · 대 4,400' },
-          { title: '박스비 디테일', unit: '소 427 · 중 1,291 · 대 1,495' },
-        ].map((s) => (
-          <section key={s.title} className="rounded-lg border border-gray-200 bg-white p-4">
-            <div className="mb-3 flex items-baseline justify-between">
-              <h3 className="text-base font-semibold">{s.title}</h3>
-              <span className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
-                대표님 부담 · 참고
-              </span>
+        {/* 택배비: 채널별 */}
+        <section className="rounded-lg border border-gray-200 bg-white p-4">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h3 className="text-base font-semibold">택배비 디테일</h3>
+            <span className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+              대표님 부담 · 참고
+            </span>
+          </div>
+          {data?.delivery ? (
+            <>
+              <div className="mb-3 font-mono text-2xl font-bold">{formatKRW(data.delivery.takbae.total)}</div>
+              <div className="space-y-1.5 text-sm">
+                {Object.entries(data.delivery.takbae.byChannel).map(([ch, v]) => (
+                  <div key={ch} className="flex justify-between">
+                    <span className="text-gray-600">{ch === '스토어' ? '스토어(스마트)' : ch}</span>
+                    <span className="font-mono">{formatKRW(v)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-gray-400">단가 소 2,100 · 중 2,800 · 대 4,400 · {data.delivery.note}</p>
+            </>
+          ) : (
+            <div className="text-sm">
+              <Pending /> <span className="text-gray-400">택배 시트 없음/파싱 실패</span>
             </div>
-            <div className="mb-2 text-2xl font-bold">
-              {data?.delivery ? formatKRW(0) : <Pending />}
+          )}
+        </section>
+
+        {/* 박스비: 규격별 */}
+        <section className="rounded-lg border border-gray-200 bg-white p-4">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h3 className="text-base font-semibold">박스비 디테일</h3>
+            <span className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+              대표님 부담 · 참고
+            </span>
+          </div>
+          {data?.delivery ? (
+            <>
+              <div className="mb-3 font-mono text-2xl font-bold">{formatKRW(data.delivery.box.total)}</div>
+              <div className="space-y-1.5 text-sm">
+                {(['소', '중', '대'] as const).map((sz) => (
+                  <div key={sz} className="flex justify-between">
+                    <span className="text-gray-600">
+                      {sz} <span className="text-gray-400">({data.delivery!.box.bySize[sz].toLocaleString()}건)</span>
+                    </span>
+                    <span className="font-mono">
+                      {formatKRW(data.delivery!.box.bySize[sz] * { 소: 427, 중: 1291, 대: 1495 }[sz])}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 text-[11px] text-gray-400">단가 소 427 · 중 1,291 · 대 1,495</p>
+            </>
+          ) : (
+            <div className="text-sm">
+              <Pending /> <span className="text-gray-400">택배 시트 없음/파싱 실패</span>
             </div>
-            <p className="text-xs text-gray-400">단가 {s.unit} · 택배 시트 규격별 건수 집계 후 연동</p>
-          </section>
-        ))}
+          )}
+        </section>
       </div>
 
       {/* 월별 추이 — 완료월만 실선, 집계 중(부분월)은 점선·중공 dot로 구분해 급락처럼 안 보이게 */}
