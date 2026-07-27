@@ -114,12 +114,22 @@ async function find2026FolderId(drive: ReturnType<typeof getDrive>): Promise<str
 // 2026 폴더의 xlsx 목록 + 월키. folderId 지정 시 이름탐색 건너뜀.
 async function listMonthlyFiles(drive: ReturnType<typeof getDrive>, folderIdOverride?: string) {
   const folderId = folderIdOverride || (await find2026FolderId(drive))
+  // 폴더 메타 조회 → 접근 확인(미공유면 여기서 403) + 공유드라이브면 driveId 확보
+  const meta = await drive.files.get({
+    fileId: folderId,
+    fields: 'id,name,driveId,mimeType',
+    supportsAllDrives: true,
+  })
+  const driveId = meta.data.driveId
+  // 공유드라이브 내부 폴더는 corpora=drive+driveId로 스코프해야 자식이 잡힘
   const res = await drive.files.list({
     q: `'${folderId}' in parents and trashed = false`,
     fields: 'files(id,name,mimeType,modifiedTime)',
     pageSize: 200,
     orderBy: 'name',
-    ...ALL_DRIVES,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
+    ...(driveId ? { corpora: 'drive' as const, driveId } : { corpora: 'allDrives' as const }),
   })
   const files = (res.data.files || [])
     .filter((f) => /\.xlsx?$/i.test(f.name || '') || f.mimeType?.includes('spreadsheet'))
