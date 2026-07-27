@@ -74,40 +74,39 @@ async function find2026FolderId(drive: ReturnType<typeof getDrive>): Promise<str
   if (envId) return envId
 
   const folderQ = "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-  // 1) 진도팜 폴더 후보
+  // 1) 2026 폴더 전역 검색 (공유된 폴더는 이름검색에 바로 잡히는 편)
+  const any2026 = await drive.files.list({
+    q: `name = '2026' and ${folderQ}`,
+    fields: 'files(id,name,parents)',
+    pageSize: 20,
+    ...ALL_DRIVES,
+  })
+  const direct = (any2026.data.files || [])[0]
+  if (direct?.id) return direct.id
+
+  // 2) 진도팜 폴더 → 하위 2026
   const jindo = await drive.files.list({
-    q: `name = '진도팜' and ${folderQ}`,
+    q: `name contains '진도팜' and ${folderQ}`,
     fields: 'files(id,name)',
     pageSize: 50,
     ...ALL_DRIVES,
   })
-  const jindoIds = (jindo.data.files || []).map((f) => f.id!).filter(Boolean)
-  // 2) 진도팜 하위 2026, 없으면 전역 2026 폴더 탐색
-  for (const pid of jindoIds) {
+  for (const pid of (jindo.data.files || []).map((f) => f.id!).filter(Boolean)) {
     const sub = await drive.files.list({
-      q: `name = '2026' and '${pid}' in parents and ${folderQ}`,
+      q: `'${pid}' in parents and ${folderQ}`,
       fields: 'files(id,name)',
-      pageSize: 10,
+      pageSize: 50,
       ...ALL_DRIVES,
     })
-    const hit = (sub.data.files || [])[0]
+    const hit = (sub.data.files || []).find((f) => (f.name || '').includes('2026'))
     if (hit?.id) return hit.id
   }
-  // 폴백: 이름이 2026인 폴더 전역 검색 (첫 후보)
-  const any2026 = await drive.files.list({
-    q: `name = '2026' and ${folderQ}`,
-    fields: 'files(id,name,parents)',
-    pageSize: 10,
-    ...ALL_DRIVES,
-  })
-  const hit = (any2026.data.files || [])[0]
-  if (hit?.id) return hit.id
   throw new Error('2026 폴더를 찾지 못했습니다. (서비스계정 공유 또는 JINDOPAM_DRIVE_FOLDER_ID 필요)')
 }
 
-// 2026 폴더의 xlsx 목록 + 월키
-async function listMonthlyFiles(drive: ReturnType<typeof getDrive>) {
-  const folderId = await find2026FolderId(drive)
+// 2026 폴더의 xlsx 목록 + 월키. folderId 지정 시 이름탐색 건너뜀.
+async function listMonthlyFiles(drive: ReturnType<typeof getDrive>, folderIdOverride?: string) {
+  const folderId = folderIdOverride || (await find2026FolderId(drive))
   const res = await drive.files.list({
     q: `'${folderId}' in parents and trashed = false`,
     fields: 'files(id,name,mimeType,modifiedTime)',
@@ -128,8 +127,8 @@ async function listMonthlyFiles(drive: ReturnType<typeof getDrive>) {
 }
 
 // 월키로 파일 하나 선택 (동일 월 다중이면 최신 수정본)
-async function fileForMonth(drive: ReturnType<typeof getDrive>, month: string) {
-  const { files } = await listMonthlyFiles(drive)
+async function fileForMonth(drive: ReturnType<typeof getDrive>, month: string, folderId?: string) {
+  const { files } = await listMonthlyFiles(drive, folderId)
   const cand = files
     .filter((f) => f.month === month)
     .sort((a, b) => (b.modifiedTime > a.modifiedTime ? 1 : -1))
@@ -186,6 +185,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const action = searchParams.get('action') || 'data'
   const month = searchParams.get('month') || ''
+  const folderId = searchParams.get('folderId') || undefined // 이름탐색 대신 폴더ID 직접 지정
 
   // whoami는 Drive 접근 없이도 동작해야 함 (공유 대상 이메일 안내용)
   if (action === 'whoami') {
@@ -207,14 +207,38 @@ export async function GET(req: Request) {
   try {
     const drive = getDrive()
 
+    // 서비스계정이 볼 수 있는 것 진단 (폴더 탐색 실패 원인 파악용)
+    if (action === 'debug') {
+      const folders = await drive.files.list({
+        q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+        fields: 'files(id,name,parents,driveId)',
+        pageSize: 50,
+        ...ALL_DRIVES,
+      })
+      const sharedDrives = await drive.drives.list({ pageSize: 50 }).catch(() => ({ data: { drives: [] } }))
+      const anyFiles = await drive.files.list({
+        q: "name contains '2026' and trashed = false",
+        fields: 'files(id,name,mimeType,parents)',
+        pageSize: 50,
+        ...ALL_DRIVES,
+      })
+      return NextResponse.json({
+        ok: true,
+        clientEmail,
+        visibleFolders: (folders.data.files || []).map((f) => ({ id: f.id, name: f.name, driveId: f.driveId })),
+        sharedDrives: (sharedDrives.data.drives || []).map((d) => ({ id: d.id, name: d.name })),
+        filesNamed2026: (anyFiles.data.files || []).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, parents: f.parents })),
+      })
+    }
+
     if (action === 'list') {
-      const { folderId, files } = await listMonthlyFiles(drive)
-      return NextResponse.json({ ok: true, folderId, files, clientEmail })
+      const r = await listMonthlyFiles(drive, folderId)
+      return NextResponse.json({ ok: true, folderId: r.folderId, files: r.files, clientEmail })
     }
 
     if (action === 'introspect') {
       if (!month) return NextResponse.json({ ok: false, error: 'month 필요' }, { status: 400 })
-      const f = await fileForMonth(drive, month)
+      const f = await fileForMonth(drive, month, folderId)
       if (!f) return NextResponse.json({ ok: false, error: `${month} 파일 없음`, clientEmail }, { status: 404 })
       const wb = await readWorkbook(drive, f.id, f.mimeType)
       const sample: Record<string, any[][]> = {}
@@ -227,7 +251,7 @@ export async function GET(req: Request) {
 
     if (action === 'data') {
       if (!month) return NextResponse.json({ ok: false, error: 'month 필요' }, { status: 400 })
-      const f = await fileForMonth(drive, month)
+      const f = await fileForMonth(drive, month, folderId)
       if (!f) {
         return NextResponse.json({
           ok: true,
