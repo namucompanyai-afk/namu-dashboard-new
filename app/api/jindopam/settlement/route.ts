@@ -74,7 +74,32 @@ async function find2026FolderId(drive: ReturnType<typeof getDrive>): Promise<str
   if (envId) return envId
 
   const folderQ = "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-  // 1) 2026 폴더 전역 검색 (공유된 폴더는 이름검색에 바로 잡히는 편)
+  // 1) 직접 공유(sharedWithMe)된 폴더 우선 — 폴더만 공유하면 여기로 들어옴
+  const shared = await drive.files.list({
+    q: `sharedWithMe = true and ${folderQ}`,
+    fields: 'files(id,name,parents)',
+    pageSize: 100,
+    ...ALL_DRIVES,
+  })
+  const sharedFolders = shared.data.files || []
+  // 이름이 정확히 2026, 없으면 2026 포함
+  const s2026 =
+    sharedFolders.find((f) => (f.name || '') === '2026') ||
+    sharedFolders.find((f) => (f.name || '').includes('2026'))
+  if (s2026?.id) return s2026.id
+  // 진도팜 폴더가 공유됐으면 그 하위 2026 탐색
+  for (const jf of sharedFolders.filter((f) => (f.name || '').includes('진도팜'))) {
+    const sub = await drive.files.list({
+      q: `'${jf.id}' in parents and ${folderQ}`,
+      fields: 'files(id,name)',
+      pageSize: 50,
+      ...ALL_DRIVES,
+    })
+    const hit = (sub.data.files || []).find((f) => (f.name || '').includes('2026'))
+    if (hit?.id) return hit.id
+  }
+
+  // 2) 전역 이름검색 폴백
   const any2026 = await drive.files.list({
     q: `name = '2026' and ${folderQ}`,
     fields: 'files(id,name,parents)',
@@ -83,24 +108,6 @@ async function find2026FolderId(drive: ReturnType<typeof getDrive>): Promise<str
   })
   const direct = (any2026.data.files || [])[0]
   if (direct?.id) return direct.id
-
-  // 2) 진도팜 폴더 → 하위 2026
-  const jindo = await drive.files.list({
-    q: `name contains '진도팜' and ${folderQ}`,
-    fields: 'files(id,name)',
-    pageSize: 50,
-    ...ALL_DRIVES,
-  })
-  for (const pid of (jindo.data.files || []).map((f) => f.id!).filter(Boolean)) {
-    const sub = await drive.files.list({
-      q: `'${pid}' in parents and ${folderQ}`,
-      fields: 'files(id,name)',
-      pageSize: 50,
-      ...ALL_DRIVES,
-    })
-    const hit = (sub.data.files || []).find((f) => (f.name || '').includes('2026'))
-    if (hit?.id) return hit.id
-  }
   throw new Error('2026 폴더를 찾지 못했습니다. (서비스계정 공유 또는 JINDOPAM_DRIVE_FOLDER_ID 필요)')
 }
 
@@ -216,6 +223,12 @@ export async function GET(req: Request) {
         ...ALL_DRIVES,
       })
       const sharedDrives = await drive.drives.list({ pageSize: 50 }).catch(() => ({ data: { drives: [] } }))
+      const sharedWithMe = await drive.files.list({
+        q: 'sharedWithMe = true and trashed = false',
+        fields: 'files(id,name,mimeType,parents)',
+        pageSize: 100,
+        ...ALL_DRIVES,
+      })
       const anyFiles = await drive.files.list({
         q: "name contains '2026' and trashed = false",
         fields: 'files(id,name,mimeType,parents)',
@@ -227,6 +240,7 @@ export async function GET(req: Request) {
         clientEmail,
         visibleFolders: (folders.data.files || []).map((f) => ({ id: f.id, name: f.name, driveId: f.driveId })),
         sharedDrives: (sharedDrives.data.drives || []).map((d) => ({ id: d.id, name: d.name })),
+        sharedWithMe: (sharedWithMe.data.files || []).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType })),
         filesNamed2026: (anyFiles.data.files || []).map((f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, parents: f.parents })),
       })
     }
