@@ -22,10 +22,6 @@ export const dynamic = 'force-dynamic'
  * 환경변수 JINDOPAM_DRIVE_FOLDER_ID 로 2026 폴더 ID를 직접 지정하면 이름탐색을 건너뛴다.
  */
 
-// ── 참고표 단가 (진도팜 원가표 배송비 기준표와 동일) ──────────────────
-const TAKBAE_UNIT: Record<string, number> = { 소: 2100, 중: 2800, 대: 4400 }
-const BOX_UNIT: Record<string, number> = { 소: 427, 중: 1291, 대: 1495 }
-
 function getCreds() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT
   if (!raw) throw new Error('GOOGLE_SERVICE_ACCOUNT 환경변수가 설정되지 않았습니다.')
@@ -375,17 +371,117 @@ function aggregateProducts(rows: any[][] | null): Array<{ name: string; qty: num
 
 // 택배 시트 → 규격(소/중/대)별 총건수 → 택배비/박스비
 // 시트 구조 불확실 → 전 셀에서 소/중/대 라벨 인접 숫자를 합산하는 방식은 위험하므로
-// 우선 규격 라벨 컬럼 + 건수 합산을 시도하고, 실패 시 null 반환(미연동).
+// 택배 시트 레이아웃(2026 파일 공통):
+//   row0: 채널 블록 헤더 (일반 택배 / 스마트 스토어 / 스타배송)
+//   row1: 블록별 규격 서브헤더 (소·소제주·소도서·중·중제주·중도서·대)
+//   row2: "계"(월 합계), row3~: 일자별 오전/오후 raw
+// 규격 단가는 소/중/대 기준. 제주/도서는 기본 규격으로 합산(도서산간 할증 스펙 없음).
+type SizeCount = { 소: number; 중: number; 대: number }
+const TAKBAE_UNIT_MAP: SizeCount = { 소: 2100, 중: 2800, 대: 4400 }
+const BOX_UNIT_MAP: SizeCount = { 소: 427, 중: 1291, 대: 1495 }
+const CH_KEYS = ['일반', '스토어', '스타'] as const
+type ChKey = (typeof CH_KEYS)[number]
+
+const numCell = (v: any): number => {
+  const n = Number(String(v ?? '').replace(/[^0-9.-]/g, ''))
+  return Number.isFinite(n) ? n : 0
+}
+const classifyChannel = (name: string): ChKey | null => {
+  const n = name.replace(/\s/g, '')
+  if (n.includes('일반')) return '일반'
+  if (n.includes('스마트') || n.includes('스토어')) return '스토어'
+  if (n.includes('스타')) return '스타'
+  return null
+}
+
 function computeDelivery(rows: any[][] | null):
   | null
   | {
-      takbae: { total: number; bySize: Record<string, number> }
-      box: { total: number; bySize: Record<string, number> }
-      counts: Record<string, number>
+      takbae: { total: number; byChannel: Record<string, number> }
+      box: { total: number; bySize: SizeCount }
+      countsByChannel: Record<string, SizeCount>
+      source: '계' | '일자합산'
       note: string
     } {
   if (!rows || !rows.length) return null
-  // 스키마 확정 전에는 임의 계산을 하지 않는다 (미연동).
-  // introspect로 실제 레이아웃 확인 후 이 함수를 구현한다.
-  return null
+
+  // 규격 서브헤더 행 탐색 (소·중·대·제주 포함)
+  let hdrIdx = -1
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const j = (rows[i] || []).map((c) => String(c || '')).join('')
+    if (j.includes('소') && j.includes('중') && j.includes('대') && j.includes('제주')) {
+      hdrIdx = i
+      break
+    }
+  }
+  if (hdrIdx < 1) return null
+  const sizeRow = rows[hdrIdx]
+  const chanRow = rows[hdrIdx - 1] || []
+
+  // 채널 블록 시작 컬럼 수집
+  const chanCols: Array<{ key: ChKey; col: number }> = []
+  chanRow.forEach((c, i) => {
+    const key = classifyChannel(String(c || ''))
+    if (key) chanCols.push({ key, col: i })
+  })
+  if (!chanCols.length) return null
+
+  // 블록별 규격 컬럼 매핑 (다음 블록 시작 전까지)
+  const blocks = chanCols.map((ch, bi) => {
+    const end = bi + 1 < chanCols.length ? chanCols[bi + 1].col : sizeRow.length
+    const sizeCols: Array<{ col: number; size: keyof SizeCount }> = []
+    for (let c = ch.col; c < end; c++) {
+      const lbl = String(sizeRow[c] || '').replace(/\s/g, '')
+      if (lbl.startsWith('소')) sizeCols.push({ col: c, size: '소' })
+      else if (lbl.startsWith('중')) sizeCols.push({ col: c, size: '중' })
+      else if (lbl.startsWith('대')) sizeCols.push({ col: c, size: '대' })
+    }
+    return { key: ch.key, sizeCols }
+  })
+
+  const countsByChannel: Record<string, SizeCount> = {}
+  for (const b of blocks) countsByChannel[b.key] = { 소: 0, 중: 0, 대: 0 }
+
+  // 일자별 오전/오후 행 합산 (소스 오브 트루스). 계 행/기타 요약행은 제외.
+  let dailyRows = 0
+  for (let i = hdrIdx + 1; i < rows.length; i++) {
+    const c0 = String(rows[i]?.[0] || '').trim()
+    if (c0 !== '오전' && c0 !== '오후') continue
+    dailyRows++
+    for (const b of blocks) {
+      for (const sc of b.sizeCols) countsByChannel[b.key][sc.size] += numCell(rows[i][sc.col])
+    }
+  }
+
+  // 폴백: 일자행이 없으면(포맷 상이) "계" 행 사용
+  let source: '계' | '일자합산' = '일자합산'
+  if (dailyRows === 0) {
+    const gyeh = rows.find((r) => String(r?.[1] || '').trim() === '계')
+    if (!gyeh) return null
+    for (const b of blocks) for (const sc of b.sizeCols) countsByChannel[b.key][sc.size] += numCell(gyeh[sc.col])
+    source = '계'
+  }
+
+  // 단가 적용
+  const takByChannel: Record<string, number> = {}
+  const boxBySize: SizeCount = { 소: 0, 중: 0, 대: 0 }
+  let takTotal = 0
+  for (const [ch, sz] of Object.entries(countsByChannel)) {
+    const t = sz.소 * TAKBAE_UNIT_MAP.소 + sz.중 * TAKBAE_UNIT_MAP.중 + sz.대 * TAKBAE_UNIT_MAP.대
+    takByChannel[ch] = t
+    takTotal += t
+    boxBySize.소 += sz.소
+    boxBySize.중 += sz.중
+    boxBySize.대 += sz.대
+  }
+  const boxTotal =
+    boxBySize.소 * BOX_UNIT_MAP.소 + boxBySize.중 * BOX_UNIT_MAP.중 + boxBySize.대 * BOX_UNIT_MAP.대
+
+  return {
+    takbae: { total: takTotal, byChannel: takByChannel },
+    box: { total: boxTotal, bySize: boxBySize },
+    countsByChannel,
+    source,
+    note: '제주/도서는 기본 규격 단가로 합산 (도서산간 할증 미적용)',
+  }
 }
