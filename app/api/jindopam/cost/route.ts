@@ -76,9 +76,12 @@ function getSheets() {
 const makeRawId = (gubun: string, item: string, variety: string) =>
   [gubun, item, variety].filter((s) => (s || '').trim() !== '').join('_')
 
-// 마스터 F~K 비용분해·최종공급가 수식 (참고표 셀 B2/B4/B5/B6/B7/B8 참조 · 값 하드코딩 아님)
-// F 작업비 / G 파쇄비 / H 제분비 / I 혼합비 / J 물류대행비 / K 최종공급가. 빈 행(품목 없음)은 빈 값.
-// K: 과세여부(L)가 "과세"면 비용합계 × 1.1(부가세), 면세는 그대로. 시트 K12 ARRAYFORMULA와 동일 로직.
+// 마스터 F~J 비용분해 수식 (참고표 셀 B2/B4/B5/B6/B7/B8 참조 · 값 하드코딩 아님)
+// F 작업비 / G 파쇄비 / H 제분비 / I 혼합비 / J 물류대행비. 빈 행(품목 없음)은 빈 값.
+// K(최종 공급가)는 여기서 쓰지 않는다 — 시트 K12의 단일 ARRAYFORMULA가 전 행을 자동 계산(과세 ×1.1).
+// (K12: =ARRAYFORMULA(IF($C12:$C="","",($E12:$E+$F12:$F+$G12:$G+$H12:$H+$I12:$I+$J12:$J)*IF($L12:$L="과세",1.1,1))))
+const K_ARRAYFORMULA =
+  '=ARRAYFORMULA(IF($C12:$C="","",($E12:$E+$F12:$F+$G12:$G+$H12:$H+$I12:$I+$J12:$J)*IF($L12:$L="과세",1.1,1)))'
 function supplyFormulas(r: number): string[] {
   return [
     `=IF($C${r}="","",IF(OR($B${r}="톤백",$B${r}="물류대행"),0,$B$2))`,
@@ -86,7 +89,6 @@ function supplyFormulas(r: number): string[] {
     `=IF($C${r}="","",IF($O${r}="O",$B$5,0))`,
     `=IF($C${r}="","",IF(N($P${r})<=0,0,IF(N($P${r})<=5,$B$6,$B$6+(N($P${r})-5)*$B$7)))`,
     `=IF($C${r}="","",IF($B${r}="물류대행",$B$8,0))`,
-    `=IF($C${r}="","",($E${r}+$F${r}+$G${r}+$H${r}+$I${r}+$J${r})*IF($L${r}="과세",1.1,1))`,
   ]
 }
 
@@ -827,11 +829,11 @@ export async function POST(req: Request) {
         '과세여부', '취급상태', '파쇄', '제분', '혼합곡수',
       ]
 
-      // 3. F~K 수식 (행별)
-      const fk: string[][] = []
-      for (let r = 12; r <= LAST; r++) fk.push(supplyFormulas(r))
+      // 3. F~J 비용분해 수식 (행별) · K(공급가)는 K12 ARRAYFORMULA에 위임 → 여기서 안 씀
+      const fj: string[][] = []
+      for (let r = 12; r <= LAST; r++) fj.push(supplyFormulas(r))
 
-      // 4. 기록: L~P 값(RAW) → 헤더(RAW) → F~K 수식(USER_ENTERED)
+      // 4. 기록: L~P 값(RAW) → 헤더(RAW) → F~J 수식·K12 배열수식(USER_ENTERED)
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: SHEET_ID,
         requestBody: {
@@ -846,7 +848,10 @@ export async function POST(req: Request) {
         spreadsheetId: SHEET_ID,
         requestBody: {
           valueInputOption: 'USER_ENTERED',
-          data: [{ range: `${quote(COST_TAB)}!F12:K${LAST}`, values: fk }],
+          data: [
+            { range: `${quote(COST_TAB)}!F12:J${LAST}`, values: fj },
+            { range: `${quote(COST_TAB)}!K12`, values: [[K_ARRAYFORMULA]] },
+          ],
         },
       })
 
@@ -898,6 +903,24 @@ export async function POST(req: Request) {
         ok: true,
         message: `비용분해 컬럼 추가 완료 (F~K 수식 · 과세/취급/파쇄/제분/혼합곡수 L~P 이동, ${lp.length}행)`,
       })
+    }
+
+    // ── K열(최종 공급가) 배열수식 단일화 (수동 1회) ─────────────────────────
+    // 정적 값/행별 수식으로 덮인 K12:K를 모두 지우고, K12에 ARRAYFORMULA 하나만 남긴다.
+    // 이후 신규 행은 K를 비워두면 이 배열수식이 자동 계산(과세 ×1.1 / 면세 그대로).
+    if (action === 'init15') {
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!K12:K`,
+        requestBody: {},
+      })
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!K12`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[K_ARRAYFORMULA]] },
+      })
+      return NextResponse.json({ ok: true, message: 'K열 최종 공급가 ARRAYFORMULA 단일화 완료' })
     }
 
     // ── 변동로그 특정 행 삭제 (테스트 기록 정리용 · body.rows=1-based 시트행) ──
@@ -1102,9 +1125,9 @@ export async function POST(req: Request) {
           range: `${quote(COST_TAB)}!B${newRow}:E${newRow}`,
           values: [[gubun, item, variety || '', wongok ?? '']],
         },
-        // F~K: 비용분해·최종공급가 수식
+        // F~J: 비용분해 수식만 기록. K(최종 공급가)는 비워둠 → K12 ARRAYFORMULA가 신규 행까지 자동 계산.
         {
-          range: `${quote(COST_TAB)}!F${newRow}:K${newRow}`,
+          range: `${quote(COST_TAB)}!F${newRow}:J${newRow}`,
           values: [supplyFormulas(newRow)],
         },
         // L: 과세여부 (M 취급상태는 빈칸 → 나무가 시트에서 직접 기입)
