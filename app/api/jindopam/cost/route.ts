@@ -78,6 +78,7 @@ const makeRawId = (gubun: string, item: string, variety: string) =>
 
 // 마스터 F~K 비용분해·최종공급가 수식 (참고표 셀 B2/B4/B5/B6/B7/B8 참조 · 값 하드코딩 아님)
 // F 작업비 / G 파쇄비 / H 제분비 / I 혼합비 / J 물류대행비 / K 최종공급가. 빈 행(품목 없음)은 빈 값.
+// K: 과세여부(L)가 "과세"면 비용합계 × 1.1(부가세), 면세는 그대로. 시트 K12 ARRAYFORMULA와 동일 로직.
 function supplyFormulas(r: number): string[] {
   return [
     `=IF($C${r}="","",IF(OR($B${r}="톤백",$B${r}="물류대행"),0,$B$2))`,
@@ -85,7 +86,7 @@ function supplyFormulas(r: number): string[] {
     `=IF($C${r}="","",IF($O${r}="O",$B$5,0))`,
     `=IF($C${r}="","",IF(N($P${r})<=0,0,IF(N($P${r})<=5,$B$6,$B$6+(N($P${r})-5)*$B$7)))`,
     `=IF($C${r}="","",IF($B${r}="물류대행",$B$8,0))`,
-    `=IF($C${r}="","",$E${r}+$F${r}+$G${r}+$H${r}+$I${r}+$J${r})`,
+    `=IF($C${r}="","",($E${r}+$F${r}+$G${r}+$H${r}+$I${r}+$J${r})*IF($L${r}="과세",1.1,1))`,
   ]
 }
 

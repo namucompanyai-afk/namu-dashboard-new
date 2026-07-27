@@ -66,6 +66,9 @@ const calcBlendCost = (count: number, ref: RefCost): number => {
   return ref.혼합비기본 + (count - 5) * ref.혼합비추가
 }
 
+// 과세여부(L)가 "과세" 포함이면 과세 품목 → 공급가에 부가세 10% 가산. 그 외(면세)는 그대로.
+const isTaxable = (tax: string): boolean => (tax || '').includes('과세')
+
 // 톤백·물류대행은 작업비(소포장) 미적용. 그 외 구분은 기존과 동일하게 작업비 포함.
 const NO_LABOR_CATEGORIES = ['톤백', '물류대행']
 const hasLaborCost = (category: string): boolean =>
@@ -73,10 +76,12 @@ const hasLaborCost = (category: string): boolean =>
 // 물류대행 구분은 물류대행비 가산 (작업비는 위에서 이미 제외됨)
 const isLogistics = (category: string): boolean => (category || '').trim() === '물류대행'
 
-// 공급가 = 원곡가 + (작업비 소포장) + (파쇄) + (제분) + 혼합비 (단가 전부 참고표 참조)
+// 공급가 = (원곡가 + 작업비 소포장 + 파쇄 + 제분 + 혼합비 + 물류대행비) × (과세 1.1 / 면세 1)
 // 작업비 포함 여부만 구분(category)에 따라 분기 — 표시·툴팁·미리보기·엑셀이 이 함수를 재사용
+// 시트 K열 ARRAYFORMULA와 동일 로직(과세면 ×1.1, 정수 반올림)
 const calcSupply = (
   category: string,
+  tax: string,
   price: number,
   crush: boolean,
   mill: boolean,
@@ -90,25 +95,28 @@ const calcSupply = (
   if (crush) s += ref.파쇄비
   if (mill) s += ref.제분비
   s += calcBlendCost(blend, ref)
-  return s
+  return isTaxable(tax) ? Math.round(s * 1.1) : s
 }
 
-// 공급가 내역 한 줄 ("원곡가 8,000 + 작업비 800 + 파쇄 600 …")
+// 공급가 내역 한 줄 ("원곡가 8,000 + 작업비 800 + 파쇄 600 … + 부가세(10%) 940")
 const supplyBreakdown = (
   category: string,
+  tax: string,
   price: number,
   crush: boolean,
   mill: boolean,
   blend: number,
   ref: RefCost,
 ): string => {
+  let pre = price
   const parts = [`원곡가 ${price.toLocaleString()}`]
-  if (hasLaborCost(category)) parts.push(`작업비 ${ref.작업비소포장.toLocaleString()}`)
-  if (isLogistics(category)) parts.push(`물류대행비 ${ref.물류대행비.toLocaleString()}`)
-  if (crush) parts.push(`파쇄 ${ref.파쇄비.toLocaleString()}`)
-  if (mill) parts.push(`제분 ${ref.제분비.toLocaleString()}`)
+  if (hasLaborCost(category)) { parts.push(`작업비 ${ref.작업비소포장.toLocaleString()}`); pre += ref.작업비소포장 }
+  if (isLogistics(category)) { parts.push(`물류대행비 ${ref.물류대행비.toLocaleString()}`); pre += ref.물류대행비 }
+  if (crush) { parts.push(`파쇄 ${ref.파쇄비.toLocaleString()}`); pre += ref.파쇄비 }
+  if (mill) { parts.push(`제분 ${ref.제분비.toLocaleString()}`); pre += ref.제분비 }
   const bc = calcBlendCost(blend, ref)
-  if (bc > 0) parts.push(`혼합 ${bc.toLocaleString()}`)
+  if (bc > 0) { parts.push(`혼합 ${bc.toLocaleString()}`); pre += bc }
+  if (isTaxable(tax)) parts.push(`부가세(10%) ${Math.round(pre * 0.1).toLocaleString()}`)
   return parts.join(' + ')
 }
 
@@ -120,6 +128,10 @@ const rowSupplyLines = (row: CostRow): string[] => {
   if (row.crushCost > 0) lines.push(`파쇄 ${row.crushCost.toLocaleString()}`)
   if (row.millCost > 0) lines.push(`제분 ${row.millCost.toLocaleString()}`)
   if (row.blendCost > 0) lines.push(`혼합비(${row.blend}곡) ${row.blendCost.toLocaleString()}`)
+  if (isTaxable(row.tax)) {
+    const pre = row.price + row.labor + row.logiCost + row.crushCost + row.millCost + row.blendCost
+    lines.push(`부가세(10%) ${Math.round(pre * 0.1).toLocaleString()}`)
+  }
   return lines
 }
 
@@ -794,6 +806,7 @@ function ToggleBtn({ label, on, onClick }: { label: string; on: boolean; onClick
 // 가공옵션 입력 묶음 (파쇄/제분 토글 · 혼합곡수 · 공급가 미리보기) — 추가/수정 모달 공용
 function ProcFields({
   category,
+  tax,
   crush,
   mill,
   blend,
@@ -804,6 +817,7 @@ function ProcFields({
   setBlend,
 }: {
   category: string
+  tax: string
   crush: boolean
   mill: boolean
   blend: number
@@ -813,7 +827,7 @@ function ProcFields({
   setMill: (v: boolean) => void
   setBlend: (v: number) => void
 }) {
-  const supply = calcSupply(category, price, crush, mill, blend, refCost)
+  const supply = calcSupply(category, tax, price, crush, mill, blend, refCost)
   return (
     <div className="space-y-3">
       <div>
@@ -839,7 +853,7 @@ function ProcFields({
           <>
             <div className="text-lg font-semibold text-gray-900">{supply.toLocaleString()} 원</div>
             <div className="mt-0.5 text-xs text-gray-500">
-              {supplyBreakdown(category, price, crush, mill, blend, refCost)}
+              {supplyBreakdown(category, tax, price, crush, mill, blend, refCost)}
             </div>
           </>
         ) : (
@@ -985,6 +999,7 @@ function EditModal({
         </div>
         <ProcFields
           category={row.category}
+          tax={row.tax}
           crush={crush}
           mill={mill}
           blend={blend}
@@ -1136,6 +1151,7 @@ function CreateModal({
         )}
         <ProcFields
           category={gubun}
+          tax={tax}
           crush={crush}
           mill={mill}
           blend={blend}
