@@ -8,7 +8,7 @@ const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 // 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
 // 마스터: A11 헤더 + A12~ 데이터. init14 배치: E 원곡가 / F~K 비용분해·최종공급가(시트수식) /
 // L 과세여부 · M 취급상태 · N 파쇄 · O 제분 · P 혼합곡수
-const RANGE = "'진도팜 원가표'!A11:P"
+const RANGE = "'진도팜 원가표'!A11:Q"
 // 참고표 좌상단 배치(init12): 가공비 A1:B8(헤더+7항목) · 배송비 D1:F4(헤더+소/중/대)
 const RANGE_REF = "'진도팜 원가표'!A1:F8"
 
@@ -39,6 +39,7 @@ type CostRow = {
   crush: boolean     // N 파쇄 (O/X, 빈칸=X)
   mill: boolean      // O 제분 (O/X, 빈칸=X)
   blend: number      // P 혼합곡수 (빈칸=0)
+  laborOn: boolean   // Q 작업비 토글 (O=적용, X=제외, 빈칸=적용)
   // F~K 시트 비용분해·최종공급가 수식 결과 (표시·툴팁·엑셀의 단일 소스)
   labor: number      // F 작업비
   crushCost: number  // G 파쇄비
@@ -83,6 +84,7 @@ const calcSupply = (
   category: string,
   tax: string,
   price: number,
+  labor: boolean,
   crush: boolean,
   mill: boolean,
   blend: number,
@@ -90,7 +92,7 @@ const calcSupply = (
 ): number | null => {
   if (!ref) return null
   let s = price
-  if (hasLaborCost(category)) s += ref.작업비소포장
+  if (hasLaborCost(category) && labor) s += ref.작업비소포장
   if (isLogistics(category)) s += ref.물류대행비
   if (crush) s += ref.파쇄비
   if (mill) s += ref.제분비
@@ -103,6 +105,7 @@ const supplyBreakdown = (
   category: string,
   tax: string,
   price: number,
+  labor: boolean,
   crush: boolean,
   mill: boolean,
   blend: number,
@@ -110,7 +113,7 @@ const supplyBreakdown = (
 ): string => {
   let pre = price
   const parts = [`원곡가 ${price.toLocaleString()}`]
-  if (hasLaborCost(category)) { parts.push(`작업비 ${ref.작업비소포장.toLocaleString()}`); pre += ref.작업비소포장 }
+  if (hasLaborCost(category) && labor) { parts.push(`작업비 ${ref.작업비소포장.toLocaleString()}`); pre += ref.작업비소포장 }
   if (isLogistics(category)) { parts.push(`물류대행비 ${ref.물류대행비.toLocaleString()}`); pre += ref.물류대행비 }
   if (crush) { parts.push(`파쇄 ${ref.파쇄비.toLocaleString()}`); pre += ref.파쇄비 }
   if (mill) { parts.push(`제분 ${ref.제분비.toLocaleString()}`); pre += ref.제분비 }
@@ -341,6 +344,8 @@ export default function JindopamCostPage() {
           crush: procOn(r[13]),
           mill: procOn(r[14]),
           blend: toNum(r[15]),
+          // Q(16) 작업비 토글: 빈칸이면 적용(O) 기본값, 아니면 O/X 파싱
+          laborOn: (r[16] ?? '').trim() === '' ? true : procOn(r[16]),
         }))
       setRows(data)
       // 참고 기준표 A1:F8 (init12 배치)
@@ -807,32 +812,37 @@ function ToggleBtn({ label, on, onClick }: { label: string; on: boolean; onClick
 function ProcFields({
   category,
   tax,
+  labor,
   crush,
   mill,
   blend,
   price,
   refCost,
+  setLabor,
   setCrush,
   setMill,
   setBlend,
 }: {
   category: string
   tax: string
+  labor: boolean
   crush: boolean
   mill: boolean
   blend: number
   price: number
   refCost: RefCost | null
+  setLabor: (v: boolean) => void
   setCrush: (v: boolean) => void
   setMill: (v: boolean) => void
   setBlend: (v: number) => void
 }) {
-  const supply = calcSupply(category, tax, price, crush, mill, blend, refCost)
+  const supply = calcSupply(category, tax, price, labor, crush, mill, blend, refCost)
   return (
     <div className="space-y-3">
       <div>
         <span className="mb-1 block text-gray-600">가공</span>
         <div className="flex gap-2">
+          <ToggleBtn label="작업비" on={labor} onClick={() => setLabor(!labor)} />
           <ToggleBtn label="파쇄" on={crush} onClick={() => setCrush(!crush)} />
           <ToggleBtn label="제분" on={mill} onClick={() => setMill(!mill)} />
         </div>
@@ -853,7 +863,7 @@ function ProcFields({
           <>
             <div className="text-lg font-semibold text-gray-900">{supply.toLocaleString()} 원</div>
             <div className="mt-0.5 text-xs text-gray-500">
-              {supplyBreakdown(category, tax, price, crush, mill, blend, refCost)}
+              {supplyBreakdown(category, tax, price, labor, crush, mill, blend, refCost)}
             </div>
           </>
         ) : (
@@ -881,6 +891,7 @@ function EditModal({
   onSaved: () => void
 }) {
   const [price, setPrice] = useState('')
+  const [labor, setLabor] = useState(row.laborOn)
   const [crush, setCrush] = useState(row.crush)
   const [mill, setMill] = useState(row.mill)
   const [blend, setBlend] = useState(row.blend)
@@ -905,7 +916,8 @@ function EditModal({
         return
       }
       const priceChanged = hasPriceInput && newPriceNum !== row.price
-      const procChanged = crush !== row.crush || mill !== row.mill || blend !== row.blend
+      const procChanged =
+        labor !== row.laborOn || crush !== row.crush || mill !== row.mill || blend !== row.blend
       if (!priceChanged && !procChanged) {
         onClose()
         return
@@ -942,9 +954,11 @@ function EditModal({
             gubun: row.category,
             item: row.item,
             variety: row.variety,
+            labor,
             crush,
             mill,
             blend,
+            oldLabor: row.laborOn,
             oldCrush: row.crush,
             oldMill: row.mill,
             oldBlend: row.blend,
@@ -1000,11 +1014,13 @@ function EditModal({
         <ProcFields
           category={row.category}
           tax={row.tax}
+          labor={labor}
           crush={crush}
           mill={mill}
           blend={blend}
           price={previewPrice}
           refCost={refCost}
+          setLabor={setLabor}
           setCrush={setCrush}
           setMill={setMill}
           setBlend={setBlend}
@@ -1059,6 +1075,7 @@ function CreateModal({
   const [variety, setVariety] = useState('')
   const [wongok, setWongok] = useState('')
   const [tax, setTax] = useState('면세')
+  const [labor, setLabor] = useState(true) // 작업비 기본 적용
   const [crush, setCrush] = useState(false)
   const [mill, setMill] = useState(false)
   const [blend, setBlend] = useState(0)
@@ -1087,6 +1104,7 @@ function CreateModal({
           variety: variety.trim(),
           wongok: wongok ? Number(String(wongok).replace(/[^0-9.-]/g, '')) : '',
           tax,
+          labor,
           crush,
           mill,
           blend,
@@ -1152,11 +1170,13 @@ function CreateModal({
         <ProcFields
           category={gubun}
           tax={tax}
+          labor={labor}
           crush={crush}
           mill={mill}
           blend={blend}
           price={wongokNum}
           refCost={refCost}
+          setLabor={setLabor}
           setCrush={setCrush}
           setMill={setMill}
           setBlend={setBlend}

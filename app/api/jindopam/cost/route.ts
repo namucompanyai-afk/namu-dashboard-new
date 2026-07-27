@@ -78,10 +78,11 @@ const makeRawId = (gubun: string, item: string, variety: string) =>
 
 // 마스터 F~K 비용분해·최종공급가 수식 (참고표 셀 B2/B4/B5/B6/B7/B8 참조 · 값 하드코딩 아님)
 // F 작업비 / G 파쇄비 / H 제분비 / I 혼합비 / J 물류대행비 / K 최종공급가. 빈 행(품목 없음)은 빈 값.
+// F: 톤백·물류대행 또는 Q열 작업비토글="X"면 0, 그 외 작업비(소포장) 적용.
 // K: 과세여부(L)가 "과세"면 비용합계 × 1.1(부가세), 면세는 그대로. 행별 수식(정렬해도 각 행이 스스로 계산).
 function supplyFormulas(r: number): string[] {
   return [
-    `=IF($C${r}="","",IF(OR($B${r}="톤백",$B${r}="물류대행"),0,$B$2))`,
+    `=IF($C${r}="","",IF(OR($B${r}="톤백",$B${r}="물류대행",$Q${r}="X"),0,$B$2))`,
     `=IF($C${r}="","",IF($N${r}="O",$B$4,0))`,
     `=IF($C${r}="","",IF($O${r}="O",$B$5,0))`,
     `=IF($C${r}="","",IF(N($P${r})<=0,0,IF(N($P${r})<=5,$B$6,$B$6+(N($P${r})-5)*$B$7)))`,
@@ -941,6 +942,95 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, message: `K열 행별 수식 전환 완료 (${written}행)` })
     }
 
+    // ── Q열 작업비 토글 도입 (수동 1회) ─────────────────────────────────────
+    // 1) Q11 헤더 "작업비" 2) 품목 있는 행 F열 수식을 새 버전(Q="X"→0)으로 갱신 + Q열 'O'로 채움
+    //    3) Q열 O/X 데이터검증. 기존 값(원곡가·과세·가공옵션)은 무변경.
+    if (action === 'init17') {
+      const cRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: SHEET_ID,
+        range: `${quote(COST_TAB)}!C12:C`,
+      })
+      const cCol = cRes.data.values || []
+      let lastIdx = -1
+      for (let i = 0; i < cCol.length; i++) {
+        if (String(cCol[i]?.[0] ?? '').trim() !== '') lastIdx = i
+      }
+      if (lastIdx < 0) {
+        return NextResponse.json({ ok: false, error: '품목(C열) 데이터가 없습니다.' }, { status: 400 })
+      }
+      const lastRow = 12 + lastIdx
+
+      // 품목 있는 행만 F 새수식·Q='O', 빈 행은 빈값
+      let filled = 0
+      const fvals: string[][] = []
+      const qvals: string[][] = []
+      cCol.slice(0, lastIdx + 1).forEach((row, i) => {
+        const r = 12 + i
+        if (String(row?.[0] ?? '').trim() === '') {
+          fvals.push([''])
+          qvals.push([''])
+        } else {
+          filled++
+          fvals.push([supplyFormulas(r)[0]]) // F = 작업비 행별 수식(새 버전)
+          qvals.push(['O'])
+        }
+      })
+
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [{ range: `${quote(COST_TAB)}!Q11`, values: [['작업비']] }],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(COST_TAB)}!F12:F${lastRow}`, values: fvals },
+            { range: `${quote(COST_TAB)}!Q12:Q${lastRow}`, values: qvals },
+          ],
+        },
+      })
+
+      // Q열 O/X 데이터검증 + 헤더 서식(볼드)
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const sheetId = meta.data.sheets?.find((s) => s.properties?.title === COST_TAB)?.properties
+        ?.sheetId
+      if (sheetId != null) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: SHEET_ID,
+          requestBody: {
+            requests: [
+              {
+                repeatCell: {
+                  range: { sheetId, startRowIndex: 10, endRowIndex: 11, startColumnIndex: 16, endColumnIndex: 17 },
+                  cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 } } },
+                  fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+                },
+              },
+              {
+                setDataValidation: {
+                  range: { sheetId, startRowIndex: 11, endRowIndex: lastRow, startColumnIndex: 16, endColumnIndex: 17 },
+                  rule: {
+                    condition: { type: 'ONE_OF_LIST', values: [{ userEnteredValue: 'O' }, { userEnteredValue: 'X' }] },
+                    showCustomUi: true,
+                    strict: false,
+                  },
+                },
+              },
+            ],
+          },
+        })
+      }
+
+      return NextResponse.json({ ok: true, message: `Q열 작업비 토글 도입 완료 (F 갱신·Q='O' ${filled}행)` })
+    }
+
     // ── 변동로그 특정 행 삭제 (테스트 기록 정리용 · body.rows=1-based 시트행) ──
     if (action === 'admin-del-log') {
       const rows: number[] = Array.isArray(body?.rows) ? body.rows.map((n: any) => Number(n)) : []
@@ -970,10 +1060,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, message: `로그 ${sorted.length}행 삭제 (${sorted.join(',')})` })
     }
 
-    // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
-    // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
+    // ── 기존 원료 가공옵션(작업비/파쇄/제분/혼합곡수) 수정 ────────────────
+    // body: { gubun, item, variety, labor, crush, mill, blend, oldLabor, oldCrush, oldMill, oldBlend, applyFrom, role }
     if (action === 'update-proc') {
-      const { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role, editorName } =
+      const { gubun, item, variety, labor, crush, mill, blend, oldLabor, oldCrush, oldMill, oldBlend, applyFrom, role, editorName } =
         body
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
@@ -1001,16 +1091,19 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: false, error: '대상 원료 행을 찾지 못했습니다.' }, { status: 404 })
       }
 
-      // N~P 갱신 (파쇄/제분/혼합곡수 — init14 이동 배치)
+      // N~Q 갱신 (파쇄/제분/혼합곡수/작업비). 작업비(Q)는 미지정 시 O(적용) 유지.
+      const laborOn = labor ?? true
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `${quote(COST_TAB)}!N${targetRow}:P${targetRow}`,
+        range: `${quote(COST_TAB)}!N${targetRow}:Q${targetRow}`,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0]] },
+        requestBody: {
+          values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0, laborOn ? 'O' : 'X']],
+        },
       })
 
-      const summary = (c: boolean, m: boolean, b: number) =>
-        `파쇄${c ? 'O' : 'X'}·제분${m ? 'O' : 'X'}·${Number(b) || 0}곡`
+      const summary = (lb: boolean, c: boolean, m: boolean, b: number) =>
+        `작업비${lb ? 'O' : 'X'}·파쇄${c ? 'O' : 'X'}·제분${m ? 'O' : 'X'}·${Number(b) || 0}곡`
 
       // 변동로그 append (원곡가와 동일 로그탭, 변경전/후에 가공옵션 요약)
       await sheets.spreadsheets.values.append({
@@ -1025,8 +1118,8 @@ export async function POST(req: Request) {
               makeRawId(gubun, item, variety || ''),
               gubun,
               item,
-              summary(!!oldCrush, !!oldMill, oldBlend),
-              summary(!!crush, !!mill, blend),
+              summary(oldLabor ?? true, !!oldCrush, !!oldMill, oldBlend),
+              summary(laborOn, !!crush, !!mill, blend),
               applyFrom || '',
               role || '',
             ],
@@ -1035,7 +1128,7 @@ export async function POST(req: Request) {
       })
 
       await notifySlack(
-        `원가표 · 가공옵션 변경\n품목: ${makeRawId(gubun, item, variety || '')}\n${summary(!!oldCrush, !!oldMill, oldBlend)} → ${summary(!!crush, !!mill, blend)}\n변경자: ${editorName || role || ''} · 적용일: ${applyFrom || ''}`,
+        `원가표 · 가공옵션 변경\n품목: ${makeRawId(gubun, item, variety || '')}\n${summary(oldLabor ?? true, !!oldCrush, !!oldMill, oldBlend)} → ${summary(laborOn, !!crush, !!mill, blend)}\n변경자: ${editorName || role || ''} · 적용일: ${applyFrom || ''}`,
       )
 
       return NextResponse.json({ ok: true, row: targetRow })
@@ -1114,7 +1207,7 @@ export async function POST(req: Request) {
 
     // ── 신규 원료 추가 ────────────────────────────────────────────
     if (action === 'create') {
-      const { gubun, item, variety, wongok, tax, crush, mill, blend } = body
+      const { gubun, item, variety, wongok, tax, crush, mill, blend, labor } = body
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
       }
@@ -1153,10 +1246,10 @@ export async function POST(req: Request) {
           range: `${quote(COST_TAB)}!L${newRow}`,
           values: [[tax || '']],
         },
-        // N~P: 파쇄·제분·혼합곡수 (가공옵션)
+        // N~Q: 파쇄·제분·혼합곡수·작업비 (가공옵션). 작업비(Q)는 미지정 시 O(적용).
         {
-          range: `${quote(COST_TAB)}!N${newRow}:P${newRow}`,
-          values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0]],
+          range: `${quote(COST_TAB)}!N${newRow}:Q${newRow}`,
+          values: [[crush ? 'O' : 'X', mill ? 'O' : 'X', Number(blend) || 0, (labor ?? true) ? 'O' : 'X']],
         },
       ]
       // 원료ID 자동수식은 이전 행 수식이 있을 때만 복사(없으면 시트 ARRAYFORMULA 등에 위임)
