@@ -931,7 +931,7 @@ export async function POST(req: Request) {
     // ── 기존 원료 가공옵션(파쇄/제분/혼합곡수) 수정 ────────────────
     // body: { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role }
     if (action === 'update-proc') {
-      const { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role } =
+      const { gubun, item, variety, crush, mill, blend, oldCrush, oldMill, oldBlend, applyFrom, role, editorName } =
         body
       if (!gubun || !item) {
         return NextResponse.json({ ok: false, error: '필수 값 누락(구분/품목)' }, { status: 400 })
@@ -993,7 +993,7 @@ export async function POST(req: Request) {
       })
 
       await notifySlack(
-        `원가표 · 가공옵션 변경\n품목: ${gubun} ${item}\n${summary(!!oldCrush, !!oldMill, oldBlend)} → ${summary(!!crush, !!mill, blend)}\n변경자: ${role || ''} · 적용일: ${applyFrom || ''}`,
+        `원가표 · 가공옵션 변경\n품목: ${makeRawId(gubun, item, variety || '')}\n${summary(!!oldCrush, !!oldMill, oldBlend)} → ${summary(!!crush, !!mill, blend)}\n변경자: ${editorName || role || ''} · 적용일: ${applyFrom || ''}`,
       )
 
       return NextResponse.json({ ok: true, row: targetRow })

@@ -248,6 +248,7 @@ export default function JindopamCostPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editorLabel, setEditorLabel] = useState('나무') // 변동로그 변경자 표기
+  const [editorName, setEditorName] = useState('') // 슬랙 알림 변경자 = 로그인 계정명
   const [refCost, setRefCost] = useState<RefCost | null>(null)
   const [refShip, setRefShip] = useState<RefShip[]>([])
   const [showRef, setShowRef] = useState(false) // 참고표 펼침 (기본 접힘)
@@ -263,8 +264,10 @@ export default function JindopamCostPage() {
   useEffect(() => {
     try {
       const userStr = localStorage.getItem('user')
-      const userRole = userStr ? JSON.parse(userStr)?.role : null
+      const parsed = userStr ? JSON.parse(userStr) : null
+      const userRole = parsed?.role ?? null
       setEditorLabel(userRole === '진도팜' ? '진도팜' : '나무')
+      setEditorName(parsed?.name || parsed?.email || '')
     } catch {
       /* 파싱 실패 시 기본 '나무' */
     }
@@ -705,6 +708,7 @@ export default function JindopamCostPage() {
         <EditModal
           row={editRow}
           roleLabel={editorLabel}
+          editorName={editorName}
           refCost={refCost}
           onClose={() => setEditRow(null)}
           onSaved={async () => {
@@ -850,12 +854,14 @@ function ProcFields({
 function EditModal({
   row,
   roleLabel,
+  editorName,
   refCost,
   onClose,
   onSaved,
 }: {
   row: CostRow
   roleLabel: string
+  editorName: string
   refCost: RefCost | null
   onClose: () => void
   onSaved: () => void
@@ -930,6 +936,7 @@ function EditModal({
             oldBlend: row.blend,
             applyFrom,
             role: roleLabel,
+            editorName,
           }),
         })
         const json = await res.json()
