@@ -29,6 +29,30 @@ const COST_SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg' // 읽기 �
 const IMPORT_RANGE = '진도팜 원가표!A1:P200'
 
 const TABS = ['별칭원장', '발주매핑', '원가표미러', '비용DB', '채널DB']
+const PRICE_TAB = '단가DB'
+
+// 단가DB 헤더 (A~K)
+const PRICE_HEADER = [
+  '별칭',
+  '브랜드',
+  '발송거래처',
+  '취급상태',
+  '원료ID',
+  '원곡가',
+  '소포장 공급가',
+  '벌크 공급가',
+  '매입가',
+  '과세여부',
+  '비고',
+]
+// 미러에서 VLOOKUP 으로 끌어올 원가표 컬럼명 (인덱스는 런타임에 헤더로 해석 · 하드코딩 안 함)
+const COL_WONGOK = '1kg당 원곡가'
+const COL_SUPPLY = '최종 공급가'
+const COL_TAX = '과세여부'
+// 미러 참조 범위 (원가표 헤더 R11 → 데이터 R12~)
+const MIRROR_RANGE = `'원가표미러'!$A$11:$P$200`
+// 별칭원장 초안 상태값 중 '원가 자체가 없어 매입가 수기 입력이 필요한' 상태
+const STATUS_NO_COST = '원가없음(매입가 입력 필요)'
 
 // 별칭원장 상태 → 배경색 (초안 xlsx 실측: 확정=흰색 / 병합=노랑 / 구DB신규=파랑 / 원가없음=빨강)
 const STATUS_BG: Record<string, string> = {
@@ -272,6 +296,211 @@ export async function GET(req: Request) {
           원가표미러: 'A1 IMPORTRANGE 수식 1셀 (시트에서 최초 1회 액세스 허용 필요)',
           비용DB: '헤더 1행 (항목/값/단위/메모)',
           채널DB: '헤더 1행 (채널/수수료율/배송정책/메모)',
+        },
+      })
+    }
+
+    // ── init2: 별칭원장 채택 일괄 Y + 단가DB 탭 구축 (멱등) ────────
+    if (action === 'init2') {
+      const sheets = getSheets()
+
+      if (alias.rows.length !== 168) {
+        throw new Error(`별칭원장 행수 이상: ${alias.rows.length} (168 기대)`)
+      }
+
+      // 1. 원가표 컬럼 위치 해석 — 헤더를 실제로 읽어서 매핑 (하드코딩 금지)
+      //    미러(IMPORTRANGE 결과) 우선. 아직 액세스 허용 전이면 #REF! 이므로
+      //    원본 원가표를 읽어(READ ONLY) 같은 레이아웃에서 인덱스를 얻는다.
+      const readHeader = async (spreadsheetId: string, range: string): Promise<string[]> => {
+        try {
+          const res = await sheets.spreadsheets.values.get({ spreadsheetId, range })
+          return (res.data.values?.[0] || []).map((v) => String(v ?? '').trim())
+        } catch {
+          return []
+        }
+      }
+      let headerSource = '원가표미러'
+      let costHeader = await readHeader(TARGET_SHEET_ID, `${quote('원가표미러')}!A11:P11`)
+      const hasAll = (h: string[]) =>
+        [COL_WONGOK, COL_SUPPLY, COL_TAX].every((c) => h.indexOf(c) >= 0)
+      if (!hasAll(costHeader)) {
+        // 원본은 읽기만 한다 (write 없음)
+        headerSource = '원가표 원본(read-only)'
+        costHeader = await readHeader(COST_SHEET_ID, `${quote('진도팜 원가표')}!A11:P11`)
+      }
+      if (!hasAll(costHeader)) {
+        throw new Error(
+          `원가표 헤더(R11)에서 컬럼을 찾지 못했습니다. 읽은 헤더: ${JSON.stringify(costHeader)}`,
+        )
+      }
+      // VLOOKUP 열번호 = A11:P200 범위 내 1-based 위치
+      const idxWongok = costHeader.indexOf(COL_WONGOK) + 1
+      const idxSupply = costHeader.indexOf(COL_SUPPLY) + 1
+      const idxTax = costHeader.indexOf(COL_TAX) + 1
+
+      // 2. 단가DB 탭 생성 (없을 때만)
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const idByTitle = new Map<string, number>()
+      for (const s of meta.data.sheets || []) {
+        const p = s.properties
+        if (p?.title != null && p.sheetId != null) idByTitle.set(p.title, p.sheetId)
+      }
+      if (!idByTitle.has('별칭원장')) {
+        throw new Error("'별칭원장' 탭이 없습니다. init1 을 먼저 실행하세요.")
+      }
+      let priceCreated = false
+      if (!idByTitle.has(PRICE_TAB)) {
+        const res = await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { requests: [{ addSheet: { properties: { title: PRICE_TAB } } }] },
+        })
+        const p = res.data.replies?.[0]?.addSheet?.properties
+        if (p?.sheetId == null) throw new Error(`'${PRICE_TAB}' 탭 생성 실패`)
+        idByTitle.set(PRICE_TAB, p.sheetId)
+        priceCreated = true
+      }
+      const priceId = idByTitle.get(PRICE_TAB) as number
+
+      // 3. 행 조립 — 별칭원장 초안 컬럼 인덱스:
+      //    0 별칭 / 1 브랜드 / 2 상태 / 3 발송거래처 / 4 소포장 원곡가 / 5 소포장 공급가 /
+      //    6 벌크 원곡가 / 7 벌크 공급가 / 8 원료ID 추정
+      const vlookup = (row: number, col: number) =>
+        `=VLOOKUP($E${row},${MIRROR_RANGE},${col},FALSE)`
+
+      const colAE: Cell[][] = [] // A~E (값)
+      const colFG: Cell[][] = [] // F~G (연결행은 수식)
+      const colHI: Cell[][] = [] // H~I (값)
+      const colJ: Cell[][] = [] // J   (연결행은 수식)
+      const colK: Cell[][] = [] // K   (값)
+      let linked = 0
+      let unlinked = 0
+      let needPurchase = 0
+
+      alias.rows.forEach((a, i) => {
+        const r = 2 + i // 헤더 R1 → 데이터 R2~R169
+        const rid = String(a[8] ?? '').trim()
+        const status = String(a[2] ?? '').trim()
+        const isLinked = rid !== ''
+        const noCost = status === STATUS_NO_COST
+        if (isLinked) linked++
+        else unlinked++
+        if (noCost) needPurchase++
+
+        colAE.push([a[0] ?? '', a[1] ?? '', a[3] ?? '', 'O', rid])
+        // 원료ID 있으면 원가표 실시간 참조, 없으면 초안 값 복사
+        colFG.push(
+          isLinked
+            ? [vlookup(r, idxWongok), vlookup(r, idxSupply)]
+            : [a[4] ?? '', a[5] ?? ''],
+        )
+        colHI.push([a[7] ?? '', '']) // H 벌크 공급가 · I 매입가(수기 입력용 빈칸)
+        colJ.push([isLinked ? vlookup(r, idxTax) : ''])
+        // 비고: 미연결 표시 + 원가 자체가 없던 행은 매입가 입력 필요까지 함께 표기
+        const notes: string[] = []
+        if (!isLinked) notes.push('원료 미연결')
+        if (noCost) notes.push('매입가 입력 필요')
+        colK.push([notes.join(' · ')])
+      })
+      const priceLast = 1 + alias.rows.length // R169
+
+      // 4. 값 기록
+      //    - 별칭원장은 A열(채택)만 건드린다. 다른 컬럼은 이 액션에서 일절 쓰지 않음.
+      //    - 텍스트/숫자 컬럼은 RAW, 수식이 섞인 F·G·J 만 USER_ENTERED
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            {
+              range: `${quote('별칭원장')}!A5:A${4 + alias.rows.length}`,
+              values: alias.rows.map(() => ['Y']),
+            },
+            { range: `${quote(PRICE_TAB)}!A1:K1`, values: [PRICE_HEADER] },
+            { range: `${quote(PRICE_TAB)}!A2:E${priceLast}`, values: colAE },
+            { range: `${quote(PRICE_TAB)}!H2:I${priceLast}`, values: colHI },
+            { range: `${quote(PRICE_TAB)}!K2:K${priceLast}`, values: colK },
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(PRICE_TAB)}!F2:G${priceLast}`, values: colFG },
+            { range: `${quote(PRICE_TAB)}!J2:J${priceLast}`, values: colJ },
+          ],
+        },
+      })
+
+      // 5. 서식 · 데이터검증
+      const grid = (sheetId: number, r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            // 헤더 A1:K1 볼드 + 옅은 회색
+            {
+              repeatCell: {
+                range: grid(priceId, 0, 1, 0, 11),
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: { bold: true },
+                    backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+                  },
+                },
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            // 취급상태 D2:D169 — O/X 드롭다운
+            {
+              setDataValidation: {
+                range: grid(priceId, 1, priceLast, 3, 4),
+                rule: {
+                  condition: {
+                    type: 'ONE_OF_LIST',
+                    values: [{ userEnteredValue: 'O' }, { userEnteredValue: 'X' }],
+                  },
+                  showCustomUi: true,
+                  strict: false,
+                },
+              },
+            },
+            // 금액 컬럼 F~I 천단위 콤마
+            {
+              repeatCell: {
+                range: grid(priceId, 1, priceLast, 5, 9),
+                cell: {
+                  userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } },
+                },
+                fields: 'userEnteredFormat.numberFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '별칭원장 채택 일괄 Y + 단가DB 구축 완료',
+        headerSource,
+        vlookupCols: { [COL_WONGOK]: idxWongok, [COL_SUPPLY]: idxSupply, [COL_TAX]: idxTax },
+        priceTabCreated: priceCreated,
+        summary: {
+          별칭원장_채택Y: alias.rows.length,
+          단가DB_행수: alias.rows.length,
+          원료_연결: linked,
+          원료_미연결: unlinked,
+          매입가_입력필요: needPurchase,
         },
       })
     }
