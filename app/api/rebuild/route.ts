@@ -90,6 +90,129 @@ const CAP_ANY = /([0-9]+(?:\.[0-9]+)?)\s*(kg|g)(?![a-zA-Z가-힣0-9])/gi
 // 원료ID 자체가 봉 단위로 값이 매겨진 것(원료ID 텍스트에 용량 포함) — 예: 관행_백미 10kg_새청무
 const BAG_PRICED = /[0-9]+(?:\.[0-9]+)?\s*(kg|g)(?![a-zA-Z가-힣0-9])/i
 
+// ── init4: 원료 일괄 연결 · 가공 컬럼 · 기타거래처 원가표 ────────
+const ETC_TAB = '기타거래처 원가표'
+const ETC_HEADER = ['거래처', '별칭', '매입가', '과세여부', '메모']
+const PROC_CRUSH = '파쇄'
+const PROC_MILL = '제분'
+const REF_CRUSH = '파쇄비' // 미러 가공비표 라벨 (셀 위치는 런타임 해석)
+const REF_MILL = '제분비'
+// 이 이상 용량인데 봉단가가 아니면 작업비 비례 적용이 진도팜과 미합의 → 비고로 표시
+const BIG_PACK_G = 10000
+
+// 별칭|원료ID|가공|봉단가여부 (지시문 원문 형식 그대로 유지)
+const LINK_91 = [
+  '[보배마을] 귀리 1kg|유기농_귀리||',
+  '[보배마을] 귀리혼합10곡 800g|유기농_귀리10곡||',
+  '[보배마을] 기장 1kg|유기농_기장||',
+  '[보배마을] 기장 500g|유기농_기장||',
+  '[보배마을] 바나듐쌀 백미 2kg|유기농_바나듐 백미||',
+  '[보배마을] 녹미 1kg|유기농_녹미||',
+  '[보배마을] 바나듐쌀 찰흑미 2kg|유기농_바나듐 흑미||',
+  '[보배마을] 백미 2kg|유기농_백미||',
+  '[보배마을] 수수 1kg|유기농_수수||',
+  '[토지랑] 백미 10kg|관행_백미 10kg_새청무||봉단가',
+  '[보배마을] 오색현미 1kg|유기농_오색현미||',
+  '[보배마을] 저속노화쌀 1kg|유기농_저속노화||',
+  '[보배마을] 저속노화쌀 200g|유기농_저속노화||',
+  '[보배마을] 차조 500g|유기농_차조||',
+  '[보배마을] 찰보리 1kg|유기농_찰보리||',
+  '[보배마을] 찰현미 2kg|유기농_찰현미||',
+  '[보배마을] 찰흑미 1kg|유기농_흑미||',
+  '[보배마을] 찹쌀 1kg|유기농_찹쌀||',
+  '[보배마을] 현미 2kg|유기농_현미||',
+  '[보배마을] 호라산밀 1kg|유기농_호라산밀||',
+  '[보배마을] 홍미 1kg|유기농_홍미||',
+  '[보배마을] 흑보리 1kg|유기농_흑보리||',
+  '[쌀쌀쌀] 국산 귀리 1kg|관행_귀리||',
+  '[쌀쌀쌀] 국산 귀리 2kg|관행_귀리||',
+  '[쌀쌀쌀] 국산 찰흑미 2kg|관행_흑미||',
+  '[쌀쌀쌀] 국산 현미 1kg|관행_현미||',
+  '[쌀쌀쌀] 국산 호라산밀 2kg|관행_호라산밀||',
+  '[쌀쌀쌀] 귀리혼합10곡 2kg|관행_귀리혼합10곡||',
+  '[토지랑] 백미 20kg|관행_백미 20kg_새청무||봉단가',
+  '[쌀쌀쌀] 쌀눈 500g|관행_쌀눈 500g||봉단가',
+  '[쌀쌀쌀] 저속노화쌀 1kg|혼합_저속노화||',
+  '[쌀쌀쌀] 저속노화쌀 2kg|혼합_저속노화||',
+  '[쌀쌀쌀] 저속노화쌀 500g|혼합_저속노화||',
+  '[쌀쌀쌀] 찰흑미 2kg|관행_흑미||',
+  '[쌀쌀쌀] 터키산 호라산밀 1kg|수입_호라산밀_터키산||',
+  '[쌀쌀쌀] 터키산 호라산밀 2kg|수입_호라산밀_터키산||',
+  '[토지랑] 귀리 1kg|관행_귀리||',
+  '[토지랑] 기장 1kg|관행_기장||',
+  '[토지랑] 녹미 1kg|관행_녹미||',
+  '[토지랑] 수수 1kg|관행_수수||',
+  '[토지랑] 오색현미 1kg|관행_오색현미||',
+  '[토지랑] 차조 1kg|관행_차조||',
+  '[토지랑] 찰보리 1kg|관행_찰보리||',
+  '[토지랑] 찰흑미 1kg|관행_흑미||',
+  '[토지랑] 찹쌀 1kg|관행_찹쌀||',
+  '[토지랑] 향진주 10kg|관행_백미 10kg_향진주||봉단가',
+  '[토지랑] 현미 1kg|관행_현미||',
+  '[토지랑] 호라산밀 1kg|관행_호라산밀||',
+  '[토지랑] 호라산밀칩|관행_호라산칩||봉단가',
+  '[토지랑] 홍미 1kg|관행_홍미||',
+  '[토지랑] 흑보리 1kg|관행_흑보리||',
+  '[토지랑] 백미 1kg|관행_백미_새청무||',
+  '[보배마을] 귀리 3kg|유기농_귀리||',
+  '[보배마을] 유기농 수수 1kg|유기농_수수||',
+  '[보배마을] 흑보리 500g|유기농_흑보리||',
+  '[보배마을] 생 귀리가루 350g|유기농_귀리|제분|',
+  '[보배마을] 흑미 1kg|유기농_흑미||',
+  '[보배마을] 귀리10곡 1kg|유기농_귀리10곡||',
+  '[보배마을] 조생종 백미 2kg|유기농_조생종 백미||',
+  '[보배마을] 조생종 백미 10kg|유기농_조생종 백미||',
+  '[보배마을] 찰현미 1kg|유기농_찰현미||',
+  '[보배마을] 백태 1kg|유기농_백태||',
+  '[보배마을] 깬 백태 1kg|유기농_백태|파쇄|',
+  '[보배마을] 호라산밀 가루 1kg|유기농_호라산밀|제분|',
+  '[보배마을] 귀리 가루 1kg|유기농_귀리|제분|',
+  '[보배마을] 어린이혼합곡 1kg|유기농_어린이 혼합곡||',
+  '[보배마을] 호라산밀 가루 20kg|유기농_호라산밀|제분|',
+  '[보배마을] 귀리 가루 20kg|유기농_귀리|제분|',
+  '[보배마을] 흑미 제분 20kg|유기농_흑미|제분|',
+  '[보배마을] 찹쌀 가루 1kg|유기농_찹쌀|제분|',
+  '[보배마을] 찹쌀 가루 500g|유기농_찹쌀|제분|',
+  '[보배마을] 유기농 흰찰보리 1kg|유기농_흰찰보리||',
+  '[보배마을] 무농약 흰찰보리 1kg|무농약_흰찰보리||',
+  '[보배마을] 무농약 청보리 1kg|무농약_청보리||',
+  '[토지랑] 흑미 1kg|관행_흑미||',
+  '[토지랑] 청보리 1kg|관행_청보리||',
+  '[토지랑] 조생종 백미 10kg|관행_백미 10kg_조생종||봉단가',
+  '[토지랑] 백태 1kg|관행_백태||',
+  '[토지랑] 조각 백태 1kg|관행_깬 백태||',
+  '[쌀쌀쌀] 저속노화 잡곡 200g 캐귀리|혼합_저속노화||',
+  '[쌀쌀쌀] 저속노화 잡곡 500g 캐귀리|혼합_저속노화||',
+  '[쌀쌀쌀] 저속노화 잡곡 1kg 캐귀리|혼합_저속노화||',
+  '[쌀쌀쌀] 저속노화 잡곡 2kg 캐귀리|혼합_저속노화||',
+  '[쌀쌀쌀] 국산 흑보리 1kg|관행_흑보리||',
+  '[쌀쌀쌀] 국산 흑보리 2kg|관행_흑보리||',
+  '[쌀쌀쌀] 찹쌀 1kg|관행_찹쌀||',
+  '[쌀쌀쌀] 찰현미 1kg|관행_찰현미||',
+  '[해남농부들] 터키 호라산밀 1kg|수입_호라산밀_터키산||',
+  '[보배마을] 어린이혼합곡|유기농_어린이 혼합곡||',
+  '[쌀쌀쌀] 귀리 1kg|관행_귀리||',
+  '[쌀쌀쌀] 흑미 1kg|관행_흑미||',
+]
+
+type LinkSpec = { rid: string; proc: string; bag: boolean }
+const linkByAlias = new Map<string, LinkSpec>(
+  LINK_91.map((line) => {
+    const p = line.split('|')
+    return [
+      p[0].trim(),
+      { rid: (p[1] || '').trim(), proc: (p[2] || '').trim(), bag: (p[3] || '').trim() !== '' },
+    ] as [string, LinkSpec]
+  }),
+)
+
+// 발주매핑 표준 별칭 → 발송 거래처 (첫 등장 기준)
+const vendorByAlias = new Map<string, string>()
+for (const r of (mappingData as { rows: (string | number)[][] }).rows) {
+  const key = String(r[2] ?? '').trim()
+  if (key && !vendorByAlias.has(key)) vendorByAlias.set(key, String(r[4] ?? '').trim())
+}
+
 function toGram(numText: string, unit: string): number {
   return Math.round(parseFloat(numText) * (unit.toLowerCase() === 'kg' ? 1000 : 1))
 }
@@ -888,6 +1011,360 @@ export async function GET(req: Request) {
             notNumber > 0
               ? 'H가 숫자가 아닌 행이 있습니다. 원가표미러 IMPORTRANGE 액세스 허용이 아직이면 #REF! 입니다.'
               : '전 연결행 정상 계산',
+        },
+      })
+    }
+
+    // ── init4: 원료 일괄 연결 + 가공 컬럼 + 기타거래처 원가표 (멱등) ──
+    if (action === 'init4') {
+      const sheets = getSheets()
+
+      if (alias.rows.length !== 168) {
+        throw new Error(`별칭원장 행수 이상: ${alias.rows.length} (168 기대)`)
+      }
+      if (linkByAlias.size !== 91) {
+        throw new Error(`연결 리스트 이상: ${linkByAlias.size} (91 기대 · 별칭 중복 의심)`)
+      }
+      // 리스트의 별칭이 전부 단가DB(=별칭원장)에 있는지 먼저 확인
+      const knownAlias = new Set(alias.rows.map((r) => String(r[0] ?? '').trim()))
+      const missing = [...linkByAlias.keys()].filter((a) => !knownAlias.has(a))
+      if (missing.length > 0) {
+        throw new Error(`단가DB에 없는 별칭 ${missing.length}건: ${JSON.stringify(missing)}`)
+      }
+
+      // ── 1. 원가표 레이아웃 해석 (미러 우선 · 원본은 read-only 폴백) ──
+      const readRange = async (spreadsheetId: string, range: string): Promise<string[][]> => {
+        try {
+          const res = await sheets.spreadsheets.values.get({ spreadsheetId, range })
+          return (res.data.values || []).map((r) => (r || []).map((v) => String(v ?? '').trim()))
+        } catch {
+          return []
+        }
+      }
+      const NEEDED = [COL_WONGOK, COL_CRUSH, COL_MILL, COL_BLEND, COL_LOGI, COL_TAX]
+      const hasAll = (h: string[]) => NEEDED.every((c) => h.indexOf(c) >= 0)
+      const labelRow = (t: string[][], label: string) =>
+        t.findIndex((r) => (r?.[0] ?? '') === label) + 1 // 1-based 시트 행번호
+      const REF_LABELS = [REF_LABOR_SMALL, REF_LABOR_BULK, REF_CRUSH, REF_MILL]
+
+      let layoutSource = '원가표미러'
+      let costHeader = (await readRange(TARGET_SHEET_ID, `${quote('원가표미러')}!A11:P11`))[0] || []
+      let refTable = await readRange(TARGET_SHEET_ID, `${quote('원가표미러')}!A1:B8`)
+      if (!hasAll(costHeader) || REF_LABELS.some((l) => labelRow(refTable, l) === 0)) {
+        layoutSource = '원가표 원본(read-only)'
+        costHeader = (await readRange(COST_SHEET_ID, `${quote('진도팜 원가표')}!A11:P11`))[0] || []
+        refTable = await readRange(COST_SHEET_ID, `${quote('진도팜 원가표')}!A1:B8`)
+      }
+      if (!hasAll(costHeader)) {
+        throw new Error(`원가표 헤더(R11) 해석 실패: ${JSON.stringify(costHeader)}`)
+      }
+      const missLabel = REF_LABELS.filter((l) => labelRow(refTable, l) === 0)
+      if (missLabel.length > 0) {
+        throw new Error(
+          `가공비표에서 항목을 찾지 못했습니다: ${missLabel.join(', ')} / 읽은 A1:B8 ${JSON.stringify(refTable)}`,
+        )
+      }
+      const refCell = (label: string) => `'원가표미러'!$B$${labelRow(refTable, label)}`
+      const laborSmall = refCell(REF_LABOR_SMALL)
+      const laborBulk = refCell(REF_LABOR_BULK)
+      const crushRate = refCell(REF_CRUSH)
+      const millRate = refCell(REF_MILL)
+      const col = (name: string) => costHeader.indexOf(name) + 1
+      const iWongok = col(COL_WONGOK)
+      const iCrush = col(COL_CRUSH)
+      const iMill = col(COL_MILL)
+      const iBlend = col(COL_BLEND)
+      const iLogi = col(COL_LOGI)
+      const iTax = col(COL_TAX)
+
+      // ── 2. 탭 확보 (기타거래처 원가표는 J 수식이 참조하므로 먼저 만든다) ──
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const idByTitle = new Map<string, number>()
+      for (const s of meta.data.sheets || []) {
+        const p = s.properties
+        if (p?.title != null && p.sheetId != null) idByTitle.set(p.title, p.sheetId)
+      }
+      if (!idByTitle.has(PRICE_TAB)) {
+        throw new Error(`'${PRICE_TAB}' 탭이 없습니다. init3 을 먼저 실행하세요.`)
+      }
+      if (!idByTitle.has(ETC_TAB)) {
+        const res = await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { requests: [{ addSheet: { properties: { title: ETC_TAB } } }] },
+        })
+        const p = res.data.replies?.[0]?.addSheet?.properties
+        if (p?.sheetId == null) throw new Error(`'${ETC_TAB}' 탭 생성 실패`)
+        idByTitle.set(ETC_TAB, p.sheetId)
+      }
+      const priceId = idByTitle.get(PRICE_TAB) as number
+      const etcId = idByTitle.get(ETC_TAB) as number
+
+      // ── 3. 행 조립 ────────────────────────────────────────────
+      const vl = (r: number, c: number) => `VLOOKUP($E${r},${MIRROR_DATA},${c},FALSE)`
+      const blank = (r: number, expr: string) => `=IF(OR($E${r}="",$F${r}=""),"",${expr})`
+      // 가공 추가분: M 이 파쇄/제분이면 해당 단가 × g/1000
+      const procAdd = (r: number) =>
+        `IF($M${r}="${PROC_CRUSH}",${crushRate},IF($M${r}="${PROC_MILL}",${millRate},0))*$F${r}/1000`
+      const baseSum = (r: number) =>
+        `(${vl(r, iWongok)}+${vl(r, iCrush)}+${vl(r, iMill)}+${vl(r, iBlend)})*$F${r}/1000` +
+        `+${vl(r, iLogi)}`
+
+      const colEF: Cell[][] = [] // E 원료ID · F g
+      const colGK: Cell[][] = [] // G~K 수식
+      const colL: Cell[][] = [] // L 비고
+      const colM: Cell[][] = [] // M 가공
+      const etcRows: Cell[][] = []
+
+      let linked = 0
+      let newlyLinked = 0
+      let unlinked = 0
+      let bagPriced = 0
+      let procCount = 0
+      let bigPack = 0
+      let needPurchase = 0
+      let gramOk = 0
+      let gramFail = 0
+
+      alias.rows.forEach((a, i) => {
+        const r = 2 + i
+        const aliasText = String(a[0] ?? '').trim()
+        const status = String(a[2] ?? '').trim()
+
+        // 기존 연결 유지 → 깬서리태 교정 → 91리스트(최우선)
+        let rid = String(a[8] ?? '').trim()
+        if (aliasText.includes('깬서리태')) rid = '유기농_깬 서리태'
+        let proc = ''
+        let bagFlag = false
+        const spec = linkByAlias.get(aliasText)
+        if (spec) {
+          if (rid === '') newlyLinked++
+          rid = spec.rid
+          proc = spec.proc
+          bagFlag = spec.bag
+        }
+
+        const isLinked = rid !== ''
+        // 봉단가: 리스트 명시 플래그 또는 원료ID 텍스트에 용량 포함
+        const isBag = isLinked && (bagFlag || BAG_PRICED.test(rid))
+        if (isLinked) linked++
+        else unlinked++
+        if (isBag) bagPriced++
+        if (proc) procCount++
+
+        const gram: Cell = isBag ? 1000 : parseGram(aliasText)
+        if (gram === '') gramFail++
+        else gramOk++
+        // 대포장인데 봉단가가 아니면 작업비 비례 적용이 미합의 상태
+        const isBigPack = typeof gram === 'number' && gram >= BIG_PACK_G && !isBag
+        if (isBigPack) bigPack++
+        // 매입가 수기 입력은 '원가없음'이면서 아직 원료 연결이 안 된 행에만 해당
+        const noCost = status === STATUS_NO_COST && !isLinked
+        if (noCost) needPurchase++
+
+        colEF.push([rid, gram])
+        colGK.push([
+          blank(r, `${vl(r, iWongok)}*$F${r}/1000`),
+          blank(r, `${baseSum(r)}+${laborSmall}*MAX(1,$F${r}/1000)+${procAdd(r)}`),
+          blank(r, `${baseSum(r)}+${laborBulk}*MAX(1,$F${r}/1000)+${procAdd(r)}`),
+          // J 매입가 — 원료 연결된 행은 항상 빈칸, 미연결 행만 기타거래처 원가표에서 조회
+          `=IF($E${r}<>"","",IFERROR(VLOOKUP($A${r},'${ETC_TAB}'!$B:$C,2,FALSE),""))`,
+          `=IF($E${r}="","",${vl(r, iTax)})`,
+        ])
+        colM.push([proc])
+
+        const notes: string[] = []
+        if (isBag) notes.push('봉단가 원료')
+        if (!isLinked) notes.push('원료 미연결')
+        if (noCost) notes.push('매입가 입력 필요')
+        if (isBigPack) notes.push('대포장 작업비 확인')
+        colL.push([notes.join(' · ')])
+
+        // 기타거래처 원가표 사전 채움 — 원료ID 없는 행 전부
+        if (!isLinked) {
+          etcRows.push([vendorByAlias.get(aliasText) || '', aliasText, '', '', ''])
+        }
+      })
+      const priceLast = 1 + alias.rows.length // R169
+
+      // ── 4. 기타거래처 원가표 기록 (J 수식이 참조 → 먼저) ──────
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(ETC_TAB)}!A1:E1000`,
+        requestBody: {},
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(ETC_TAB)}!A1:E1`, values: [ETC_HEADER] },
+            ...(etcRows.length > 0
+              ? [{ range: `${quote(ETC_TAB)}!A2:E${1 + etcRows.length}`, values: etcRows }]
+              : []),
+          ],
+        },
+      })
+
+      // ── 5. 단가DB E~M 기록 (A~D 는 건드리지 않음) ─────────────
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(PRICE_TAB)}!M1`, values: [['가공']] },
+            { range: `${quote(PRICE_TAB)}!E2:F${priceLast}`, values: colEF },
+            { range: `${quote(PRICE_TAB)}!L2:L${priceLast}`, values: colL },
+            { range: `${quote(PRICE_TAB)}!M2:M${priceLast}`, values: colM },
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [{ range: `${quote(PRICE_TAB)}!G2:K${priceLast}`, values: colGK }],
+        },
+      })
+
+      // ── 6. 서식 · 데이터검증 ──────────────────────────────────
+      const grid = (sheetId: number, r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      const headerFmt = {
+        userEnteredFormat: {
+          textFormat: { bold: true },
+          backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+        },
+      }
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            // 단가DB M1 헤더 + M 가공 드롭다운 (strict 아님 → 빈칸 허용)
+            {
+              repeatCell: {
+                range: grid(priceId, 0, 1, 12, 13),
+                cell: headerFmt,
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            {
+              setDataValidation: {
+                range: grid(priceId, 1, priceLast, 12, 13),
+                rule: {
+                  condition: {
+                    type: 'ONE_OF_LIST',
+                    values: [
+                      { userEnteredValue: PROC_CRUSH },
+                      { userEnteredValue: PROC_MILL },
+                    ],
+                  },
+                  showCustomUi: true,
+                  strict: false,
+                },
+              },
+            },
+            // 기타거래처 원가표 헤더 + 매입가 콤마
+            {
+              repeatCell: {
+                range: grid(etcId, 0, 1, 0, 5),
+                cell: headerFmt,
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            {
+              repeatCell: {
+                range: grid(etcId, 1, 1 + Math.max(etcRows.length, 1), 2, 3),
+                cell: {
+                  userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } },
+                },
+                fields: 'userEnteredFormat.numberFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 7. 되읽어 검증 ────────────────────────────────────────
+      const back = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!A2:M${priceLast}`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const bv = back.data.values || []
+      const hOf = (aliasText: string) => {
+        const row = bv.find((r) => String(r[0] ?? '').trim() === aliasText)
+        return row ? row[7] : undefined
+      }
+      let linkedBack = 0
+      let computed = 0
+      let notNumber = 0
+      const noGram: string[] = []
+      for (const r of bv) {
+        if (String(r[4] ?? '').trim() === '') continue
+        linkedBack++
+        // g 가 없으면 수식이 의도대로 빈칸 → #REF! 등 진짜 오류와 구분한다
+        if (String(r[5] ?? '').trim() === '') {
+          noGram.push(String(r[0] ?? '').trim())
+          continue
+        }
+        if (typeof r[7] === 'number') computed++
+        else notNumber++
+      }
+      const etcBack = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(ETC_TAB)}!B2:B1000`,
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '원료 일괄 연결 + 가공 컬럼 + 기타거래처 원가표 구축 완료',
+        layoutSource,
+        rateCells: {
+          작업비_소포장: laborSmall,
+          작업비_벌크: laborBulk,
+          파쇄비: crushRate,
+          제분비: millRate,
+        },
+        summary: {
+          원료_연결: linked,
+          신규_연결: newlyLinked,
+          원료_미연결: unlinked,
+          봉단가_원료: bagPriced,
+          가공_지정: procCount,
+          대포장_작업비확인: bigPack,
+          매입가_입력필요: needPurchase,
+          g파싱_성공: gramOk,
+          g파싱_실패: gramFail,
+          기타거래처_행수: etcRows.length,
+        },
+        verify: {
+          원료연결_되읽기: linkedBack,
+          원료연결_기대: 118,
+          '[보배마을] 귀리 가루 1kg H': hOf('[보배마을] 귀리 가루 1kg'),
+          '[보배마을] 귀리 가루 1kg H 기대': 5400,
+          '[보배마을] 깬 백태 1kg H': hOf('[보배마을] 깬 백태 1kg'),
+          '[보배마을] 깬 백태 1kg H 기대': 7400,
+          '[토지랑] 조각 백태 1kg H': hOf('[토지랑] 조각 백태 1kg'),
+          '[토지랑] 조각 백태 1kg H 기대': 6900,
+          '[토지랑] 호라산밀칩 H': hOf('[토지랑] 호라산밀칩'),
+          기타거래처_되읽기_행수: (etcBack.data.values || []).filter(
+            (r) => String(r[0] ?? '').trim() !== '',
+          ).length,
+          연결행_H_숫자계산됨: computed,
+          연결행_H_숫자아님: notNumber,
+          연결됐지만_g없음: noGram,
+          비고:
+            notNumber > 0
+              ? 'H가 숫자가 아닌 행이 있습니다. 원가표미러 IMPORTRANGE 액세스 허용 여부를 확인하세요.'
+              : 'g 있는 전 연결행 정상 계산',
         },
       })
     }
