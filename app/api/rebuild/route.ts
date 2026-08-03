@@ -336,6 +336,8 @@ const ETC_TAB_RETIRED = '(폐기)기타거래처 원가표'
 const PRICE_J_HEADER = '총 공급가'
 // init12: 헤더 명확화
 const PRICE_J_HEADER_V2 = '총 공급가(소포장)'
+// 단가DB 자동 파생 컬럼 배경 (입력 흰색과 대비)
+const AUTO_GRAY = 'D9D9D9'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -4120,22 +4122,8 @@ export async function GET(req: Request) {
           ).data.values || []
         : []
 
-      // ── 2. 자동 컬럼 회색 — 마진계산 자동색과 동일 계열 ────────
-      let autoBg: any = { red: 0.94, green: 0.94, blue: 0.94 }
-      if (hasMargin) {
-        const gd = await sheets.spreadsheets.get({
-          spreadsheetId: TARGET_SHEET_ID,
-          ranges: [`${quote(MARGIN_TAB)}!F2`], // F 원가 = 자동 컬럼
-          includeGridData: true,
-          fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
-        })
-        const c =
-          gd.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]?.effectiveFormat
-            ?.backgroundColor
-        // 흰색이면 자동/입력 구분이 안 되므로 기본 회색 사용
-        const isWhite = c && c.red === 1 && c.green === 1 && c.blue === 1
-        if (c && !isWhite) autoBg = c
-      }
+      // ── 2. 자동 컬럼 회색 — #D9D9D9 고정 (입력 흰색과 대비) ────
+      const autoBg: any = hex(AUTO_GRAY)
       const whiteBg = { red: 1, green: 1, blue: 1 }
       const BGF = 'userEnteredFormat.backgroundColor'
       const band = (c0: number, c1: number, r0: number, r1: number, bg: any) => ({
