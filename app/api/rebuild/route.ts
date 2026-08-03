@@ -334,6 +334,8 @@ const LINK_COL = '원가표 바로가기'
 const ETC_TAB_RETIRED = '(폐기)기타거래처 원가표'
 // init11: 단가DB J열 의미 전환 (매입가 → 총 공급가)
 const PRICE_J_HEADER = '총 공급가'
+// init12: 헤더 명확화
+const PRICE_J_HEADER_V2 = '총 공급가(소포장)'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -4070,6 +4072,200 @@ export async function GET(req: Request) {
         검증1_진도팜_J등H: jindoCheck,
         검증2_비진도팜: nonJindoBgCheck,
         검증3_마진계산_원가: marginCheck,
+      })
+    }
+
+    // ── init12: 단가DB J 헤더 명확화 + 자동/입력 컬럼 색 구분 (멱등) ──
+    if (action === 'init12') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const props = (meta.data.sheets || []).map((s) => s.properties).filter(Boolean) as any[]
+      const priceId = props.find((p) => p.title === PRICE_TAB)?.sheetId
+      if (priceId == null) throw new Error(`'${PRICE_TAB}' 탭이 없습니다.`)
+      const hasMargin = props.some((p) => p.title === MARGIN_TAB)
+
+      // ── 1. 사전 스냅샷 — 값·수식 무변동 확인용 ─────────────────
+      const preRanges = [`${quote(PRICE_TAB)}!A2:A1000`, `${quote(PRICE_TAB)}!E2:E1000`]
+      const preIdx = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: preRanges,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const aCol = preIdx.data.valueRanges?.[0]?.values || []
+      const eCol = preIdx.data.valueRanges?.[1]?.values || []
+      let priceLast = 1
+      aCol.forEach((r, i) => {
+        if (String(r?.[0] ?? '').trim() !== '') priceLast = 2 + i
+      })
+      const nRows = priceLast - 1
+
+      const snapRanges = [`${quote(PRICE_TAB)}!A2:O${priceLast}`]
+      if (hasMargin) snapRanges.push(`${quote(MARGIN_TAB)}!A2:T10`)
+      const beforeFx = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: snapRanges,
+        valueRenderOption: 'FORMULA',
+      })
+      const beforePrice = beforeFx.data.valueRanges?.[0]?.values || []
+      const beforeMarginVal = hasMargin
+        ? (
+            await sheets.spreadsheets.values.get({
+              spreadsheetId: TARGET_SHEET_ID,
+              range: `${quote(MARGIN_TAB)}!A2:T10`,
+              valueRenderOption: 'UNFORMATTED_VALUE',
+            })
+          ).data.values || []
+        : []
+
+      // ── 2. 자동 컬럼 회색 — 마진계산 자동색과 동일 계열 ────────
+      let autoBg: any = { red: 0.94, green: 0.94, blue: 0.94 }
+      if (hasMargin) {
+        const gd = await sheets.spreadsheets.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          ranges: [`${quote(MARGIN_TAB)}!F2`], // F 원가 = 자동 컬럼
+          includeGridData: true,
+          fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+        })
+        const c =
+          gd.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]?.effectiveFormat
+            ?.backgroundColor
+        // 흰색이면 자동/입력 구분이 안 되므로 기본 회색 사용
+        const isWhite = c && c.red === 1 && c.green === 1 && c.blue === 1
+        if (c && !isWhite) autoBg = c
+      }
+      const whiteBg = { red: 1, green: 1, blue: 1 }
+      const BGF = 'userEnteredFormat.backgroundColor'
+      const band = (c0: number, c1: number, r0: number, r1: number, bg: any) => ({
+        repeatCell: {
+          range: {
+            sheetId: priceId,
+            startRowIndex: r0,
+            endRowIndex: r1,
+            startColumnIndex: c0,
+            endColumnIndex: c1,
+          },
+          cell: { userEnteredFormat: { backgroundColor: bg } },
+          fields: BGF,
+        },
+      })
+
+      // J — 진도팜(원료ID 있음) 회색 / 비진도팜 흰색
+      const jindoRuns: [number, number][] = []
+      const etcRuns: [number, number][] = []
+      let jindoCnt = 0
+      let etcCnt = 0
+      for (let i = 0; i < nRows; i++) {
+        const isJindo = String(eCol[i]?.[0] ?? '').trim() !== ''
+        const runs = isJindo ? jindoRuns : etcRuns
+        if (isJindo) jindoCnt++
+        else etcCnt++
+        const last = runs[runs.length - 1]
+        if (last && last[1] === i) last[1] = i + 1
+        else runs.push([i, i + 1])
+      }
+
+      const requests: any[] = [
+        // G 원곡가 · H 소포장 공급가 · I 벌크 공급가 — 자동 파생 회색 통일
+        band(6, 9, 1, priceLast, autoBg),
+        ...jindoRuns.map(([s, e]) => band(9, 10, 1 + s, 1 + e, autoBg)),
+        ...etcRuns.map(([s, e]) => band(9, 10, 1 + s, 1 + e, whiteBg)),
+      ]
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: { requests },
+      })
+
+      // J1 헤더만 갱신 (값·수식 아님)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!J1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[PRICE_J_HEADER_V2]] },
+      })
+
+      // ── 3. 검증 — 실제 배경색 되읽기 ──────────────────────────
+      const bgBack = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(PRICE_TAB)}!G2:J${priceLast}`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+      })
+      const rowData = bgBack.data.sheets?.[0]?.data?.[0]?.rowData || []
+      const eq = (a: any, b: any) =>
+        Math.abs((a?.red ?? 1) - (b.red ?? 1)) < 0.01 &&
+        Math.abs((a?.green ?? 1) - (b.green ?? 1)) < 0.01 &&
+        Math.abs((a?.blue ?? 1) - (b.blue ?? 1)) < 0.01
+      let ghiGray = 0
+      let jGrayJindo = 0
+      let jWhiteEtc = 0
+      const mismatch: string[] = []
+      for (let i = 0; i < nRows; i++) {
+        const vals = rowData[i]?.values || []
+        const bgAt = (c: number) => vals[c]?.effectiveFormat?.backgroundColor
+        if ([0, 1, 2].every((c) => eq(bgAt(c), autoBg))) ghiGray++
+        else if (mismatch.length < 10) mismatch.push(`R${2 + i} G~I`)
+        const isJindo = String(eCol[i]?.[0] ?? '').trim() !== ''
+        const jbg = bgAt(3)
+        if (isJindo && eq(jbg, autoBg)) jGrayJindo++
+        else if (!isJindo && eq(jbg, whiteBg)) jWhiteEtc++
+        else if (mismatch.length < 10) mismatch.push(`R${2 + i} J`)
+      }
+
+      // 값·수식 무변동
+      const afterFx = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(PRICE_TAB)}!A2:O${priceLast}`, `${quote(PRICE_TAB)}!J1`],
+        valueRenderOption: 'FORMULA',
+      })
+      const afterPrice = afterFx.data.valueRanges?.[0]?.values || []
+      const jHeader = afterFx.data.valueRanges?.[1]?.values?.[0]?.[0] ?? ''
+      const priceSame = JSON.stringify(beforePrice) === JSON.stringify(afterPrice)
+      const afterMarginVal = hasMargin
+        ? (
+            await sheets.spreadsheets.values.get({
+              spreadsheetId: TARGET_SHEET_ID,
+              range: `${quote(MARGIN_TAB)}!A2:T10`,
+              valueRenderOption: 'UNFORMATTED_VALUE',
+            })
+          ).data.values || []
+        : []
+      const r2 = (v: any) => (typeof v === 'number' ? Math.round(v * 100) / 100 : (v ?? ''))
+      const marginCost = beforeMarginVal.slice(0, 3).map((b, i) => {
+        const a = afterMarginVal[i] || []
+        return {
+          행: `R${2 + i}`,
+          별칭: a[1] ?? b[1] ?? '',
+          'F 원가': [r2(b[5]), r2(a[5])],
+          'N 총비용': [r2(b[13]), r2(a[13])],
+          동일: r2(b[5]) === r2(a[5]) && r2(b[13]) === r2(a[13]),
+        }
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: `단가DB J1 '${PRICE_J_HEADER_V2}' + 자동/입력 컬럼 색 구분 완료`,
+        summary: {
+          J1_헤더: jHeader,
+          자동_회색: autoBg,
+          입력_흰색: whiteBg,
+          단가DB_마지막행: priceLast,
+          진도팜행: jindoCnt,
+          비진도팜행: etcCnt,
+        },
+        검증1_색적용: {
+          'G·H·I 회색 행수': ghiGray,
+          'J 회색(진도팜) 행수': jGrayJindo,
+          'J 흰색(비진도팜) 행수': jWhiteEtc,
+          기대: { 'G~I': nRows, 'J 회색': jindoCnt, 'J 흰색': etcCnt },
+          불일치: mismatch.length ? mismatch : 0,
+        },
+        검증2_무변동: {
+          '단가DB A~O 수식·값 동일': priceSame,
+          마진계산_원가: marginCost,
+        },
       })
     }
 
