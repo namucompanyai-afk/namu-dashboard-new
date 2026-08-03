@@ -4257,6 +4257,25 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── dump: 마진계산 전체 읽기 전용 덤프 (쓰기 없음) ────────────
+    if (action === 'dump') {
+      const sheets = getSheets()
+      const res = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [
+          `${quote(MARGIN_TAB)}!A1:T${1 + MARGIN_ROWS}`,
+          `${quote(PRICE_TAB)}!A1:O1000`,
+        ],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const v = res.data.valueRanges || []
+      return NextResponse.json({
+        ok: true,
+        마진계산: v[0]?.values || [],
+        단가DB: v[1]?.values || [],
+      })
+    }
+
     // ── inspect: 읽기 전용 현황 조사 (쓰기 없음) ──────────────────
     if (action === 'inspect') {
       const sheets = getSheets()
