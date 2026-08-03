@@ -347,6 +347,9 @@ const MIGRATION = migrationData as {
 }
 const MIGRATION_CHANNEL = '쿠팡 3P'
 const SUSPECT_YELLOW = 'FFF2CC'
+// init14: 이관분 롤백 범위
+const ROLLBACK_FROM = 9
+const ROLLBACK_TO = 200
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -4602,6 +4605,153 @@ export async function GET(req: Request) {
         },
         단가DB_추가: addedRows,
         차이_상위30: diffs.slice(0, 30),
+      })
+    }
+
+    // ── init14: init13 이관분 롤백 (마진계산 R9~R200 입력값 제거) ──
+    if (action === 'init14') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const marginId = (meta.data.sheets || []).find((s) => s.properties?.title === MARGIN_TAB)
+        ?.properties?.sheetId
+      if (marginId == null) throw new Error(`'${MARGIN_TAB}' 탭이 없습니다.`)
+      const R0 = ROLLBACK_FROM // 9
+      const R1 = ROLLBACK_TO // 200
+      const marginLast = 1 + MARGIN_ROWS
+
+      // 사전 스냅샷 — R2~R8 무변경 확인용
+      const pre = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A2:U8`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const beforeTop = pre.data.values || []
+
+      // 입력 컬럼 색 표본 (D2 = 판매가, 입력 컬럼)
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(MARGIN_TAB)}!D2`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+      })
+      const inputBg =
+        gd.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]?.effectiveFormat
+          ?.backgroundColor || { red: 1, green: 1, blue: 1 }
+
+      // ── 1. 입력값 클리어 (자동 수식 컬럼 F·G·I·J·L~T 는 손대지 않음) ──
+      await sheets.spreadsheets.values.batchClear({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          ranges: [
+            `${quote(MARGIN_TAB)}!A${R0}:E${R1}`,
+            `${quote(MARGIN_TAB)}!H${R0}:H${R1}`,
+            `${quote(MARGIN_TAB)}!K${R0}:K${R1}`,
+            `${quote(MARGIN_TAB)}!U${R0}:U${R1}`,
+            `${quote(MARGIN_TAB)}!U1`,
+          ],
+        },
+      })
+
+      // ── 2. K 수수료율 — 빈칸 자동참조 수식 복원 (init9 와 동일) ──
+      const chCol = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote('채널DB')}!A2:A200`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      let chLast = 1
+      ;(chCol.data.values || []).forEach((r, i) => {
+        if (String(r?.[0] ?? '').trim() !== '') chLast = 2 + i
+      })
+      const CH3 = `'채널DB'!$A$2:$C$${chLast}`
+      const colK: Cell[][] = []
+      for (let r = R0; r <= R1; r++) {
+        colK.push([`=IF($A${r}<>"${SMART_STORE}","",IFERROR(VLOOKUP($A${r},${CH3},3,FALSE),""))`])
+      }
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!K${R0}:K${R1}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: colK },
+      })
+
+      // ── 3. 노란 배경 제거 → 입력 컬럼 색 복원 / U열 서식 초기화 ──
+      const grid = (r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId: marginId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              repeatCell: {
+                range: grid(R0 - 1, R1, 0, 5),
+                cell: { userEnteredFormat: { backgroundColor: inputBg } },
+                fields: 'userEnteredFormat.backgroundColor',
+              },
+            },
+            {
+              repeatCell: {
+                range: grid(R0 - 1, R1, 7, 8),
+                cell: { userEnteredFormat: { backgroundColor: inputBg } },
+                fields: 'userEnteredFormat.backgroundColor',
+              },
+            },
+            {
+              repeatCell: {
+                range: grid(R0 - 1, R1, 10, 11),
+                cell: { userEnteredFormat: { backgroundColor: inputBg } },
+                fields: 'userEnteredFormat.backgroundColor',
+              },
+            },
+            {
+              repeatCell: {
+                range: grid(0, R1, 20, 21),
+                cell: {},
+                fields: 'userEnteredFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 4. 검증 ───────────────────────────────────────────────
+      const back = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A2:U${marginLast}`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const bv = back.data.values || []
+      const filled: string[] = []
+      let aliasRows = 0
+      bv.forEach((r, i) => {
+        const row = (r || []) as any[]
+        if ([0, 1, 2, 3, 4, 7, 17, 20].some((c) => String(row[c] ?? '').trim() !== '')) {
+          filled.push(`R${2 + i}`)
+        }
+        if (String(row[1] ?? '').trim() !== '') aliasRows++
+      })
+      const afterTop = bv.slice(0, 7).map((r) => (r || []).slice(0, 21))
+      const norm = (x: any[][]) => JSON.stringify(x.map((r) => r.map((v) => v ?? '')))
+      const topSame = norm(beforeTop as any[][]) === norm(afterTop as any[][])
+
+      return NextResponse.json({
+        ok: true,
+        message: `init13 이관분 롤백 완료 (마진계산 R${R0}~R${R1})`,
+        summary: {
+          클리어_범위: `A${R0}:E${R1} · H · K · U (+U1 헤더)`,
+          입력_흔적_남은_행: filled,
+          입력_행수: filled.length,
+          별칭_입력행수: aliasRows,
+          'R2~R8 무변경': topSame,
+          자동수식_컬럼: 'F·G·I·J·L~T 미변경 / K 는 자동참조 수식 복원',
+        },
       })
     }
 
