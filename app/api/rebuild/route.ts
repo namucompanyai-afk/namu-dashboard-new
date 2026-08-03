@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import aliasData from './alias-data.json'
 import mappingData from './mapping-data.json'
+import migrationData from './migration-data.json'
 
 /**
  * 나무_마진리빌드 구글시트 초기 세팅 API (서비스 계정 · 일회성)
@@ -338,6 +339,14 @@ const PRICE_J_HEADER = '총 공급가'
 const PRICE_J_HEADER_V2 = '총 공급가(소포장)'
 // 단가DB 자동 파생 컬럼 배경 (입력 흰색과 대비)
 const AUTO_GRAY = 'D9D9D9'
+// init13: 마진마스터 이관
+const MIGRATION = migrationData as {
+  newRows: (string | number)[][]
+  records: any[]
+  skipped: any[]
+}
+const MIGRATION_CHANNEL = '쿠팡 3P'
+const SUSPECT_YELLOW = 'FFF2CC'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -4300,6 +4309,299 @@ export async function GET(req: Request) {
         원가표미러: v[0]?.values || [],
         단가DB_값: v[1]?.values || [],
         발주매핑: v[2]?.values || [],
+      })
+    }
+
+    // ── init13: 마진마스터 → 신시트 이관 (단가DB 8행 추가 + 윙 192건) ──
+    if (action === 'init13') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const props = (meta.data.sheets || []).map((s) => s.properties).filter(Boolean) as any[]
+      const priceId = props.find((p) => p.title === PRICE_TAB)?.sheetId
+      const marginId = props.find((p) => p.title === MARGIN_TAB)?.sheetId
+      if (priceId == null || marginId == null) throw new Error('단가DB / 마진계산 탭이 없습니다.')
+      const marginLast = 1 + MARGIN_ROWS
+
+      // ── 1. 현황 읽기 ──────────────────────────────────────────
+      const pre = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(PRICE_TAB)}!A1:O300`, `${quote(MARGIN_TAB)}!A2:T${marginLast}`],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const priceVals = pre.data.valueRanges?.[0]?.values || []
+      const marginVals = pre.data.valueRanges?.[1]?.values || []
+      let priceLast = 1
+      priceVals.forEach((r, i) => {
+        if (i > 0 && String(r?.[0] ?? '').trim() !== '') priceLast = 1 + i
+      })
+      const priceAliases = new Set(
+        priceVals.slice(1).map((r) => String(r?.[0] ?? '').trim()).filter(Boolean),
+      )
+
+      // ── 2. 단가DB 신규 별칭 행 추가 (기존 행 무변경) ───────────
+      const tplFx = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!G2:K2`,
+        valueRenderOption: 'FORMULA',
+      })
+      const tpl = (tplFx.data.values?.[0] || []).map((x) => String(x ?? ''))
+      if (tpl.length < 5 || !tpl[0].startsWith('=')) {
+        throw new Error(`단가DB R2 수식 템플릿을 읽지 못했습니다: ${JSON.stringify(tpl)}`)
+      }
+      // 상대 행 참조($E2 형태)만 새 행 번호로 치환 — 절대 참조($A$12)는 보존
+      const reRow = (f: string, to: number) => f.replace(/(\$[A-Z]{1,2})(\d+)/g, `$1${to}`)
+
+      const toAdd = MIGRATION.newRows.filter((n) => !priceAliases.has(n[0] as string))
+      const addedRows: any[] = []
+      if (toAdd.length) {
+        const first = priceLast + 1
+        const valuesAF: Cell[][] = []
+        const valuesGK: Cell[][] = []
+        const valuesLN: Cell[][] = []
+        toAdd.forEach((n, i) => {
+          const r = first + i
+          const [al, rid, g, brand, vendor, status, note, proc, bag] = n as any[]
+          valuesAF.push([al, brand, vendor, status, rid, g])
+          valuesGK.push(tpl.map((f) => reRow(f, r)))
+          valuesLN.push([note, proc, bag])
+          addedRows.push({ 행: `R${r}`, 별칭: al, 원료ID: rid || '(빈칸)', g })
+        })
+        const lastNew = first + toAdd.length - 1
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'RAW',
+            data: [
+              { range: `${quote(PRICE_TAB)}!A${first}:F${lastNew}`, values: valuesAF },
+              { range: `${quote(PRICE_TAB)}!L${first}:N${lastNew}`, values: valuesLN },
+            ],
+          },
+        })
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'USER_ENTERED',
+            data: [{ range: `${quote(PRICE_TAB)}!G${first}:K${lastNew}`, values: valuesGK }],
+          },
+        })
+        // 서식 — 기존 행(R2) 복사 후 J 는 원료ID 유무로 색 분기
+        const copyFmt = {
+          copyPaste: {
+            source: {
+              sheetId: priceId,
+              startRowIndex: 1,
+              endRowIndex: 2,
+              startColumnIndex: 0,
+              endColumnIndex: 15,
+            },
+            destination: {
+              sheetId: priceId,
+              startRowIndex: first - 1,
+              endRowIndex: lastNew,
+              startColumnIndex: 0,
+              endColumnIndex: 15,
+            },
+            pasteType: 'PASTE_FORMAT',
+          },
+        }
+        const jFmt = toAdd.map((n, i) => ({
+          repeatCell: {
+            range: {
+              sheetId: priceId,
+              startRowIndex: first - 1 + i,
+              endRowIndex: first + i,
+              startColumnIndex: 9,
+              endColumnIndex: 10,
+            },
+            cell: {
+              userEnteredFormat: {
+                backgroundColor: (n as any[])[1] ? hex(AUTO_GRAY) : { red: 1, green: 1, blue: 1 },
+              },
+            },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        }))
+        // O열(바로가기)은 R2 만 유지 — 복사분 제거
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { requests: [copyFmt, ...jFmt] },
+        })
+        await sheets.spreadsheets.values.clear({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!O${first}:O${lastNew}`,
+          requestBody: {},
+        })
+        priceLast = lastNew
+      }
+
+      // ── 3. 마진계산 기록 위치 — 기존 입력 흔적 아래부터 ────────
+      let lastUsed = 1
+      const existingKeys = new Set<string>()
+      marginVals.forEach((r, i) => {
+        const row = (r || []) as any[]
+        const touched = [0, 1, 2, 3, 4, 7, 17].some(
+          (c) => String(row[c] ?? '').trim() !== '',
+        )
+        if (touched) lastUsed = 2 + i
+        const al = String(row[1] ?? '').trim()
+        if (al) existingKeys.add(`${al}|${row[2]}|${row[3]}`)
+      })
+      const startRow = lastUsed + 1
+
+      // 멱등성 — 별칭+봉수+판매가 가 이미 있으면 건너뜀
+      const todo = MIGRATION.records.filter(
+        (r: any) => !existingKeys.has(`${r.alias}|${r.bongsu}|${r.price}`),
+      )
+      // 단가DB 에 없는 별칭은 기록 제외
+      const missing = todo.filter((r: any) => !priceAliases.has(r.alias) &&
+        !MIGRATION.newRows.some((n) => n[0] === r.alias))
+      const writable = todo.filter((r: any) => !missing.includes(r))
+      const endRow = startRow + writable.length - 1
+      if (endRow > marginLast) {
+        throw new Error(`기록 행수 초과: ${startRow}~${endRow} (수식 범위 ${marginLast})`)
+      }
+
+      if (writable.length) {
+        const colAD: Cell[][] = writable.map((r: any) => [
+          MIGRATION_CHANNEL,
+          r.alias,
+          r.bongsu,
+          r.price,
+        ])
+        const colH: Cell[][] = writable.map((r: any) => [r.size])
+        const colK: Cell[][] = writable.map((r: any) => [r.fee])
+        const colU: Cell[][] = writable.map((r: any) => [r.flag || ''])
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'RAW',
+            data: [
+              { range: `${quote(MARGIN_TAB)}!A${startRow}:D${endRow}`, values: colAD },
+              { range: `${quote(MARGIN_TAB)}!H${startRow}:H${endRow}`, values: colH },
+              { range: `${quote(MARGIN_TAB)}!K${startRow}:K${endRow}`, values: colK },
+              { range: `${quote(MARGIN_TAB)}!U${startRow}:U${endRow}`, values: colU },
+            ],
+          },
+        })
+
+        // ── 4. 의심 행 노란 표시 (A~D) ──────────────────────────
+        const yellowRuns: [number, number][] = []
+        writable.forEach((r: any, i: number) => {
+          if (!r.flag) return
+          const last = yellowRuns[yellowRuns.length - 1]
+          if (last && last[1] === i) last[1] = i + 1
+          else yellowRuns.push([i, i + 1])
+        })
+        const reqs: any[] = yellowRuns.map(([s, e]) => ({
+          repeatCell: {
+            range: {
+              sheetId: marginId,
+              startRowIndex: startRow - 1 + s,
+              endRowIndex: startRow - 1 + e,
+              startColumnIndex: 0,
+              endColumnIndex: 4,
+            },
+            cell: { userEnteredFormat: { backgroundColor: hex(SUSPECT_YELLOW) } },
+            fields: 'userEnteredFormat.backgroundColor',
+          },
+        }))
+        reqs.push({
+          repeatCell: {
+            range: {
+              sheetId: marginId,
+              startRowIndex: 0,
+              endRowIndex: 1,
+              startColumnIndex: 20,
+              endColumnIndex: 21,
+            },
+            cell: {
+              userEnteredValue: { stringValue: '이관 확인사유' },
+              userEnteredFormat: {
+                textFormat: { bold: true },
+                backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+              },
+            },
+            fields:
+              'userEnteredValue,userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+          },
+        })
+        if (reqs.length) {
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: TARGET_SHEET_ID,
+            requestBody: { requests: reqs },
+          })
+        }
+      }
+
+      // ── 5. 이관 후 대조 (읽기만) ──────────────────────────────
+      const back = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A2:U${marginLast}`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const bv = back.data.values || []
+      const byKey = new Map<string, any[]>()
+      bv.forEach((r) => {
+        const row = (r || []) as any[]
+        const al = String(row[1] ?? '').trim()
+        if (al) byKey.set(`${al}|${row[2]}|${row[3]}`, row)
+      })
+      const num = (v: any) => (typeof v === 'number' ? v : null)
+      const diffs: any[] = []
+      let compared = 0
+      let notFound = 0
+      for (const r of MIGRATION.records as any[]) {
+        const row = byKey.get(`${r.alias}|${r.bongsu}|${r.price}`)
+        if (!row) {
+          notFound++
+          continue
+        }
+        compared++
+        const pairs: [string, number, any][] = [
+          ['원가', r.mCost, num(row[5])],
+          ['총비용', r.mTotal, num(row[13])],
+          ['마진', r.mProfit, num(row[14])],
+        ]
+        for (const [fld, mv, sv] of pairs) {
+          if (sv == null) {
+            diffs.push({ 별칭: r.alias, 봉수: r.bongsu, 항목: fld, 마스터: mv, 신시트: null, 차이: null })
+            continue
+          }
+          const d = Math.round((sv - mv) * 100) / 100
+          if (Math.abs(d) >= 1) {
+            diffs.push({
+              별칭: r.alias,
+              봉수: r.bongsu,
+              항목: fld,
+              마스터: Math.round(mv * 100) / 100,
+              신시트: Math.round(sv * 100) / 100,
+              차이: d,
+            })
+          }
+        }
+      }
+      diffs.sort((a, b) => Math.abs(b.차이 ?? 0) - Math.abs(a.차이 ?? 0))
+
+      return NextResponse.json({
+        ok: true,
+        message: '마진마스터 → 신시트 이관 완료',
+        summary: {
+          단가DB_추가행: addedRows.length,
+          단가DB_마지막행: priceLast,
+          마진계산_기록시작: `R${startRow}`,
+          마진계산_기록행수: writable.length,
+          이미존재_건너뜀: MIGRATION.records.length - todo.length,
+          단가DB_별칭없어_제외: missing.length ? missing.map((m: any) => m.alias) : 0,
+          마스터_결측제외: MIGRATION.skipped,
+          대조_비교건수: compared,
+          대조_행못찾음: notFound,
+          차이_1원이상_건수: diffs.length,
+        },
+        단가DB_추가: addedRows,
+        차이_상위30: diffs.slice(0, 30),
       })
     }
 
