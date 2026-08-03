@@ -332,6 +332,8 @@ const MARGIN_USAGE_V5 =
 const JINDO_SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
 const LINK_COL = '원가표 바로가기'
 const ETC_TAB_RETIRED = '(폐기)기타거래처 원가표'
+// init11: 단가DB J열 의미 전환 (매입가 → 총 공급가)
+const PRICE_J_HEADER = '총 공급가'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -3858,6 +3860,216 @@ export async function GET(req: Request) {
           hidden: s.properties?.hidden || false,
         })),
         _jAfterCount: jAfter.filter((r) => String(r?.[0] ?? '').trim() !== '').length,
+      })
+    }
+
+    // ── init11: 단가DB J열 '총 공급가' 전환 (멱등) ────────────────
+    if (action === 'init11') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const props = (meta.data.sheets || []).map((s) => s.properties).filter(Boolean) as any[]
+      const priceId = props.find((p) => p.title === PRICE_TAB)?.sheetId
+      if (priceId == null) throw new Error(`'${PRICE_TAB}' 탭이 없습니다.`)
+      const hasMargin = props.some((p) => p.title === MARGIN_TAB)
+
+      // ── 1. 사전 읽기 ──────────────────────────────────────────
+      const preRanges = [
+        `${quote(PRICE_TAB)}!A2:A1000`,
+        `${quote(PRICE_TAB)}!E2:E1000`,
+        `${quote(PRICE_TAB)}!H2:J1000`,
+      ]
+      if (hasMargin) preRanges.push(`${quote(MARGIN_TAB)}!A2:T10`)
+      const pre = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: preRanges,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const pv = pre.data.valueRanges || []
+      const aCol = pv[0]?.values || []
+      const eCol = pv[1]?.values || []
+      const beforeHIJ = pv[2]?.values || []
+      const beforeMargin = hasMargin ? pv[3]?.values || [] : []
+
+      let priceLast = 1
+      aCol.forEach((r, i) => {
+        if (String(r?.[0] ?? '').trim() !== '') priceLast = 2 + i
+      })
+      const nRows = priceLast - 1
+
+      // J 원문 — 비진도팜 행은 그대로 되돌려 쓴다 (기존 입력값 보존)
+      const jNow = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!J2:J${priceLast}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const jRaw = jNow.data.values || []
+
+      // 자동 컬럼 배경색 표본 — H(소포장 공급가)
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(PRICE_TAB)}!H2:J2`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+      })
+      const g0 = gd.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values || []
+      const autoBg = g0[0]?.effectiveFormat?.backgroundColor || {
+        red: 0.94,
+        green: 0.94,
+        blue: 0.94,
+      }
+
+      // ── 2. J 컬럼 재구성 ──────────────────────────────────────
+      const colJ: Cell[][] = []
+      const jindoRows: number[] = []
+      let jindo = 0
+      let nonJindoKept = 0
+      let nonJindoWithValue = 0
+      for (let i = 0; i < nRows; i++) {
+        const rid = String(eCol[i]?.[0] ?? '').trim()
+        const r = 2 + i
+        if (rid !== '') {
+          colJ.push([`=IF($H${r}="","",$H${r})`])
+          jindoRows.push(i)
+          jindo++
+        } else {
+          const raw = (jRaw[i] || [])[0]
+          colJ.push([raw ?? ''])
+          nonJindoKept++
+          if (String(raw ?? '').trim() !== '') nonJindoWithValue++
+        }
+      }
+
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [{ range: `${quote(PRICE_TAB)}!J1`, values: [[PRICE_J_HEADER]] }],
+        },
+      })
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!J2:J${priceLast}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: colJ },
+      })
+
+      // ── 3. 진도팜 행 J 만 자동 컬럼 배경색 (비진도팜 서식 미변경) ─
+      const runs: [number, number][] = []
+      for (const i of jindoRows) {
+        const last = runs[runs.length - 1]
+        if (last && last[1] === i) last[1] = i + 1
+        else runs.push([i, i + 1])
+      }
+      const fmtReqs = runs.map(([s, e]) => ({
+        repeatCell: {
+          range: {
+            sheetId: priceId,
+            startRowIndex: 1 + s,
+            endRowIndex: 1 + e,
+            startColumnIndex: 9,
+            endColumnIndex: 10,
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: autoBg,
+              numberFormat: { type: 'NUMBER', pattern: '#,##0' },
+            },
+          },
+          fields: 'userEnteredFormat.backgroundColor,userEnteredFormat.numberFormat',
+        },
+      }))
+      if (fmtReqs.length) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { requests: fmtReqs },
+        })
+      }
+
+      // ── 4. 검증 ───────────────────────────────────────────────
+      const postRanges = [`${quote(PRICE_TAB)}!H2:J1000`, `${quote(PRICE_TAB)}!J1`]
+      if (hasMargin) postRanges.push(`${quote(MARGIN_TAB)}!A2:T10`)
+      const post = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: postRanges,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const qv = post.data.valueRanges || []
+      const afterHIJ = qv[0]?.values || []
+      const jHeader = qv[1]?.values?.[0]?.[0] ?? ''
+      const afterMargin = hasMargin ? qv[2]?.values || [] : []
+      const r2 = (v: any) => (typeof v === 'number' ? Math.round(v * 100) / 100 : (v ?? ''))
+
+      // 검증1 — 진도팜 행 3개 J = H
+      const jindoCheck = jindoRows.slice(0, 3).map((i) => ({
+        행: `R${2 + i}`,
+        별칭: String(aCol[i]?.[0] ?? ''),
+        H: r2(afterHIJ[i]?.[0]),
+        J: r2(afterHIJ[i]?.[2]),
+        일치: r2(afterHIJ[i]?.[0]) === r2(afterHIJ[i]?.[2]),
+      }))
+
+      // 검증2 — 비진도팜 행 배경색 + 값 보존
+      const nonJindoIdx: number[] = []
+      for (let i = 0; i < nRows && nonJindoIdx.length < 3; i++) {
+        if (String(eCol[i]?.[0] ?? '').trim() === '') nonJindoIdx.push(i)
+      }
+      let nonJindoBgCheck: any = null
+      if (nonJindoIdx.length) {
+        const i = nonJindoIdx[0]
+        const bgRes = await sheets.spreadsheets.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          ranges: [`${quote(PRICE_TAB)}!J${2 + i}`, `${quote(MARGIN_TAB)}!D2`],
+          includeGridData: true,
+          fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+        })
+        const pick = (n: number) =>
+          bgRes.data.sheets?.[n]?.data?.[0]?.rowData?.[0]?.values?.[0]?.effectiveFormat
+            ?.backgroundColor
+        const a = pick(0)
+        const b = hasMargin ? pick(1) : null
+        nonJindoBgCheck = {
+          행: `R${2 + i}`,
+          별칭: String(aCol[i]?.[0] ?? ''),
+          J값: r2(afterHIJ[i]?.[2]),
+          J값_이전: r2(beforeHIJ[i]?.[2]),
+          값_보존: r2(beforeHIJ[i]?.[2]) === r2(afterHIJ[i]?.[2]),
+          J배경: a,
+          마진계산_입력색: b,
+          입력색_일치: JSON.stringify(a) === JSON.stringify(b),
+          자동색과_다름: JSON.stringify(a) !== JSON.stringify(autoBg),
+        }
+      }
+
+      // 검증3 — 마진계산 원가(F, index 5) 변동 없음
+      const marginCheck = beforeMargin.slice(0, 5).map((b, i) => {
+        const a = afterMargin[i] || []
+        return {
+          행: `R${2 + i}`,
+          별칭: a[1] ?? b[1] ?? '',
+          'F 원가': [r2(b[5]), r2(a[5])],
+          'N 총비용': [r2(b[13]), r2(a[13])],
+          동일: r2(b[5]) === r2(a[5]) && r2(b[13]) === r2(a[13]),
+        }
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: `단가DB J열 '${PRICE_J_HEADER}' 전환 완료`,
+        summary: {
+          J1_헤더: jHeader,
+          단가DB_마지막행: priceLast,
+          진도팜_J수식_적용: jindo,
+          비진도팜_원형유지: nonJindoKept,
+          비진도팜_값있는행: nonJindoWithValue,
+          이중계산_없음:
+            '마진계산 F 는 H(소포장 공급가)가 숫자면 H 사용, H 빈칸일 때만 J 폴백 → 진도팜 행에서 J=H 여도 합산 아님',
+        },
+        검증1_진도팜_J등H: jindoCheck,
+        검증2_비진도팜: nonJindoBgCheck,
+        검증3_마진계산_원가: marginCheck,
       })
     }
 
