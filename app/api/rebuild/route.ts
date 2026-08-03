@@ -2525,6 +2525,45 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── inspect: 읽기 전용 현황 조사 (쓰기 없음) ──────────────────
+    if (action === 'inspect') {
+      const sheets = getSheets()
+      const res = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [
+          `${quote(MARGIN_TAB)}!A1:T4`,
+          `${quote(MARGIN_TAB)}!A1:T4`,
+          `${quote('채널DB')}!A1:H20`,
+          `${quote('비용DB')}!A1:D10`,
+          `${quote('원가표미러')}!D1:F4`,
+        ],
+        valueRenderOption: 'FORMULA',
+      })
+      const v = res.data.valueRanges || []
+      const shown = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A1:T4`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title,gridProperties(columnCount,rowCount)))',
+      })
+      return NextResponse.json({
+        ok: true,
+        마진계산_수식: v[0]?.values || [],
+        마진계산_값: shown.data.values || [],
+        채널DB: v[2]?.values || [],
+        비용DB: v[3]?.values || [],
+        원가표미러_배송: v[4]?.values || [],
+        탭: (meta.data.sheets || []).map((s) => ({
+          title: s.properties?.title,
+          cols: s.properties?.gridProperties?.columnCount,
+          rows: s.properties?.gridProperties?.rowCount,
+        })),
+      })
+    }
+
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
   } catch (e: any) {
     console.error('[rebuild] error:', e?.message || e)
