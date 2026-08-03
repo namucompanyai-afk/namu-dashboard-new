@@ -272,6 +272,36 @@ const MARGIN_USAGE_V2 = '채널·별칭·봉수·판매가·규격 입력 → �
 const MARGIN_HEADER_V3 = MARGIN_HEADER_V2.map((h, i) => (i === 10 ? '수수료율%(부가포함)' : h))
 const MARGIN_USAGE_V3 = '채널·별칭·봉수·판매가·수수료율(부가포함)·규격 입력 → 나머지 자동'
 const CHANNEL_NOTE = '참고표 — 마진계산에는 행별 직접 입력'
+// init8: 배송비 수수료 구조 (E 고객배송비 / N 배송비수수료 삽입 → A~T 20열)
+const SHIP_IN_COL = '고객배송비'
+const SHIP_FEE_COL = '배송비수수료'
+const SHIP_RATE_COL = '배송비수수료율(%)'
+const SMART_STORE = '스마트스토어'
+const SMART_STORE_SHIP_RATE = 3.05
+const MARGIN_HEADER_V4 = [
+  '채널',
+  '별칭',
+  '봉수',
+  '판매가',
+  SHIP_IN_COL,
+  '목표마진율%',
+  '원가',
+  '봉투',
+  '규격',
+  '박스',
+  '택배',
+  '수수료율%(부가포함)',
+  '수수료',
+  SHIP_FEE_COL,
+  '총비용',
+  '마진',
+  '마진율',
+  'BEP ROAS(광고센터 기준)',
+  '권장판매가',
+  '상태',
+]
+const MARGIN_USAGE_V4 =
+  '채널·별칭·봉수·판매가·고객배송비·수수료율(부가포함)·규격 입력 → 나머지 자동'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -2522,6 +2552,504 @@ export async function GET(req: Request) {
           테스트행_R상태: testStatus,
           테스트행_기대: ST_NO_FEE,
         },
+      })
+    }
+
+    // ── init8: 배송비 수수료 구조 추가 (E 고객배송비 / N 배송비수수료) ──
+    if (action === 'init8') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const idByTitle = new Map<string, number>()
+      for (const s of meta.data.sheets || []) {
+        const p = s.properties
+        if (p?.title != null && p.sheetId != null) idByTitle.set(p.title, p.sheetId)
+      }
+      for (const t of [MARGIN_TAB, '채널DB', PRICE_TAB]) {
+        if (!idByTitle.has(t)) throw new Error(`'${t}' 탭이 없습니다.`)
+      }
+      const marginId = idByTitle.get(MARGIN_TAB) as number
+      const chDbId = idByTitle.get('채널DB') as number
+      const marginLast = 1 + MARGIN_ROWS // R301
+
+      // ── 1. 사전 스냅샷 (읽기) ─────────────────────────────────
+      const pre = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [
+          `${quote(MARGIN_TAB)}!A1:Z1`,
+          `${quote(MARGIN_TAB)}!A2:T4`,
+          `${quote('채널DB')}!A1:Z1`,
+          `${quote('채널DB')}!A2:C200`,
+          `${quote(PRICE_TAB)}!A2:A1000`,
+        ],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const pv = pre.data.valueRanges || []
+      const hdr = (pv[0]?.values?.[0] || []).map((h) => String(h ?? '').trim())
+      const beforeRows = pv[1]?.values || []
+      const chHdr = (pv[2]?.values?.[0] || []).map((h) => String(h ?? '').trim())
+      const chRows = pv[3]?.values || []
+      const priceCol = pv[4]?.values || []
+
+      const alreadyInserted = hdr.includes(SHIP_IN_COL)
+      // 채널DB 마지막 데이터 행 / 단가DB 마지막 행
+      let chLast = 1
+      chRows.forEach((r, i) => {
+        if (String(r?.[0] ?? '').trim() !== '') chLast = 2 + i
+      })
+      let priceLast = 1
+      priceCol.forEach((r, i) => {
+        if (String(r?.[0] ?? '').trim() !== '') priceLast = 2 + i
+      })
+      // 스마트스토어 행 위치 + VAT포함율 확인
+      const ssIdx = chRows.findIndex((r) => String(r?.[0] ?? '').trim() === SMART_STORE)
+      const ssRow = ssIdx >= 0 ? ssIdx + 2 : 0
+      const ssVat = ssIdx >= 0 ? chRows[ssIdx]?.[2] : null
+
+      // ── 2. 입력/자동 컬럼 배경색 복사용 읽기 ──────────────────
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(MARGIN_TAB)}!A2:T2`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+      })
+      const cells = gd.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values || []
+      const bgOf = (i: number) => cells[i]?.effectiveFormat?.backgroundColor
+      const inputBg = bgOf(3) || { red: 1, green: 1, blue: 1 } // D 판매가
+      const autoBg = (alreadyInserted ? bgOf(6) : bgOf(5)) || { red: 0.94, green: 0.94, blue: 0.94 }
+
+      // ── 3. 컬럼 삽입 (멱등 — 헤더에 '고객배송비' 없을 때만) ────
+      if (!alreadyInserted) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            requests: [
+              {
+                insertDimension: {
+                  range: { sheetId: marginId, dimension: 'COLUMNS', startIndex: 4, endIndex: 5 },
+                  inheritFromBefore: true,
+                },
+              },
+              {
+                insertDimension: {
+                  range: { sheetId: marginId, dimension: 'COLUMNS', startIndex: 13, endIndex: 14 },
+                  inheritFromBefore: true,
+                },
+              },
+            ],
+          },
+        })
+      }
+
+      // ── 4. 채널DB 배송비수수료율 컬럼 (기존 값·행 수정 없음) ───
+      let shipRateIdx = chHdr.findIndex((h) => h === SHIP_RATE_COL)
+      if (shipRateIdx < 0) shipRateIdx = 7 // H열 (F=안내문구 / G=수기메모 점유)
+      const shipRateLetter = String.fromCharCode(65 + shipRateIdx)
+      const chWrites: { range: string; values: Cell[][] }[] = [
+        { range: `${quote('채널DB')}!${shipRateLetter}1`, values: [[SHIP_RATE_COL]] },
+      ]
+      if (ssRow > 0) {
+        chWrites.push({
+          range: `${quote('채널DB')}!${shipRateLetter}${ssRow}`,
+          values: [[SMART_STORE_SHIP_RATE]],
+        })
+      }
+
+      // ── 5. 마진계산 수식 (신 배치 A~T) ────────────────────────
+      const DB = `'${PRICE_TAB}'!$A$2:$N$${priceLast}`
+      const CH3 = `'채널DB'!$A$2:$C$${chLast}`
+      const CHH = `'채널DB'!$A:$${shipRateLetter}`
+      const COSTDB = `'비용DB'!$A$2:$B$50`
+      const SHIP = `'원가표미러'!$D$2:$F$4`
+      const vd = (r: number, c: number) => `VLOOKUP($B${r},${DB},${c},FALSE)`
+      const isTax = (r: number) => `IFERROR(${vd(r, 11)},"")="과세"`
+      const bagRate = `IFERROR(VLOOKUP("${COST_DB_BAG}",${COSTDB},2,FALSE),0)`
+      const warnRate = `IFERROR(VLOOKUP("${COST_DB_WARN}",${COSTDB},2,FALSE),0)`
+
+      const colGH: Cell[][] = [] // G 원가 · H 봉투
+      const colJK: Cell[][] = [] // J 박스 · K 택배
+      const colMT: Cell[][] = [] // M 수수료 ~ T 상태
+      for (let r = 2; r <= marginLast; r++) {
+        colGH.push([
+          `=IF(OR($B${r}="",$C${r}=""),"",IFERROR(` +
+            `IF(ISNUMBER(${vd(r, 8)}),${vd(r, 8)}*$C${r},IF(ISNUMBER(${vd(r, 10)}),${vd(r, 10)}*$C${r},""))` +
+            `,""))`,
+          `=IF(OR($B${r}="",$C${r}=""),"",IF(IFERROR(${vd(r, 14)},"N")="Y",${bagRate}*$C${r},0))`,
+        ])
+        colJK.push([
+          `=IF($I${r}="","",IF($I${r}="없음",0,IFERROR(VLOOKUP($I${r},${SHIP},2,FALSE),"")))`,
+          `=IF($I${r}="","",IF($I${r}="없음",0,IFERROR(VLOOKUP($I${r},${SHIP},3,FALSE),"")))`,
+        ])
+        // M 수수료 (L 수수료율 참조)
+        const m = `=IF(OR($A${r}="",$D${r}="",$L${r}=""),"",IF(ISNUMBER($L${r}),$D${r}*$L${r}/100,"확인필요"))`
+        // N 배송비수수료 — 채널DB 배송비수수료율 빈칸이면 0
+        const n = `=IF(OR($A${r}="",$E${r}="",$E${r}=0),0,$E${r}*IFERROR(VLOOKUP($A${r},${CHH},${shipRateIdx + 1},0),0)/100)`
+        // O 총비용 — 배송비수수료 N 합산
+        const o =
+          `=IF(OR($B${r}="",$C${r}="",$D${r}="",$I${r}="",$L${r}=""),"",` +
+          `IF(AND(ISNUMBER($G${r}),ISNUMBER($H${r}),ISNUMBER($J${r}),ISNUMBER($K${r}),ISNUMBER($M${r}),ISNUMBER($N${r})),` +
+          `$G${r}+$H${r}+$J${r}+$K${r}+$M${r}+$N${r},"확인필요"))`
+        // P 마진 — 매출에 고객배송비 포함 (빈칸이면 0)
+        const p =
+          `=IF(NOT(ISNUMBER($O${r})),"",IF(${isTax(r)},($D${r}+N($E${r}))*10/11,$D${r}+N($E${r}))-$O${r})`
+        // Q 마진율 — 분모는 판매가 D 유지
+        const q = `=IF(OR(NOT(ISNUMBER($P${r})),$D${r}=""),"",$P${r}/$D${r})`
+        // R BEP ROAS — 광고센터 표기 기준 보정 ×1.1
+        const rr = `=IF(OR(NOT(ISNUMBER($P${r})),$P${r}=0),"",$D${r}/$P${r}*1.1)`
+        // S 권장판매가 — 기준 D 판매가 유지
+        const s =
+          `=IF(OR($F${r}="",NOT(ISNUMBER($G${r})),NOT(ISNUMBER($L${r}))),"",IFERROR(` +
+          `($G${r}+$H${r}+$J${r}+$K${r})/(IF(${isTax(r)},10/11,1)-$L${r}/100-$F${r}/100),""))`
+        // T 상태 — 스마트스토어는 L 자동참조이므로 미입력 경고 제외
+        const t =
+          `=IF($B${r}="","",IF(AND($D${r}<>"",$L${r}="",$A${r}<>"${SMART_STORE}"),"${ST_NO_FEE}",` +
+          `IF($G${r}="","${ST_NO_COST}",IF(AND(ISNUMBER($Q${r}),$Q${r}<${warnRate}/100),"${ST_LOW}",""))))`
+        colMT.push([m, n, o, p, q, rr, s, t])
+      }
+
+      // ── 6. L 수수료율 — 빈칸 행에만 스마트스토어 자동참조 수식 ──
+      const lNow = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!L2:L${marginLast}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const lRows = lNow.data.values || []
+      const lAuto = (r: number) =>
+        `=IF($A${r}<>"${SMART_STORE}","",IFERROR(VLOOKUP($A${r},${CH3},3,FALSE),""))`
+      const colL: Cell[][] = []
+      let lKept = 0
+      let lFilled = 0
+      for (let i = 0; i < MARGIN_ROWS; i++) {
+        const raw = (lRows[i] || [])[0]
+        const t = String(raw ?? '').trim()
+        if (t !== '' && !t.startsWith('=')) {
+          colL.push([raw as Cell]) // 수기값 그대로 보존
+          lKept++
+        } else {
+          colL.push([lAuto(2 + i)])
+          lFilled++
+        }
+      }
+
+      // ── 7. 기록 ───────────────────────────────────────────────
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(MARGIN_TAB)}!A1:T1`, values: [MARGIN_HEADER_V4] },
+            { range: `${quote(MARGIN_TAB)}!V1`, values: [[MARGIN_USAGE_V4]] },
+            ...chWrites,
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(MARGIN_TAB)}!G2:H${marginLast}`, values: colGH },
+            { range: `${quote(MARGIN_TAB)}!J2:K${marginLast}`, values: colJK },
+            { range: `${quote(MARGIN_TAB)}!L2:L${marginLast}`, values: colL },
+            { range: `${quote(MARGIN_TAB)}!M2:T${marginLast}`, values: colMT },
+          ],
+        },
+      })
+
+      // ── 8. 서식 · 검증 · 조건부서식 · 필터 ────────────────────
+      const grid = (sheetId: number, r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      const numFmt = (pattern: string) => ({
+        userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern } },
+      })
+      const listRule = (vals: string[]) => ({
+        condition: { type: 'ONE_OF_LIST', values: vals.map((v) => ({ userEnteredValue: v })) },
+        showCustomUi: true,
+        strict: false,
+      })
+      const rangeRule = (ref: string) => ({
+        condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: ref }] },
+        showCustomUi: true,
+        strict: false,
+      })
+      const dataRange = grid(marginId, 1, marginLast, 0, 20)
+      const NF = 'userEnteredFormat.numberFormat'
+
+      // 기존 조건부서식 / 기본필터 정리 (없으면 무시)
+      for (const reqs of [
+        [
+          { deleteConditionalFormatRule: { sheetId: marginId, index: 0 } },
+          { deleteConditionalFormatRule: { sheetId: marginId, index: 0 } },
+        ],
+        [{ clearBasicFilter: { sheetId: marginId } }],
+      ]) {
+        try {
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: TARGET_SHEET_ID,
+            requestBody: { requests: reqs },
+          })
+        } catch {
+          /* 기존 규칙 없음 */
+        }
+      }
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            // 헤더
+            {
+              repeatCell: {
+                range: grid(marginId, 0, 1, 0, 20),
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: { bold: true },
+                    backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+                  },
+                },
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            // E 고객배송비 — 입력 컬럼 색 복사 + #,##0
+            {
+              repeatCell: {
+                range: grid(marginId, 1, marginLast, 4, 5),
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: inputBg,
+                    numberFormat: { type: 'NUMBER', pattern: '#,##0' },
+                  },
+                },
+                fields: 'userEnteredFormat.backgroundColor,userEnteredFormat.numberFormat',
+              },
+            },
+            // N 배송비수수료 — 자동 컬럼 색 + #,##0
+            {
+              repeatCell: {
+                range: grid(marginId, 1, marginLast, 13, 14),
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: autoBg,
+                    numberFormat: { type: 'NUMBER', pattern: '#,##0' },
+                  },
+                },
+                fields: 'userEnteredFormat.backgroundColor,userEnteredFormat.numberFormat',
+              },
+            },
+            // 숫자 서식 재확정 (밀린 열 기준)
+            { repeatCell: { range: grid(marginId, 1, marginLast, 3, 4), cell: numFmt('#,##0'), fields: NF } }, // D 판매가
+            { repeatCell: { range: grid(marginId, 1, marginLast, 5, 6), cell: numFmt('0.0"%"'), fields: NF } }, // F 목표마진율
+            { repeatCell: { range: grid(marginId, 1, marginLast, 6, 8), cell: numFmt('#,##0'), fields: NF } }, // G 원가 · H 봉투
+            { repeatCell: { range: grid(marginId, 1, marginLast, 9, 11), cell: numFmt('#,##0'), fields: NF } }, // J 박스 · K 택배
+            { repeatCell: { range: grid(marginId, 1, marginLast, 11, 12), cell: numFmt('0.00"%"'), fields: NF } }, // L 수수료율
+            { repeatCell: { range: grid(marginId, 1, marginLast, 12, 13), cell: numFmt('#,##0'), fields: NF } }, // M 수수료
+            { repeatCell: { range: grid(marginId, 1, marginLast, 14, 16), cell: numFmt('#,##0'), fields: NF } }, // O 총비용 · P 마진
+            { repeatCell: { range: grid(marginId, 1, marginLast, 16, 17), cell: numFmt('0.0%'), fields: NF } }, // Q 마진율
+            { repeatCell: { range: grid(marginId, 1, marginLast, 17, 18), cell: numFmt('0%'), fields: NF } }, // R BEP ROAS
+            { repeatCell: { range: grid(marginId, 1, marginLast, 18, 19), cell: numFmt('#,##0'), fields: NF } }, // S 권장판매가
+            // 드롭다운 재적용 — A 채널 / B 별칭 / I 규격, E·N 은 검증 해제
+            { setDataValidation: { range: grid(marginId, 1, marginLast, 4, 5) } },
+            { setDataValidation: { range: grid(marginId, 1, marginLast, 13, 14) } },
+            {
+              setDataValidation: {
+                range: grid(marginId, 1, marginLast, 0, 1),
+                rule: rangeRule(`='채널DB'!$A$2:$A$${chLast}`),
+              },
+            },
+            {
+              setDataValidation: {
+                range: grid(marginId, 1, marginLast, 1, 2),
+                rule: rangeRule(`='${PRICE_TAB}'!$A$2:$A$${priceLast}`),
+              },
+            },
+            {
+              setDataValidation: {
+                range: grid(marginId, 1, marginLast, 8, 9),
+                rule: listRule(SIZE_OPTIONS),
+              },
+            },
+            // 조건부서식 — 상태는 T열
+            {
+              addConditionalFormatRule: {
+                index: 0,
+                rule: {
+                  ranges: [dataRange],
+                  booleanRule: {
+                    condition: {
+                      type: 'CUSTOM_FORMULA',
+                      values: [{ userEnteredValue: `=$T2="${ST_LOW}"` }],
+                    },
+                    format: { backgroundColor: { red: 0.98, green: 0.85, blue: 0.85 } },
+                  },
+                },
+              },
+            },
+            {
+              addConditionalFormatRule: {
+                index: 1,
+                rule: {
+                  ranges: [dataRange],
+                  booleanRule: {
+                    condition: {
+                      type: 'CUSTOM_FORMULA',
+                      values: [{ userEnteredValue: `=$T2="${ST_NO_FEE}"` }],
+                    },
+                    format: { backgroundColor: { red: 1, green: 0.95, blue: 0.8 } },
+                  },
+                },
+              },
+            },
+            // 채널DB 새 헤더 볼드 + % 서식
+            {
+              repeatCell: {
+                range: grid(chDbId, 0, 1, shipRateIdx, shipRateIdx + 1),
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: { bold: true },
+                    backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
+                  },
+                },
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            {
+              repeatCell: {
+                range: grid(chDbId, 1, chLast, shipRateIdx, shipRateIdx + 1),
+                cell: numFmt('0.00"%"'),
+                fields: NF,
+              },
+            },
+            { setBasicFilter: { filter: { range: grid(marginId, 0, marginLast, 0, 20) } } },
+          ],
+        },
+      })
+
+      // ── 9. 테스트 행 (스마트스토어 + 고객배송비 3000) ──────────
+      const inNow = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A2:I${marginLast}`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const inRows = inNow.data.values || []
+      let testRow = 0
+      for (let i = 0; i < MARGIN_ROWS; i++) {
+        const r = inRows[i] || []
+        if ([0, 1, 2, 3, 4, 5, 8].every((c) => String(r[c] ?? '').trim() === '')) {
+          testRow = 2 + i
+          break
+        }
+      }
+      let testOut: any = { note: '빈 행 없음 — 테스트 생략' }
+      if (testRow > 0) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'RAW',
+            data: [
+              {
+                range: `${quote(MARGIN_TAB)}!A${testRow}:E${testRow}`,
+                values: [[SMART_STORE, MARGIN_SAMPLE.alias, 1, 23900, 3000]],
+              },
+              { range: `${quote(MARGIN_TAB)}!I${testRow}`, values: [[MARGIN_SAMPLE.size]] },
+            ],
+          },
+        })
+        const tr = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(MARGIN_TAB)}!A${testRow}:T${testRow}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        const t = tr.data.values?.[0] || []
+        const num = (v: any) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)
+        testOut = {
+          행: `R${testRow}`,
+          'L 수수료율_자동': num(t[11]),
+          'L 기대': 8.94,
+          'E 고객배송비': t[4],
+          'N 배송비수수료': num(t[13]),
+          'N 기대': 91.5,
+          'O 총비용': num(t[14]),
+          'P 마진': num(t[15]),
+          'Q 마진율%': typeof t[16] === 'number' ? Math.round(t[16] * 1000) / 10 : t[16],
+          'R BEP ROAS%': typeof t[17] === 'number' ? Math.round(t[17] * 1000) / 10 : t[17],
+          'R×Q 불변식(=1.1 이어야)':
+            typeof t[16] === 'number' && typeof t[17] === 'number'
+              ? Math.round(t[16] * t[17] * 1000) / 1000
+              : null,
+          '마진율30%_환산_BEP%': 110,
+          'T 상태': t[19] ?? '',
+        }
+        await sheets.spreadsheets.values.batchClear({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            ranges: [
+              `${quote(MARGIN_TAB)}!A${testRow}:F${testRow}`,
+              `${quote(MARGIN_TAB)}!I${testRow}`,
+            ],
+          },
+        })
+      }
+
+      // ── 10. 기존 행 전후 비교 (R2~R4) ─────────────────────────
+      const post = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A2:T4`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const afterRows = post.data.values || []
+      const r2 = (v: any) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)
+      // 삽입 전 배치: M(12) 총비용 / N(13) 마진 / O(14) 마진율
+      // 삽입 후 배치: O(14) 총비용 / P(15) 마진 / Q(16) 마진율
+      const beforeIdx = alreadyInserted ? [14, 15, 16] : [12, 13, 14]
+      const compare = [0, 1, 2].map((i) => {
+        const b = beforeRows[i] || []
+        const a = afterRows[i] || []
+        return {
+          행: `R${2 + i}`,
+          채널: a[0] ?? '',
+          'E 고객배송비': a[4] ?? '',
+          'N 배송비수수료': r2(a[13]),
+          총비용_전: r2(b[beforeIdx[0]]),
+          총비용_후: r2(a[14]),
+          마진_전: r2(b[beforeIdx[1]]),
+          마진_후: r2(a[15]),
+          마진율_전: r2(b[beforeIdx[2]]),
+          마진율_후: r2(a[16]),
+          'T 상태': a[19] ?? '',
+          동일: r2(b[beforeIdx[1]]) === r2(a[15]) && r2(b[beforeIdx[0]]) === r2(a[14]),
+        }
+      })
+
+      const finalHdr = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A1:V1`,
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '배송비 수수료 구조 추가 완료 (E 고객배송비 / N 배송비수수료)',
+        summary: {
+          컬럼삽입: alreadyInserted ? '이미 적용됨(중복 삽입 안 함)' : 'E·N 2개 삽입',
+          채널DB_배송비수수료율_컬럼: `${shipRateLetter}열`,
+          스마트스토어_행: ssRow ? `R${ssRow}` : '못 찾음',
+          스마트스토어_VAT포함율: ssVat,
+          VAT포함율_기대: 8.94,
+          채널DB_마지막행: chLast,
+          단가DB_마지막행: priceLast,
+          L_수기값_보존: lKept,
+          L_자동수식_적용: lFilled,
+          수식_적용행: MARGIN_ROWS,
+        },
+        헤더: finalHdr.data.values?.[0] || [],
+        검증1_스마트스토어_테스트행: testOut,
+        검증2_기존행_전후비교: compare,
       })
     }
 
