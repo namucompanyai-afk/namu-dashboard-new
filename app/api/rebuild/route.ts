@@ -328,12 +328,9 @@ const MARGIN_HEADER_V5 = [
 ]
 const MARGIN_USAGE_V5 =
   '채널·별칭·봉수·판매가·고객배송비·규격·수수료율(부가포함)·목표마진율 입력 → 나머지 자동'
-// init10: 단가DB → 진도팜 원가표 바로가기 (원가표는 read-only, 읽기만)
+// init10: 단가DB O2 → 진도팜 원가표 단일 바로가기 (고정 URL, 원가표 미조회)
 const JINDO_SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
-const JINDO_COST_TAB = '진도팜 원가표'
-const JINDO_HEADER_ROW = 11 // R11 헤더 → 데이터 R12~
 const LINK_COL = '원가표 바로가기'
-const LINK_TEXT = '열기'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -3535,126 +3532,39 @@ export async function GET(req: Request) {
       })
     }
 
-    // ── init10: 단가DB 원가표 바로가기 컬럼 (멱등) ────────────────
+    // ── init10: 단가DB 원가표 바로가기 (O2 단일 링크, 멱등) ───────
     if (action === 'init10') {
       const sheets = getSheets()
       const meta = await sheets.spreadsheets.get({
         spreadsheetId: TARGET_SHEET_ID,
         fields: 'sheets(properties(sheetId,title))',
       })
-      const idByTitle = new Map<string, number>()
-      for (const s of meta.data.sheets || []) {
-        const p = s.properties
-        if (p?.title != null && p.sheetId != null) idByTitle.set(p.title, p.sheetId)
-      }
-      if (!idByTitle.has(PRICE_TAB)) throw new Error(`'${PRICE_TAB}' 탭이 없습니다.`)
-      const priceId = idByTitle.get(PRICE_TAB) as number
+      const priceId = (meta.data.sheets || []).find(
+        (s) => s.properties?.title === PRICE_TAB,
+      )?.properties?.sheetId
+      if (priceId == null) throw new Error(`'${PRICE_TAB}' 탭이 없습니다.`)
 
-      // ── 1. 단가DB 현황 (읽기) ─────────────────────────────────
+      // ── 1. 사전 스냅샷 (H·I·J 파생값 비교용) ──────────────────
       const pre = await sheets.spreadsheets.values.batchGet({
         spreadsheetId: TARGET_SHEET_ID,
-        ranges: [
-          `${quote(PRICE_TAB)}!A1:Z1`,
-          `${quote(PRICE_TAB)}!A2:E1000`,
-          `${quote(PRICE_TAB)}!H2:J4`,
-          `${quote(MAP_TAB)}!I1:I10`,
-        ],
+        ranges: [`${quote(PRICE_TAB)}!A2:A1000`, `${quote(PRICE_TAB)}!H2:J4`],
         valueRenderOption: 'UNFORMATTED_VALUE',
       })
       const pv = pre.data.valueRanges || []
-      const priceHdr = (pv[0]?.values?.[0] || []).map((h) => String(h ?? '').trim())
-      const priceRows = pv[1]?.values || []
-      const beforeHIJ = pv[2]?.values || []
-      const mapIBefore = pv[3]?.values || []
-
+      const aCol = pv[0]?.values || []
+      const beforeHIJ = pv[1]?.values || []
       let priceLast = 1
-      priceRows.forEach((r, i) => {
+      aCol.forEach((r, i) => {
         if (String(r?.[0] ?? '').trim() !== '') priceLast = 2 + i
       })
-      // 바로가기 컬럼 위치 — 이미 있으면 재사용, 없으면 첫 빈 헤더 열
-      let linkIdx = priceHdr.findIndex((h) => h === LINK_COL)
-      const alreadyHasCol = linkIdx >= 0
-      if (linkIdx < 0) {
-        linkIdx = 0
-        while (linkIdx < 26 && (priceHdr[linkIdx] ?? '') !== '') linkIdx++
-      }
-      const linkLetter = String.fromCharCode(65 + linkIdx)
+      const LINK_CELL_COL = 'O'
+      const LINK_COL_IDX = 14
 
-      // ── 2. 진도팜 원가표 — 읽기 전용 (메타 gid + 원료ID 행) ────
-      const jMeta = await sheets.spreadsheets.get({
-        spreadsheetId: JINDO_SHEET_ID,
-        fields: 'sheets(properties(sheetId,title))',
-      })
-      const jTab = (jMeta.data.sheets || []).find(
-        (s) => s.properties?.title === JINDO_COST_TAB,
-      )?.properties
-      if (jTab?.sheetId == null) {
-        throw new Error(`진도팜 원가표에 '${JINDO_COST_TAB}' 탭이 없습니다.`)
-      }
-      const gid = jTab.sheetId
-      const jRows = await sheets.spreadsheets.values.get({
-        spreadsheetId: JINDO_SHEET_ID,
-        range: `${quote(JINDO_COST_TAB)}!A${JINDO_HEADER_ROW + 1}:A500`,
-        valueRenderOption: 'UNFORMATTED_VALUE',
-      })
-      const rowByRid = new Map<string, number>()
-      ;(jRows.data.values || []).forEach((r, i) => {
-        const rid = String(r?.[0] ?? '').trim()
-        if (rid && !rowByRid.has(rid)) rowByRid.set(rid, JINDO_HEADER_ROW + 1 + i)
-      })
-
-      // ── 3. 링크 컬럼 생성 (원료ID 있는 행만) ──────────────────
-      const linkCol: Cell[][] = []
-      let linked = 0
-      let blank = 0
-      const unmatched: string[] = []
-      let sampleLink: any = null
-      for (let i = 0; i < priceLast - 1; i++) {
-        const rid = String(priceRows[i]?.[4] ?? '').trim()
-        if (!rid) {
-          linkCol.push([''])
-          blank++
-          continue
-        }
-        const targetRow = rowByRid.get(rid)
-        if (!targetRow) {
-          linkCol.push([''])
-          if (unmatched.length < 10) unmatched.push(rid)
-          continue
-        }
-        const url = `https://docs.google.com/spreadsheets/d/${JINDO_SHEET_ID}/edit#gid=${gid}&range=A${targetRow}`
-        linkCol.push([`=HYPERLINK("${url}","${LINK_TEXT}")`])
-        linked++
-        if (!sampleLink) {
-          sampleLink = {
-            단가DB행: `R${2 + i}`,
-            별칭: priceRows[i]?.[0] ?? '',
-            원료ID: rid,
-            원가표_대상행: `R${targetRow}`,
-            url,
-          }
-        }
-      }
-
-      // ── 4. 기록 (단가DB O열만 — 기존 A~N 손대지 않음) ─────────
-      await sheets.spreadsheets.values.batchUpdate({
+      // ── 2. O열 전체 초기화 (헤더 + 행별 HYPERLINK 제거) ────────
+      await sheets.spreadsheets.values.clear({
         spreadsheetId: TARGET_SHEET_ID,
-        requestBody: {
-          valueInputOption: 'RAW',
-          data: [{ range: `${quote(PRICE_TAB)}!${linkLetter}1`, values: [[LINK_COL]] }],
-        },
-      })
-      await sheets.spreadsheets.values.batchUpdate({
-        spreadsheetId: TARGET_SHEET_ID,
-        requestBody: {
-          valueInputOption: 'USER_ENTERED',
-          data: [
-            {
-              range: `${quote(PRICE_TAB)}!${linkLetter}2:${linkLetter}${priceLast}`,
-              values: linkCol,
-            },
-          ],
-        },
+        range: `${quote(PRICE_TAB)}!${LINK_CELL_COL}1:${LINK_CELL_COL}${Math.max(priceLast, 1000)}`,
+        requestBody: {},
       })
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: TARGET_SHEET_ID,
@@ -3665,83 +3575,68 @@ export async function GET(req: Request) {
                 range: {
                   sheetId: priceId,
                   startRowIndex: 0,
-                  endRowIndex: 1,
-                  startColumnIndex: linkIdx,
-                  endColumnIndex: linkIdx + 1,
+                  endRowIndex: Math.max(priceLast, 1000),
+                  startColumnIndex: LINK_COL_IDX,
+                  endColumnIndex: LINK_COL_IDX + 1,
                 },
-                cell: {
-                  userEnteredFormat: {
-                    textFormat: { bold: true },
-                    backgroundColor: { red: 0.95, green: 0.95, blue: 0.95 },
-                  },
-                },
-                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
-              },
-            },
-            {
-              repeatCell: {
-                range: {
-                  sheetId: priceId,
-                  startRowIndex: 1,
-                  endRowIndex: priceLast,
-                  startColumnIndex: linkIdx,
-                  endColumnIndex: linkIdx + 1,
-                },
-                cell: { userEnteredFormat: { horizontalAlignment: 'CENTER' } },
-                fields: 'userEnteredFormat.horizontalAlignment',
+                cell: {},
+                fields: 'userEnteredFormat',
               },
             },
           ],
         },
       })
 
-      // ── 5. 검증 (읽기) ────────────────────────────────────────
+      // ── 3. O2 단일 링크 (고정 URL — 원가표 조회 없음) ──────────
+      const url = `https://docs.google.com/spreadsheets/d/${JINDO_SHEET_ID}/edit`
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!${LINK_CELL_COL}2`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[`=HYPERLINK("${url}","${LINK_COL}")`]] },
+      })
+
+      // ── 4. 검증 (읽기) ────────────────────────────────────────
       const post = await sheets.spreadsheets.values.batchGet({
         spreadsheetId: TARGET_SHEET_ID,
         ranges: [
+          `${quote(PRICE_TAB)}!O1:O${priceLast}`,
           `${quote(PRICE_TAB)}!H2:J4`,
-          `${quote(MAP_TAB)}!I1:I10`,
-          `${quote(PRICE_TAB)}!A1:Z1`,
+          `${quote(PRICE_TAB)}!O2`,
         ],
         valueRenderOption: 'UNFORMATTED_VALUE',
       })
       const qv = post.data.valueRanges || []
-      const afterHIJ = qv[0]?.values || []
-      const mapIAfter = qv[1]?.values || []
-      const hdrAfter = (qv[2]?.values?.[0] || []).map((h) => String(h ?? '').trim())
-      const r2 = (v: any) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)
-      const hijSame = JSON.stringify(beforeHIJ.map((r) => r.map(r2))) ===
-        JSON.stringify(afterHIJ.map((r) => r.map(r2)))
-      const mapSame = JSON.stringify(mapIBefore) === JSON.stringify(mapIAfter)
-      // 발주매핑 I열 수식 원문 확인 (단가DB A열 참조가 유지되는지)
-      const mapFx = await sheets.spreadsheets.values.get({
+      const oCol = qv[0]?.values || []
+      const afterHIJ = qv[1]?.values || []
+      const nonEmpty = oCol
+        .map((r, i) => ({ 행: i + 1, 값: String(r?.[0] ?? '').trim() }))
+        .filter((x) => x.값 !== '')
+      const fx = await sheets.spreadsheets.values.get({
         spreadsheetId: TARGET_SHEET_ID,
-        range: `${quote(MAP_TAB)}!I2`,
+        range: `${quote(PRICE_TAB)}!O2`,
         valueRenderOption: 'FORMULA',
       })
+      const r2 = (v: any) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)
+      const hijSame =
+        JSON.stringify(beforeHIJ.map((r) => r.map(r2))) ===
+        JSON.stringify(afterHIJ.map((r) => r.map(r2)))
 
       return NextResponse.json({
         ok: true,
-        message: `단가DB 원가표 바로가기 컬럼(${linkLetter}열) 적용 완료`,
+        message: '단가DB 원가표 바로가기 — O2 단일 링크로 교체 완료',
         summary: {
-          컬럼: `${linkLetter}1 = ${LINK_COL}`,
-          기존컬럼_존재: alreadyHasCol ? '있음 — 링크만 재기록' : '신규 추가',
           단가DB_마지막행: priceLast,
-          링크_생성: linked,
-          원료ID_없음_빈칸: blank,
-          원료ID_원가표_미매칭: unmatched.length ? unmatched : 0,
-          진도팜_원가표_gid: gid,
-          진도팜_원가표: 'read-only (메타·A열만 읽음, 쓰기 없음)',
+          O1_헤더: '삭제됨',
+          O열_비어있지_않은_셀: nonEmpty,
+          진도팜_원가표: '읽기·쓰기 호출 없음 (고정 URL)',
         },
-        검증1_샘플링크: sampleLink,
+        검증1_링크: {
+          O2_수식: fx.data.values?.[0]?.[0] ?? '',
+          O2_표시텍스트: qv[2]?.values?.[0]?.[0] ?? '',
+          O3이하_비어있음: nonEmpty.every((x) => x.행 === 2),
+        },
         검증2_단가DB_HIJ_3행: { 전: beforeHIJ, 후: afterHIJ, 동일: hijSame },
-        검증3_발주매핑_I열: {
-          전: mapIBefore.flat(),
-          후: mapIAfter.flat(),
-          동일: mapSame,
-          I2_수식: mapFx.data.values?.[0]?.[0] ?? '',
-        },
-        단가DB_헤더: hdrAfter,
       })
     }
 
