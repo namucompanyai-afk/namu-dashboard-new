@@ -268,6 +268,10 @@ const MARGIN_HEADER_V2 = [
   '상태',
 ]
 const MARGIN_USAGE_V2 = '채널·별칭·봉수·판매가·규격 입력 → 나머지 자동'
+// init7: 수수료율 수기 전환 (K 헤더만 변경, 나머지 V2 동일)
+const MARGIN_HEADER_V3 = MARGIN_HEADER_V2.map((h, i) => (i === 10 ? '수수료율%(부가포함)' : h))
+const MARGIN_USAGE_V3 = '채널·별칭·봉수·판매가·수수료율(부가포함)·규격 입력 → 나머지 자동'
+const CHANNEL_NOTE = '참고표 — 마진계산에는 행별 직접 입력'
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -2280,6 +2284,244 @@ export async function GET(req: Request) {
           index: s.properties?.index,
           hidden: s.properties?.hidden || false,
         })),
+      })
+    }
+
+    // ── init7: 마진계산 수수료율(K) 수기 전환 (멱등) ──────────────
+    if (action === 'init7') {
+      const sheets = getSheets()
+
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const idByTitle = new Map<string, number>()
+      for (const s of meta.data.sheets || []) {
+        const p = s.properties
+        if (p?.title != null && p.sheetId != null) idByTitle.set(p.title, p.sheetId)
+      }
+      if (!idByTitle.has(MARGIN_TAB)) {
+        throw new Error(`'${MARGIN_TAB}' 탭이 없습니다. init5~init6 을 먼저 실행하세요.`)
+      }
+      if (!idByTitle.has('채널DB')) {
+        throw new Error("'채널DB' 탭이 없습니다. init5 를 먼저 실행하세요.")
+      }
+      const marginId = idByTitle.get(MARGIN_TAB) as number
+      const marginLast = 1 + MARGIN_ROWS // R301
+
+      // ── 1. 현재 K열 원문(수식/값) + 입력 컬럼 읽기 ────────────
+      const [kRaw, inputRaw] = await Promise.all([
+        sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(MARGIN_TAB)}!K2:K${marginLast}`,
+          valueRenderOption: 'FORMULA',
+        }),
+        sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(MARGIN_TAB)}!A2:H${marginLast}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        }),
+      ])
+      const kRows = kRaw.data.values || []
+      const inRows = inputRaw.data.values || []
+
+      // 수식(= 로 시작)은 제거 대상. 숫자로 해석되는 값만 수기 입력으로 보고 보존한다.
+      const keepK: { row: number; value: number }[] = []
+      let formulaCleared = 0
+      for (let i = 0; i < MARGIN_ROWS; i++) {
+        const v = (kRows[i] || [])[0]
+        const t = String(v ?? '').trim()
+        if (t === '') continue
+        if (t.startsWith('=')) {
+          formulaCleared++
+          continue
+        }
+        const n = Number(t)
+        if (Number.isFinite(n)) keepK.push({ row: 2 + i, value: n })
+      }
+
+      // 예시행(서리태·쿠팡 윙) 위치 — B 별칭 기준, 없으면 R2
+      const sampleIdx = inRows.findIndex((r) => String(r?.[1] ?? '').trim() === MARGIN_SAMPLE.alias)
+      const sampleRow = sampleIdx >= 0 ? sampleIdx + 2 : 2
+
+      // 테스트 행 — A~E·H 가 모두 빈 행 (R3 우선)
+      const isEmptyRow = (i: number) => {
+        const r = inRows[i] || []
+        return [0, 1, 2, 3, 4, 7].every((c) => String(r[c] ?? '').trim() === '')
+      }
+      let testRow = 0
+      for (let i = 1; i < MARGIN_ROWS; i++) {
+        if (isEmptyRow(i) && !keepK.some((k) => k.row === 2 + i)) {
+          testRow = 2 + i
+          break
+        }
+      }
+
+      // ── 2. K열 수식 제거 → 빈칸 (수기 숫자만 되돌려 씀) ────────
+      await sheets.spreadsheets.values.clear({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!K2:K${marginLast}`,
+        requestBody: {},
+      })
+      const kWrites = keepK
+        .filter((k) => k.row !== sampleRow)
+        .map((k) => ({ range: `${quote(MARGIN_TAB)}!K${k.row}`, values: [[k.value]] as Cell[][] }))
+      // 예시행은 6.38 고정 (서리태·쿠팡 윙 예시 유지용)
+      kWrites.push({ range: `${quote(MARGIN_TAB)}!K${sampleRow}`, values: [[6.38]] })
+
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            { range: `${quote(MARGIN_TAB)}!A1:R1`, values: [MARGIN_HEADER_V3] },
+            { range: `${quote(MARGIN_TAB)}!T1`, values: [[MARGIN_USAGE_V3]] },
+            { range: `${quote('채널DB')}!F1`, values: [[CHANNEL_NOTE]] },
+            ...kWrites,
+          ],
+        },
+      })
+
+      // ── 3. L~R 수식 재기록 (K 는 참조만, 빈칸이면 전부 빈칸) ───
+      const COSTDB = `'비용DB'!$A$2:$B$50`
+      const priceLast = 1 + alias.rows.length
+      const DB = `'${PRICE_TAB}'!$A$2:$N$${priceLast}`
+      const vd = (r: number, c: number) => `VLOOKUP($B${r},${DB},${c},FALSE)`
+      const isTax = (r: number) => `IFERROR(${vd(r, 11)},"")="과세"`
+      const warnRate = `IFERROR(VLOOKUP("${COST_DB_WARN}",${COSTDB},2,FALSE),0)`
+
+      const colLR: Cell[][] = []
+      for (let r = 2; r <= marginLast; r++) {
+        // L 수수료 — K 빈칸이면 빈칸 (숫자 아닌 값만 '확인필요')
+        const l =
+          `=IF(OR($A${r}="",$D${r}="",$K${r}=""),"",IF(ISNUMBER($K${r}),$D${r}*$K${r}/100,"확인필요"))`
+        const m =
+          `=IF(OR($B${r}="",$C${r}="",$D${r}="",$H${r}="",$K${r}=""),"",` +
+          `IF(AND(ISNUMBER($F${r}),ISNUMBER($G${r}),ISNUMBER($I${r}),ISNUMBER($J${r}),ISNUMBER($L${r})),` +
+          `$F${r}+$G${r}+$I${r}+$J${r}+$L${r},"확인필요"))`
+        const n = `=IF(NOT(ISNUMBER($M${r})),"",IF(${isTax(r)},$D${r}*10/11,$D${r})-$M${r})`
+        const o = `=IF(OR(NOT(ISNUMBER($N${r})),$D${r}=""),"",$N${r}/$D${r})`
+        const p = `=IF(OR(NOT(ISNUMBER($N${r})),$N${r}=0),"",$D${r}/$N${r})`
+        // Q 권장판매가 — K 빈칸이면 빈칸 (ISNUMBER 판정 그대로 유지)
+        const q =
+          `=IF(OR($E${r}="",NOT(ISNUMBER($F${r})),NOT(ISNUMBER($K${r}))),"",IFERROR(` +
+          `($F${r}+$G${r}+$I${r}+$J${r})/(IF(${isTax(r)},10/11,1)-$K${r}/100-$E${r}/100),""))`
+        // R 상태 — 수수료율 미입력 판정을 "B·D 입력됐는데 K 빈칸" 으로 변경
+        const s =
+          `=IF($B${r}="","",IF(AND($D${r}<>"",$K${r}=""),"${ST_NO_FEE}",IF($F${r}="","${ST_NO_COST}",` +
+          `IF(AND(ISNUMBER($O${r}),$O${r}<${warnRate}/100),"${ST_LOW}",""))))`
+        colLR.push([l, m, n, o, p, q, s])
+      }
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [{ range: `${quote(MARGIN_TAB)}!L2:R${marginLast}`, values: colLR }],
+        },
+      })
+
+      // ── 4. K열 서식 — 입력 컬럼이므로 흰 배경 + 0.00"%" 유지 ───
+      const grid = (sheetId: number, r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              repeatCell: {
+                range: grid(marginId, 1, marginLast, 10, 11),
+                cell: {
+                  userEnteredFormat: {
+                    backgroundColor: { red: 1, green: 1, blue: 1 },
+                    numberFormat: { type: 'NUMBER', pattern: '0.00"%"' },
+                  },
+                },
+                fields:
+                  'userEnteredFormat.backgroundColor,userEnteredFormat.numberFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 5. 테스트 행 — K 빈칸 → '수수료율 미입력' 확인 후 삭제 ──
+      let testStatus: any = '테스트 행 자리 없음(빈 행 없음)'
+      if (testRow > 0) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'RAW',
+            data: [
+              {
+                range: `${quote(MARGIN_TAB)}!A${testRow}:D${testRow}`,
+                values: [[MARGIN_SAMPLE.channel, MARGIN_SAMPLE.alias, 1, 23900]],
+              },
+            ],
+          },
+        })
+        const t = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(MARGIN_TAB)}!R${testRow}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        testStatus = t.data.values?.[0]?.[0] ?? ''
+        // 테스트 입력만 제거 (F~R 은 수식이므로 건드리지 않는다)
+        await sheets.spreadsheets.values.batchClear({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            ranges: [
+              `${quote(MARGIN_TAB)}!A${testRow}:E${testRow}`,
+              `${quote(MARGIN_TAB)}!H${testRow}`,
+            ],
+          },
+        })
+      }
+
+      // ── 6. 되읽어 검증 (예시행) ───────────────────────────────
+      const back = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A${sampleRow}:R${sampleRow}`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const row = back.data.values?.[0] || []
+      const r1 = (v: any) => (typeof v === 'number' ? Math.round(v * 10) / 10 : v)
+      const hdr = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!K1`,
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: '마진계산 수수료율(K) 수기 입력 전환 완료',
+        summary: {
+          K_수식_제거행: formulaCleared,
+          K_수기값_보존행: keepK.filter((k) => k.row !== sampleRow).length,
+          예시행: `R${sampleRow}`,
+          테스트행: testRow > 0 ? `R${testRow}` : null,
+          L_R_수식_재기록행: MARGIN_ROWS,
+        },
+        verify: {
+          K1_헤더: hdr.data.values?.[0]?.[0],
+          K1_기대: '수수료율%(부가포함)',
+          'K 수수료율': row[10],
+          'K 기대': 6.38,
+          'L 수수료': r1(row[11]),
+          'L 기대': 1524.8,
+          'M 총비용': r1(row[12]),
+          'M 기대': 18001.8,
+          'N 마진': r1(row[13]),
+          'N 기대': 5898.2,
+          'O 마진율%': typeof row[14] === 'number' ? Math.round(row[14] * 1000) / 10 : row[14],
+          'O 기대%': 24.7,
+          'R 상태': row[17],
+          테스트행_R상태: testStatus,
+          테스트행_기대: ST_NO_FEE,
+        },
       })
     }
 
