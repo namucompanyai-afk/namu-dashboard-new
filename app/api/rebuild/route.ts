@@ -4276,6 +4276,33 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── dump2: 수식 원형 + 원가표미러 읽기 전용 (쓰기 없음) ────────
+    if (action === 'dump2') {
+      const sheets = getSheets()
+      const fx = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(PRICE_TAB)}!A1:O200`],
+        valueRenderOption: 'FORMULA',
+      })
+      const val = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [
+          `${quote('원가표미러')}!A1:P250`,
+          `${quote(PRICE_TAB)}!A1:O200`,
+          `${quote(MAP_TAB)}!A1:I300`,
+        ],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const v = val.data.valueRanges || []
+      return NextResponse.json({
+        ok: true,
+        단가DB_수식: fx.data.valueRanges?.[0]?.values || [],
+        원가표미러: v[0]?.values || [],
+        단가DB_값: v[1]?.values || [],
+        발주매핑: v[2]?.values || [],
+      })
+    }
+
     // ── inspect: 읽기 전용 현황 조사 (쓰기 없음) ──────────────────
     if (action === 'inspect') {
       const sheets = getSheets()
