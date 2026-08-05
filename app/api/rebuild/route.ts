@@ -350,6 +350,8 @@ const SUSPECT_YELLOW = 'FFF2CC'
 // init14: 이관분 롤백 범위
 const ROLLBACK_FROM = 9
 const ROLLBACK_TO = 200
+// init16: 단가DB 행 확장 대비 — 파생 수식·드롭다운·서식을 여기까지 미리 깐다
+const PRICE_ROWS_TO = 300
 const DEFAULT_TABS = ['시트1', 'Sheet1']
 const SIZE_OPTIONS = ['소', '중', '대', '없음']
 const ST_NO_FEE = '수수료율 미입력'
@@ -4751,6 +4753,326 @@ export async function GET(req: Request) {
           별칭_입력행수: aliasRows,
           'R2~R8 무변경': topSame,
           자동수식_컬럼: 'F·G·I·J·L~T 미변경 / K 는 자동참조 수식 복원',
+        },
+      })
+    }
+
+    // ── init16: 단가DB 행 확장 대비 정비 (R2~R300, 멱등) ──────────
+    // 파생 수식(G·H·I·J·K)은 "빈 셀에만" 채운다 → 기존 값·수기 입력은 절대 건드리지 않음.
+    if (action === 'init16') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title,gridProperties(rowCount)))',
+      })
+      const priceProp = (meta.data.sheets || []).find((s) => s.properties?.title === PRICE_TAB)
+        ?.properties
+      if (priceProp?.sheetId == null) throw new Error(`'${PRICE_TAB}' 탭이 없습니다.`)
+      const priceId = priceProp.sheetId as number
+      const LAST = PRICE_ROWS_TO
+
+      // ── 0. 시트 행수 확보 (R300 까지) ─────────────────────────
+      const rowCount = priceProp.gridProperties?.rowCount ?? 0
+      const addedRowCount = rowCount < LAST ? LAST - rowCount : 0
+      if (addedRowCount) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            requests: [
+              { appendDimension: { sheetId: priceId, dimension: 'ROWS', length: addedRowCount } },
+            ],
+          },
+        })
+      }
+
+      // ── 1. 사전 스냅샷 (수식 원문) ────────────────────────────
+      const pre = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!A2:O${LAST}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const before = (pre.data.values || []) as any[][]
+      const at = (r: number, c: number) => String((before[r - 2] || [])[c] ?? '').trim()
+
+      let priceLast = 1
+      for (let r = 2; r <= LAST; r++) if (at(r, 0) !== '') priceLast = r
+
+      // ── 2. R2 파생 수식 템플릿 (G~K) ──────────────────────────
+      const tpl = [6, 7, 8, 9, 10].map((c) => at(2, c))
+      if (!tpl[0].startsWith('=') || !tpl[1].startsWith('=')) {
+        throw new Error(`단가DB R2 파생 수식 템플릿을 읽지 못했습니다: ${JSON.stringify(tpl)}`)
+      }
+      // 상대 행 참조($E2)만 대상 행으로 치환 — 절대 참조($A$12)는 보존 (init13 과 동일)
+      const reRow = (f: string, to: number) => f.replace(/(\$[A-Z]{1,2})(\d+)/g, `$1${to}`)
+
+      // ── 3. 빈 셀에만 파생 수식 채우기 ─────────────────────────
+      // J(총 공급가)만 예외: 기존 행에서 원료ID가 빈 행은 비진도팜 = 수기 입력 칸이라
+      // (init11·init12 설계) 수식을 깔지 않는다. 신규 빈 행(R{priceLast+1}~)에는 깐다.
+      const isManualJ = (r: number) => r <= priceLast && at(r, 4) === ''
+      const AUTO_COLS = [
+        { letter: 'G', idx: 6, t: 0, name: '원곡가' },
+        { letter: 'H', idx: 7, t: 1, name: '소포장 공급가' },
+        { letter: 'I', idx: 8, t: 2, name: '벌크 공급가' },
+        { letter: 'J', idx: 9, t: 3, name: '총 공급가(소포장)' },
+        { letter: 'K', idx: 10, t: 4, name: '과세여부' },
+      ]
+      const data: { range: string; values: Cell[][] }[] = []
+      const filledCount: Record<string, number> = {}
+      for (const c of AUTO_COLS) {
+        let run: number[] = []
+        let n = 0
+        const flush = () => {
+          if (!run.length) return
+          data.push({
+            range: `${quote(PRICE_TAB)}!${c.letter}${run[0]}:${c.letter}${run[run.length - 1]}`,
+            values: run.map((r) => [reRow(tpl[c.t], r)]),
+          })
+          n += run.length
+          run = []
+        }
+        for (let r = 2; r <= LAST; r++) {
+          const skip = c.letter === 'J' && isManualJ(r)
+          if (at(r, c.idx) === '' && !skip) run.push(r)
+          else flush()
+        }
+        flush()
+        filledCount[`${c.letter} ${c.name}`] = n
+      }
+      if (data.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { valueInputOption: 'USER_ENTERED', data },
+        })
+      }
+
+      // ── 4. 드롭다운·서식 R300 까지 확장 ───────────────────────
+      const grid = (r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId: priceId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      const rangeRule = (ref: string) => ({
+        condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: ref }] },
+        showCustomUi: true,
+        strict: false,
+      })
+      const autoBg = hex(AUTO_GRAY)
+      const whiteBg = { red: 1, green: 1, blue: 1 }
+      const band = (c0: number, c1: number, r0: number, r1: number, bg: any) => ({
+        repeatCell: {
+          range: grid(r0, r1, c0, c1),
+          cell: { userEnteredFormat: { backgroundColor: bg } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      })
+
+      // J — init12 규칙 유지: 기존 행 중 원료ID 빈 행(비진도팜 수기칸)은 흰색, 그 외 자동 회색
+      const jManual: number[] = []
+      const jGrayRuns: [number, number][] = []
+      const jWhiteRuns: [number, number][] = []
+      for (let r = 2; r <= LAST; r++) {
+        const manual = isManualJ(r)
+        if (manual) jManual.push(r)
+        const runs = manual ? jWhiteRuns : jGrayRuns
+        const tail = runs[runs.length - 1]
+        if (tail && tail[1] === r) tail[1] = r + 1
+        else runs.push([r, r + 1])
+      }
+
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            // D 취급상태 O/X — D2:D300
+            {
+              setDataValidation: {
+                range: grid(1, LAST, 3, 4),
+                rule: {
+                  condition: {
+                    type: 'ONE_OF_LIST',
+                    values: [{ userEnteredValue: 'O' }, { userEnteredValue: 'X' }],
+                  },
+                  showCustomUi: true,
+                  strict: false,
+                },
+              },
+            },
+            // E 원료ID — 원가표미러 원료 목록 드롭다운 · E2:E300
+            { setDataValidation: { range: grid(1, LAST, 4, 5), rule: rangeRule(MIRROR_ID_RANGE) } },
+            // G~I 자동 파생 회색
+            band(6, 9, 1, LAST, autoBg),
+            // J 회색/흰색 분기
+            ...jGrayRuns.map(([s, e]) => band(9, 10, s - 1, e - 1, autoBg)),
+            ...jWhiteRuns.map(([s, e]) => band(9, 10, s - 1, e - 1, whiteBg)),
+            // F~J 천단위 콤마
+            {
+              repeatCell: {
+                range: grid(1, LAST, 5, 10),
+                cell: {
+                  userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } },
+                },
+                fields: 'userEnteredFormat.numberFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 5. 검증1 — 원래 비어있지 않던 셀 전부 무변동 ──────────
+      const post = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!A2:O${LAST}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const after = (post.data.values || []) as any[][]
+      const atAfter = (r: number, c: number) => String((after[r - 2] || [])[c] ?? '').trim()
+      const colName = (c: number) => String.fromCharCode(65 + c)
+      const changed: string[] = []
+      let keptCells = 0
+      for (let r = 2; r <= LAST; r++) {
+        for (let c = 0; c < 15; c++) {
+          const b = at(r, c)
+          if (b === '') continue
+          if (b === atAfter(r, c)) keptCells++
+          else if (changed.length < 20) changed.push(`R${r}${colName(c)}`)
+        }
+      }
+
+      // ── 6. 검증2 — 파로 행 전부 ───────────────────────────────
+      const paroRows: number[] = []
+      for (let r = 2; r <= LAST; r++) if (at(r, 0).includes('파로')) paroRows.push(r)
+      const paro: any[] = []
+      for (const r of paroRows) {
+        const shown = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!A${r}:K${r}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        const sv = shown.data.values?.[0] || []
+        const rid = at(r, 4)
+        const g = at(r, 5)
+        paro.push({
+          행: `R${r}`,
+          별칭: at(r, 0),
+          원료ID: rid || '(미선택)',
+          g: g || '(빈칸)',
+          G_수식_적용: atAfter(r, 6).startsWith('='),
+          G_현재값: sv[6] ?? '',
+          남은_수기입력: rid === '' ? 'E 원료ID' : g === '' ? 'F g(용량)' : '없음',
+          비고:
+            rid !== '' && g === ''
+              ? '수식은 깔렸지만 기존 IF 구조상 g 가 비면 빈칸 — g 입력 시 즉시 자동 계산'
+              : '',
+        })
+      }
+
+      // ── 7. 검증3 — 빈 행 프로브 (원료ID 넣으면 원곡가 자동 계산) ─
+      const mirror = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`'원가표미러'!A11:P11`, `'원가표미러'!A12:P200`],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const mHead = (mirror.data.valueRanges?.[0]?.values?.[0] || []).map((x: any) =>
+        String(x ?? '').trim(),
+      )
+      const mRows = (mirror.data.valueRanges?.[1]?.values || []) as any[][]
+      const iWongok = mHead.indexOf(COL_WONGOK)
+      const sample = mRows.find(
+        (r) => String(r?.[0] ?? '').trim() !== '' && typeof r?.[iWongok] === 'number',
+      )
+      let probeRow: number | null = null
+      for (let r = LAST; r >= 2; r--) {
+        if (at(r, 0) === '' && at(r, 4) === '' && at(r, 5) === '') {
+          probeRow = r
+          break
+        }
+      }
+      let probe: any = null
+      if (probeRow && sample && iWongok >= 0) {
+        const rid = String(sample[0]).trim()
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!E${probeRow}:F${probeRow}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[rid, 1000]] },
+        })
+        const got = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!G${probeRow}:K${probeRow}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        const gv = got.data.values?.[0] || []
+        // 프로브 원복 — 넣었던 E·F 만 삭제 (수식은 그대로 남아 빈칸 표시로 복귀)
+        await sheets.spreadsheets.values.clear({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!E${probeRow}:F${probeRow}`,
+          requestBody: {},
+        })
+        const back = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!E${probeRow}:K${probeRow}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        const bv = back.data.values?.[0] || []
+        const expect = Number(sample[iWongok])
+        probe = {
+          프로브행: `R${probeRow}`,
+          투입: { 원료ID: rid, g: 1000 },
+          G_원곡가: gv[0] ?? null,
+          H_소포장: gv[1] ?? null,
+          I_벌크: gv[2] ?? null,
+          J_총공급가: gv[3] ?? null,
+          K_과세여부: gv[4] ?? null,
+          기대_원곡가: expect,
+          원곡가_자동계산: typeof gv[0] === 'number' && Math.abs(gv[0] - expect) < 0.5,
+          원복_후_빈칸: bv.every((v: any) => String(v ?? '').trim() === ''),
+        }
+      }
+
+      // ── 8. 검증4 — 드롭다운 실제 적용 확인 (R300) ─────────────
+      const dv = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(PRICE_TAB)}!D${LAST}:E${LAST}`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(dataValidation(condition(type,values(userEnteredValue)))))))',
+      })
+      const dvRow = dv.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values || []
+      const dvOf = (i: number) => {
+        const cond = dvRow[i]?.dataValidation?.condition
+        if (!cond) return null
+        return {
+          type: cond.type,
+          values: (cond.values || []).map((v: any) => v.userEnteredValue),
+        }
+      }
+
+      return NextResponse.json({
+        ok: true,
+        message: `단가DB 행 확장 대비 정비 완료 (R2~R${LAST})`,
+        summary: {
+          단가DB_마지막_데이터행: `R${priceLast}`,
+          수식_적용_하한: `R${LAST}`,
+          시트_행_추가: addedRowCount || 0,
+          빈칸_채운_셀수: filledCount,
+          J_수기입력칸_흰색_유지행수: jManual.length,
+          비고: [
+            'K(과세여부)도 같은 자동 파생 컬럼이라 함께 깔았다 — 안 깔면 신규 행 과세여부가 빈칸으로 남는다',
+            'J 는 기존 행 중 원료ID 빈 행(비진도팜 수기 입력칸)에는 깔지 않고 흰색 유지 (init11·init12 설계 보존)',
+          ],
+        },
+        검증1_기존값_무변동: {
+          '비어있지 않던 셀 수': keptCells,
+          변경된_셀: changed.length ? changed : 0,
+          판정: changed.length === 0,
+        },
+        검증2_파로행: paro,
+        검증3_빈행_프로브: probe,
+        검증4_드롭다운: {
+          [`D${LAST} 취급상태`]: dvOf(0),
+          [`E${LAST} 원료ID`]: dvOf(1),
+          적용범위: `D2:D${LAST} · E2:E${LAST}`,
         },
       })
     }
