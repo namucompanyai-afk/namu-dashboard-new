@@ -35,6 +35,7 @@ export type PlanItem = {
   fullName: string // 범례/툴팁용 원래 이름
   color: string
   boxes: number
+  units: number // 낱개 수 (부제 병기용)
   codeTails: string[] // 발주코드 끝 6자리
   columns: number[] // 기둥별 단수 (예: 4박스 → [2,2])
 }
@@ -129,12 +130,14 @@ export function buildPalletPlan(
           fullName: full,
           color: colorOf.get(key) || AUTO_COLORS[0],
           boxes: 0,
+          units: 0,
           codeTails: [],
           columns: [],
         }
         byCode.set(key, it)
       }
       it.boxes += o.boxCount
+      it.units += o.totalUnits
       const tail = String(o.productCode || '').slice(-6)
       if (tail && !it.codeTails.includes(tail)) it.codeTails.push(tail)
     }
@@ -320,7 +323,7 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
     out += text({
       x: ox + 14,
       y: oy + 64 + i * ITEM_LH,
-      s: `${it.sku} ${it.boxes}박스${tail}`,
+      s: `${it.sku} ${it.boxes}박스(${cm(it.units)}개)${tail}`,
       size: 10,
       fill: '#374151',
     })

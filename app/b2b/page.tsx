@@ -20,6 +20,7 @@ import {
   downloadPalletPlanSvg,
   renderPalletPlanSvg,
 } from '@/lib/b2b/kurlyDiagram'
+import { buildLabelPlan, openLabelPrint } from '@/lib/b2b/kurlyLabel'
 
 /**
  * B2B 발주 변환 — 1차: 컬리
@@ -29,6 +30,9 @@ import {
  */
 
 const won = (n: number) => n.toLocaleString('ko-KR')
+
+// 화면 표시 라벨만 교체 — 시트 구분값('이고비_김포') 매칭은 lib/b2b/kurly.ts 그대로 둔다
+const costLabel = (label: string) => label.replace('이고비', '물류대행비')
 
 type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
@@ -44,6 +48,7 @@ export default function B2BPage() {
   const [fileName, setFileName] = useState('')
   const [fileError, setFileError] = useState('')
   const [dragOver, setDragOver] = useState(false)
+  const [openDests, setOpenDests] = useState<string[]>([]) // 팔레트 요약 펼친 입고지
 
   const loadSheets = useCallback(async () => {
     setSheetState('loading')
@@ -72,6 +77,7 @@ export default function B2BPage() {
       if (parsed.length === 0) throw new Error('발주 행을 찾지 못했습니다.')
       setOrders(parsed)
       setFileName(file.name)
+      setOpenDests([])
     } catch (err: unknown) {
       setOrders([])
       setFileName('')
@@ -106,6 +112,14 @@ export default function B2BPage() {
     [orders, pallets, masterByCode],
   )
   const planSvg = useMemo(() => (plan.panels.length ? renderPalletPlanSvg(plan) : ''), [plan])
+
+  // 박스 부착 라벨 (잡곡밥 등 기인쇄 상품은 제외)
+  const labelPlan = useMemo(() => buildLabelPlan(orders, masterByCode), [orders, masterByCode])
+  const printLabels = useCallback(() => {
+    if (!openLabelPrint(labelPlan)) {
+      setFileError('팝업이 차단되어 인쇄 창을 열지 못했습니다. 브라우저 팝업 허용 후 다시 시도해 주세요.')
+    }
+  }, [labelPlan])
 
   return (
     <div className="space-y-6">
@@ -219,19 +233,73 @@ export default function B2BPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {pallets.map((g) => (
-                      <tr key={g.dest} className={'border-t border-gray-100 ' + (g.overSku ? 'bg-red-50' : '')}>
-                        <td className="px-3 py-2">{g.dest}</td>
-                        <td className="px-3 py-2 text-gray-600">{g.region}</td>
-                        <td className="px-3 py-2 text-right">{g.plt}</td>
-                        <td className={'px-3 py-2 text-right ' + (g.overSku ? 'text-red-600 font-semibold' : '')}>
-                          {g.skuCodes.length}
-                          {g.overSku && <span className="ml-1 text-xs">⚠️ 3초과</span>}
-                        </td>
-                        <td className="px-3 py-2 text-right">{won(g.totalBoxes)}</td>
-                        <td className="px-3 py-2 text-right">{won(g.totalUnits)}</td>
-                      </tr>
-                    ))}
+                    {pallets.map((g) => {
+                      const open = openDests.includes(g.dest)
+                      return (
+                        <React.Fragment key={g.dest}>
+                          <tr
+                            onClick={() =>
+                              setOpenDests((prev) =>
+                                prev.includes(g.dest) ? prev.filter((d) => d !== g.dest) : [...prev, g.dest],
+                              )
+                            }
+                            aria-expanded={open}
+                            className={
+                              'border-t border-gray-100 cursor-pointer hover:bg-gray-50 ' +
+                              (g.overSku ? 'bg-red-50' : '')
+                            }
+                          >
+                            <td className="px-3 py-2">
+                              <span className="inline-block w-4 text-gray-400">{open ? '▾' : '▸'}</span>
+                              {g.dest}
+                            </td>
+                            <td className="px-3 py-2 text-gray-600">{g.region}</td>
+                            <td className="px-3 py-2 text-right">{g.plt}</td>
+                            <td className={'px-3 py-2 text-right ' + (g.overSku ? 'text-red-600 font-semibold' : '')}>
+                              {g.skuCodes.length}
+                              {g.overSku && <span className="ml-1 text-xs">⚠️ 3초과</span>}
+                            </td>
+                            <td className="px-3 py-2 text-right">{won(g.totalBoxes)}</td>
+                            <td className="px-3 py-2 text-right">{won(g.totalUnits)}</td>
+                          </tr>
+                          {open && (
+                            <tr className="border-t border-gray-100">
+                              <td colSpan={6} className="px-3 py-3 bg-gray-50">
+                                <table className="w-full text-xs">
+                                  <thead className="text-gray-500">
+                                    <tr>
+                                      <th className="px-2 py-1 text-left font-medium">발주상품코드</th>
+                                      <th className="px-2 py-1 text-left font-medium">상품명</th>
+                                      <th className="px-2 py-1 text-right font-medium">박스</th>
+                                      <th className="px-2 py-1 text-right font-medium">낱개</th>
+                                      <th className="px-2 py-1 text-left font-medium">소비기한</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {g.rowIndexes.map((ri) => {
+                                      const o = orders[ri]
+                                      return (
+                                        <tr key={`${o.productCode}-${ri}`} className="border-t border-gray-200">
+                                          <td className="px-2 py-1 text-gray-600">{o.productCode}</td>
+                                          <td className="px-2 py-1">
+                                            {masterByCode[norm(o.masterCode)]?.alias || o.productName}
+                                          </td>
+                                          <td className="px-2 py-1 text-right">{won(o.boxCount)}</td>
+                                          <td className="px-2 py-1 text-right">{won(o.totalUnits)}</td>
+                                          <td className="px-2 py-1 text-gray-600">
+                                            {o.expiry || <span className="text-amber-600">미입력</span>}
+                                          </td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -258,7 +326,7 @@ export default function B2BPage() {
                     {costLines.map((l, i) => (
                       <tr key={i} className="border-t border-gray-100">
                         <td className="px-3 py-2">
-                          {l.label}
+                          {costLabel(l.label)}
                           {l.note && <div className="text-[11px] text-gray-400">{l.note}</div>}
                         </td>
                         <td className="px-3 py-2 text-right">{won(l.unit)}</td>
@@ -280,11 +348,25 @@ export default function B2BPage() {
 
           {/* 발주 목록 */}
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-sm font-semibold">발주 목록</h2>
-              <span className="text-xs text-gray-500">
-                파렛트수 = 포털 입력값 (같은 입고지 첫 행만 1)
-              </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-xs text-gray-500">
+                  파렛트수 = 포털 입력값 (같은 입고지 첫 행만 1)
+                </span>
+                {labelPlan.skipped.map((s) => (
+                  <span key={s.masterCode} className="text-xs text-amber-700">
+                    {s.name} {won(s.boxes)}박스 라벨 생략(기인쇄)
+                  </span>
+                ))}
+                <button
+                  onClick={printLabels}
+                  disabled={labelPlan.labels.length === 0}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                >
+                  부착 라벨 인쇄 ({labelPlan.labels.length}장)
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm whitespace-nowrap">
