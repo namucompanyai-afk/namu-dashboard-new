@@ -257,7 +257,7 @@ export default function Sidebar() {
 
           {/* 발주 직원 */}
           <div>
-            <button onClick={() => setIsOrderStaffOpen(!isOrderStaffOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/jindopam/order-work') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+            <button onClick={() => setIsOrderStaffOpen(!isOrderStaffOpen)} className={'w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ' + (pathname.startsWith('/jindopam/order-work') || pathname.startsWith('/b2b') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
               <span>📦</span>
               <span className="flex-1 text-left">발주 직원</span>
               <span className="text-xs">{isOrderStaffOpen ? '▼' : '▶'}</span>
@@ -268,6 +268,10 @@ export default function Sidebar() {
                 <Link href="/jindopam/order-work" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/jindopam/order-work') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                   <span>🌾</span>
                   <span>진도팜 발주</span>
+                </Link>
+                <Link href="/b2b" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/b2b') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🛒</span>
+                  <span>B2B 발주 변환</span>
                 </Link>
               </div>
             )}
