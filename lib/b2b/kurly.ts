@@ -27,6 +27,7 @@ export type ProductMaster = {
   channel: string // 채널
   alias: string // 별칭
   name: string // 상품명
+  taxType: string // 과세 구분 (과세/면세)
   boxQty: number // 박스입수
   coupangSkuId: string // 쿠팡 SKU ID
   coupangSupply: number // 쿠팡 공급가
@@ -41,6 +42,7 @@ const PRODUCT_COLS: Record<keyof ProductMaster, string[]> = {
   channel: ['채널'],
   alias: ['별칭'],
   name: ['상품명'],
+  taxType: ['과세구분', '과세여부', '과세'],
   boxQty: ['박스입수'],
   coupangSkuId: ['쿠팡skuid', '쿠팡sku', 'skuid'],
   coupangSupply: ['쿠팡공급가'],
@@ -86,6 +88,7 @@ export function parseProductMaster(rows: unknown[][]): ProductMaster[] {
       channel: trim(at(r, c.channel)),
       alias: trim(at(r, c.alias)),
       name,
+      taxType: trim(at(r, c.taxType)),
       boxQty: toNum(at(r, c.boxQty)),
       coupangSkuId: trim(at(r, c.coupangSkuId)),
       coupangSupply: toNum(at(r, c.coupangSupply)),

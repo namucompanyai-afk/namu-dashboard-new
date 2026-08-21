@@ -244,7 +244,9 @@ export default function B2BPage() {
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">이번 발주 요약</h2>
-              <span className="text-xs text-gray-500">금액은 발주 파일 값 그대로 (프로모션 할인 반영)</span>
+              <span className="text-xs text-gray-500">
+                부가포함 매출 (과세 상품 ×1.1, 발주 파일 공급가 기준)
+              </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -262,14 +264,21 @@ export default function B2BPage() {
                     <tr key={r.masterCode} className="border-t border-gray-100">
                       <td className="px-3 py-2">
                         <div>{r.name}</div>
-                        <div className="text-[11px] text-gray-400">{r.masterCode}</div>
+                        <div className="text-[11px] text-gray-400">
+                          {r.masterCode}
+                          {r.taxKnown ? (
+                            <span className="ml-1">· {r.taxType}</span>
+                          ) : (
+                            <span className="ml-1 text-amber-600">· 과세구분 미확인(면세 처리)</span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-2 text-right">{won(r.boxes)}</td>
                       <td className="px-3 py-2 text-right">{won(r.units)}</td>
                       <td className="px-3 py-2 text-right">
-                        {r.unitPrices.length === 0 ? '—' : r.unitPrices.map(won).join(' / ')}
+                        {r.unitPricesIncl.length === 0 ? '—' : r.unitPricesIncl.map(won).join(' / ')}
                       </td>
-                      <td className="px-3 py-2 text-right">{won(r.supplyTotal)}</td>
+                      <td className="px-3 py-2 text-right">{won(r.supplyTotalIncl)}</td>
                     </tr>
                   ))}
                   <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
@@ -277,7 +286,7 @@ export default function B2BPage() {
                     <td className="px-3 py-2 text-right">{won(summary.totalBoxes)}</td>
                     <td className="px-3 py-2 text-right">{won(summary.totalUnits)}</td>
                     <td className="px-3 py-2 text-right text-gray-400">—</td>
-                    <td className="px-3 py-2 text-right">{won(summary.totalSupply)}원</td>
+                    <td className="px-3 py-2 text-right">{won(summary.totalSupplyIncl)}원</td>
                   </tr>
                 </tbody>
               </table>
