@@ -22,6 +22,13 @@ import {
   openCoupangLabelPrint,
 } from '@/lib/b2b/coupangLabel'
 import {
+  buildInvoiceBlocks,
+  invoiceNosText,
+  parseInvoiceFile,
+  reconcileInvoices,
+  type InvoiceRow,
+} from '@/lib/b2b/coupangInvoice'
+import {
   CoupangPalletPlanView,
   PALLET_BOX_LIMIT,
   SHIP_FROM_GUIDE,
@@ -170,6 +177,39 @@ export default function CoupangB2BPage() {
       setPlanJpgBusy(false)
     }
   }, [palletSvg, palletPlan.dueDate])
+
+  // 진도팜 송장 회신 대사 (한진 파일접수 상세내역)
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
+  const [invoiceName, setInvoiceName] = useState('')
+  const [invoiceError, setInvoiceError] = useState('')
+  const [copiedCenter, setCopiedCenter] = useState('')
+
+  const parseInvoices = useCallback(async (file: File) => {
+    setInvoiceError('')
+    try {
+      const rows = await parseInvoiceFile(file)
+      if (rows.length === 0) throw new Error('송장 행을 찾지 못했습니다.')
+      setInvoices(rows)
+      setInvoiceName(file.name)
+    } catch (err: unknown) {
+      setInvoices([])
+      setInvoiceName('')
+      setInvoiceError('송장 회신 파싱 실패: ' + (err instanceof Error ? err.message : String(err)))
+    }
+  }, [])
+
+  const recon = useMemo(() => reconcileInvoices(jindo, invoices), [jindo, invoices])
+  const invoiceBlocks = useMemo(() => buildInvoiceBlocks(invoices), [invoices])
+
+  const copyInvoiceNos = useCallback(async (center: string, textValue: string) => {
+    try {
+      await navigator.clipboard.writeText(textValue)
+      setCopiedCenter(center)
+      setTimeout(() => setCopiedCenter(''), 2000)
+    } catch {
+      setInvoiceError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
+    }
+  }, [])
 
   // 위킵분 — 부착 라벨(즉석밥은 박스 기표기라 제외) + 전달 안내문
   const labelPlan = useMemo(() => buildCoupangLabelPlan(wikeep), [wikeep])
@@ -516,6 +556,152 @@ export default function CoupangB2BPage() {
             <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
               정렬: 입고예정일 → 발주번호 · 박스 수 = 올림(납품가능수량 ÷ 박스입수) · 배송메세지1·송장은 공란
             </p>
+          </div>
+
+          {/* 진도팜 송장 회신 대사 */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold">진도팜 송장 회신</h2>
+              <div className="flex flex-wrap items-center gap-3">
+                {invoiceName && (
+                  <span className="text-xs text-gray-500">
+                    📄 {invoiceName} · 송장 {num(recon.totalInvoices)}건 / 발주 {num(recon.totalBoxes)}박스
+                    {invoices.length > 0 && (
+                      <span className={recon.allMatch ? ' text-green-700' : ' text-red-600'}>
+                        {' '}· {recon.allMatch ? '전건 일치' : '불일치 있음'}
+                      </span>
+                    )}
+                  </span>
+                )}
+                <label
+                  className={
+                    'inline-block px-3 py-1.5 rounded-md text-xs ' +
+                    (jindo.length === 0
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-gray-900 text-white cursor-pointer hover:bg-gray-700')
+                  }
+                >
+                  회신 파일 (.xlsx)
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    className="hidden"
+                    disabled={jindo.length === 0}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      if (f) parseInvoices(f)
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {invoiceError && (
+              <p className="px-4 py-3 text-sm text-red-700 bg-red-50 border-b border-red-200">{invoiceError}</p>
+            )}
+
+            {invoices.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-400">
+                {jindo.length === 0
+                  ? '쿠팡 발주서를 먼저 업로드하세요.'
+                  : '한진 파일접수 상세내역 xlsx 를 올리면 발주와 대사합니다.'}
+              </p>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <thead className="bg-gray-50 text-gray-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium">센터</th>
+                        <th className="px-3 py-2 text-left font-medium">상품</th>
+                        <th className="px-3 py-2 text-right font-medium">발주 박스</th>
+                        <th className="px-3 py-2 text-right font-medium">송장 수</th>
+                        <th className="px-3 py-2 text-right font-medium">내품수량 / 납품가능</th>
+                        <th className="px-3 py-2 text-left font-medium">상태</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recon.rows.map((r) => (
+                        <tr
+                          key={`${r.center}-${r.product}`}
+                          className={'border-t border-gray-100 ' + (r.ok ? '' : 'bg-red-50')}
+                        >
+                          <td className="px-3 py-2">{r.center}</td>
+                          <td className="px-3 py-2 max-w-[24rem] truncate" title={r.product}>
+                            {r.product}
+                          </td>
+                          <td className="px-3 py-2 text-right">{r.inOrder ? num(r.orderBoxes) : '—'}</td>
+                          <td
+                            className={
+                              'px-3 py-2 text-right ' +
+                              (r.inOrder && r.invoiceCount !== r.orderBoxes ? 'text-red-600 font-semibold' : '')
+                            }
+                          >
+                            {r.inInvoice ? num(r.invoiceCount) : '—'}
+                          </td>
+                          <td
+                            className={
+                              'px-3 py-2 text-right ' +
+                              (r.inOrder && r.inInvoice && r.invoiceUnits !== r.orderUnits
+                                ? 'text-red-600 font-semibold'
+                                : '')
+                            }
+                          >
+                            {r.inInvoice ? num(r.invoiceUnits) : '—'} / {r.inOrder ? num(r.orderUnits) : '—'}
+                          </td>
+                          <td className="px-3 py-2">
+                            {r.ok ? (
+                              <span className="text-green-700">✅ 일치</span>
+                            ) : !r.inOrder ? (
+                              <span className="text-red-600">❌ 발주에 없는 송장</span>
+                            ) : !r.inInvoice ? (
+                              <span className="text-red-600">❌ 송장 없음</span>
+                            ) : (
+                              <span className="text-red-600">
+                                ❌ 불일치 ({num(r.invoiceCount)}/{num(r.orderBoxes)})
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* 쉽먼트 등록용 송장 정리 */}
+                <div className="px-4 py-3 border-t border-gray-200">
+                  <div className="text-xs font-semibold text-gray-700 mb-2">쉽먼트 등록용 송장</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {invoiceBlocks.map((b) => (
+                      <div key={b.center} className="rounded border border-gray-200 p-3">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <span className="text-xs font-semibold">
+                            {b.center} · {num(b.count)}건
+                          </span>
+                          <button
+                            onClick={() => copyInvoiceNos(b.center, invoiceNosText(b))}
+                            className="px-2 py-1 rounded border border-gray-300 text-gray-700 text-[11px] hover:bg-gray-50"
+                          >
+                            {copiedCenter === b.center ? '✅ 복사됨' : '송장번호 복사'}
+                          </button>
+                        </div>
+                        {b.products.map((p) => (
+                          <div key={p.product} className="mb-2 last:mb-0">
+                            <div className="text-[11px] text-gray-500 truncate" title={p.product}>
+                              {p.product} ({p.invoiceNos.length})
+                            </div>
+                            <div className="text-[11px] text-gray-700 font-mono leading-relaxed break-all">
+                              {p.invoiceNos.join(', ')}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* 위킵분 — 조회용 */}
