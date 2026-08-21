@@ -419,23 +419,100 @@ export function renderPalletPlanSvg(plan: PalletPlan): string {
   )
 }
 
-/** 다운로드 파일명 — kurly_{YYYYMMDD}_pallet_plan.svg */
-export function palletPlanFileName(dueDate: string): string {
+/** 다운로드 파일명 — kurly_{YYYYMMDD}_pallet_plan.{ext} */
+export function palletPlanFileName(dueDate: string, ext = 'jpg'): string {
   const ymd = String(dueDate || '').replace(/[^0-9]/g, '').slice(0, 8)
-  return `kurly_${ymd || 'nodate'}_pallet_plan.svg`
+  return `kurly_${ymd || 'nodate'}_pallet_plan.${ext}`
 }
 
-/** SVG 문자열을 파일로 저장 */
-export function downloadPalletPlanSvg(svg: string, dueDate: string): void {
-  const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' })
+/** 생성한 SVG 의 width/height 속성 (캔버스 크기 산정용) */
+function svgSize(svg: string): { w: number; h: number } {
+  const m = /<svg[^>]*\bwidth="([\d.]+)"[^>]*\bheight="([\d.]+)"/.exec(svg)
+  return { w: m ? Number(m[1]) : 1200, h: m ? Number(m[2]) : 900 }
+}
+
+function saveBlob(blob: Blob, name: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = palletPlanFileName(dueDate)
+  a.download = name
   document.body.appendChild(a)
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+/**
+ * SVG → JPG 저장 (외부 라이브러리 없이 Image + canvas).
+ * JPG 는 투명을 지원하지 않으므로 흰 배경을 먼저 칠하고 그린다.
+ * 한글이 기본 폰트로 대체되어 깨지지 않도록 document.fonts.ready 를 기다린 뒤 렌더한다.
+ */
+export async function downloadPalletPlanJpg(
+  svg: string,
+  dueDate: string,
+  scale = 2,
+  quality = 0.92,
+): Promise<void> {
+  try {
+    await document.fonts?.ready
+  } catch {
+    /* 폰트 준비 실패는 무시하고 기본 폰트로 진행 */
+  }
+  const { w, h } = svgSize(svg)
+  const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }))
+  try {
+    const img = new Image()
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('도면 이미지를 만들지 못했습니다.'))
+      img.src = url
+    })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(w * scale)
+    canvas.height = Math.round(h * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('캔버스를 사용할 수 없습니다.')
+    ctx.fillStyle = '#FFFFFF' // JPG 투명 미지원 → 흰 배경 강제
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+    const jpg = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('JPG 변환에 실패했습니다.'))),
+        'image/jpeg',
+        quality,
+      ),
+    )
+    saveBlob(jpg, palletPlanFileName(dueDate, 'jpg'))
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
+// ── 위킵 전달용 파렛 안내 텍스트 ─────────────────────────────────
+/** 카톡 붙여넣기용 플레인 텍스트. 상품명은 상품마스터 별칭(없으면 발주 파일 상품명) */
+export function buildWikeepNotice(plan: PalletPlan): string {
+  const lines: string[] = []
+  lines.push(`[컬리 ${plan.dueDate || '(입고예정일 미상)'} 입고 — 파렛 안내]`)
+  lines.push(`총 ${plan.panels.length}PLT 준비 부탁드립니다.`)
+
+  for (const p of plan.panels) {
+    const via = p.viaLabel.startsWith('경유:') ? p.viaLabel : '직납'
+    lines.push('')
+    lines.push(`PLT ${p.plt} — ${p.dest} (${via})`)
+    for (const it of p.items) {
+      lines.push(`- ${it.fullName} ${cm(it.boxes)}박스 (${cm(it.units)}개)`)
+    }
+  }
+
+  const wrapped = plan.panels.filter((p) => p.singleBox).map((p) => `PLT ${p.plt}`)
+  lines.push('')
+  lines.push('※ 팔레트당 상품별 세로 구분 적재(다른 상품 위에 얹기 금지)')
+  if (wrapped.length) {
+    lines.push(`※ 1박스 단독 팔레트는 랩핑·결박 필수 (해당: ${wrapped.join(', ')})`)
+  }
+  lines.push('※ 배차 마감: 입고 전일 18:00')
+
+  return lines.join('\n')
 }
 
 /** 인라인 렌더 — renderPalletPlanSvg 결과를 그대로 붙인다(모든 텍스트는 esc 처리됨) */

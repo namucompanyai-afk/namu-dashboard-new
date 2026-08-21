@@ -17,7 +17,8 @@ import { parseKurlyFile } from '@/lib/b2b/kurlyFile'
 import {
   PalletPlanView,
   buildPalletPlan,
-  downloadPalletPlanSvg,
+  buildWikeepNotice,
+  downloadPalletPlanJpg,
   renderPalletPlanSvg,
 } from '@/lib/b2b/kurlyDiagram'
 import { buildLabelPlan, openLabelPrint } from '@/lib/b2b/kurlyLabel'
@@ -112,6 +113,30 @@ export default function B2BPage() {
     [orders, pallets, masterByCode],
   )
   const planSvg = useMemo(() => (plan.panels.length ? renderPalletPlanSvg(plan) : ''), [plan])
+
+  const [jpgBusy, setJpgBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const saveJpg = useCallback(async () => {
+    setJpgBusy(true)
+    try {
+      await downloadPalletPlanJpg(planSvg, plan.dueDate)
+    } catch (e: unknown) {
+      setFileError('JPG 저장 실패: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setJpgBusy(false)
+    }
+  }, [planSvg, plan.dueDate])
+
+  const copyNotice = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildWikeepNotice(plan))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setFileError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
+    }
+  }, [plan])
 
   // 박스 부착 라벨 (잡곡밥 등 기인쇄 상품은 제외)
   const labelPlan = useMemo(() => buildLabelPlan(orders, masterByCode), [orders, masterByCode])
@@ -421,12 +446,21 @@ export default function B2BPage() {
             <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
                 <h2 className="text-sm font-semibold">팔레트 적재 구성도</h2>
-                <button
-                  onClick={() => downloadPalletPlanSvg(planSvg, plan.dueDate)}
-                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700"
-                >
-                  SVG 다운로드
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={copyNotice}
+                    className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
+                  >
+                    {copied ? '✅ 복사됨' : '위킵 안내문 복사'}
+                  </button>
+                  <button
+                    onClick={saveJpg}
+                    disabled={jpgBusy}
+                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                  >
+                    {jpgBusy ? '변환 중…' : 'JPG 다운로드'}
+                  </button>
+                </div>
               </div>
               <div className="p-4 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
                 <PalletPlanView svg={planSvg} />
