@@ -507,6 +507,8 @@ export function buildWikeepNotice(plan: PalletPlan): string {
   const wrapped = plan.panels.filter((p) => p.singleBox).map((p) => `PLT ${p.plt}`)
   lines.push('')
   lines.push('※ 팔레트당 상품별 세로 구분 적재(다른 상품 위에 얹기 금지)')
+  lines.push('※ 제조·소비기한 확인 부탁드립니다 (발주서·라벨·실물 삼자 일치)')
+  lines.push('※ 부착 서류 필히 부착')
   if (wrapped.length) {
     lines.push(`※ 1박스 단독 팔레트는 랩핑·결박 필수 (해당: ${wrapped.join(', ')})`)
   }
