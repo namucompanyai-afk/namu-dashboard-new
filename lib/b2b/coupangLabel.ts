@@ -6,6 +6,7 @@
  */
 import { norm } from './kurly'
 import type { RoutedItem } from './coupang'
+import { groupByPo } from './coupangDiagram'
 
 /** 박스에 필수 항목이 기표기로 인쇄돼 나오는 상품 — 라벨 생성 제외 */
 export const PREPRINTED_BARCODES = [
@@ -221,6 +222,10 @@ export function buildCoupangWikeepNotice(items: RoutedItem[]): string {
   }
   if (has('8800295820800')) {
     lines.push('※ 즉석밥 24입: 겉박스 바코드 그대로 사용 (가림·부착 불필요)')
+  }
+  // 9박스 초과 발주는 택배 불가 → 팔레트 안내 (발주 단위)
+  for (const g of groupByPo(items).filter((g) => g.needsPallet)) {
+    lines.push(`※ ${g.poNumber}: 9박스 초과 — 팔레트(KPP/AJ) 적재·랩핑, 밀크런 접수 D-1 16:00`)
   }
   lines.push(`※ 입고예정일 ${dateLabel} 도착 기준 발송`)
   return lines.join('\n')

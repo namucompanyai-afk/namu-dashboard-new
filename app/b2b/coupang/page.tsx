@@ -21,6 +21,16 @@ import {
   buildCoupangWikeepNotice,
   openCoupangLabelPrint,
 } from '@/lib/b2b/coupangLabel'
+import {
+  CoupangPalletPlanView,
+  PALLET_BOX_LIMIT,
+  SHIP_FROM_GUIDE,
+  buildCenterAdvisories,
+  buildCoupangPalletPlan,
+  buildPalletGroups,
+  downloadCoupangPalletPlanJpg,
+  renderCoupangPalletPlanSvg,
+} from '@/lib/b2b/coupangDiagram'
 
 /**
  * B2B 발주 변환 — 쿠팡
@@ -139,6 +149,27 @@ export default function CoupangB2BPage() {
     () => [...new Set(rocket.filter((r) => r.boxes === null).map((r) => r.itemName))],
     [rocket],
   )
+
+  // 팔레트 필요 안내 — 발주번호 × 출고지 박스 합계 기준(운송수단 자동 판정 없음)
+  const palletGroups = useMemo(() => buildPalletGroups(routed), [routed])
+  const needPallet = useMemo(() => palletGroups.filter((g) => g.needsPallet), [palletGroups])
+  const advisories = useMemo(() => buildCenterAdvisories(palletGroups), [palletGroups])
+  const palletPlan = useMemo(() => buildCoupangPalletPlan(palletGroups), [palletGroups])
+  const palletSvg = useMemo(
+    () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
+    [palletPlan],
+  )
+  const [planJpgBusy, setPlanJpgBusy] = useState(false)
+  const savePlanJpg = useCallback(async () => {
+    setPlanJpgBusy(true)
+    try {
+      await downloadCoupangPalletPlanJpg(palletSvg, palletPlan.dueDate)
+    } catch (e: unknown) {
+      setFileError('JPG 저장 실패: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setPlanJpgBusy(false)
+    }
+  }, [palletSvg, palletPlan.dueDate])
 
   // 위킵분 — 부착 라벨(즉석밥은 박스 기표기라 제외) + 전달 안내문
   const labelPlan = useMemo(() => buildCoupangLabelPlan(wikeep), [wikeep])
@@ -333,6 +364,87 @@ export default function CoupangB2BPage() {
               </table>
             </div>
           </div>
+
+          {/* 팔레트 필요 안내 */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold">팔레트 필요 안내</h2>
+              <span className="text-xs text-gray-500">
+                발주 × 출고지 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm whitespace-nowrap">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">발주번호</th>
+                    <th className="px-3 py-2 text-left font-medium">센터</th>
+                    <th className="px-3 py-2 text-left font-medium">입고예정일</th>
+                    <th className="px-3 py-2 text-left font-medium">출고지</th>
+                    <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-left font-medium">판정</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {palletGroups.map((g) => (
+                    <tr
+                      key={`${g.poNumber}-${g.shipFrom}`}
+                      className={'border-t border-gray-100 ' + (g.needsPallet ? 'bg-amber-50' : '')}
+                    >
+                      <td className="px-3 py-2 text-gray-600">{g.poNumber}</td>
+                      <td className="px-3 py-2">{g.center}</td>
+                      <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
+                      <td className="px-3 py-2">{g.shipFrom}</td>
+                      <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
+                      <td className="px-3 py-2">
+                        {g.needsPallet ? (
+                          <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 text-xs font-semibold">
+                            팔레트 필요 ({PALLET_BOX_LIMIT}박스 초과)
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400">택배 가능</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs">
+              {advisories.map((a) => (
+                <p key={`${a.center}-${a.dueDate}`} className="text-amber-700">
+                  ※ {a.center} · {a.dueDate}: 동일 센터·동일 입고일 합산 {num(a.boxes)}박스 — 팔레트 여부 확인 권장
+                </p>
+              ))}
+              {[...new Set(needPallet.map((g) => g.shipFrom))].map((sf) => (
+                <p key={sf} className="text-gray-600">
+                  · {SHIP_FROM_GUIDE[sf]}
+                </p>
+              ))}
+              {needPallet.length === 0 && advisories.length === 0 && (
+                <p className="text-gray-400">전 발주 {PALLET_BOX_LIMIT}박스 이하 — 택배 발송 가능</p>
+              )}
+            </div>
+          </div>
+
+          {/* 팔레트 적재 구성도 — 팔레트 필요 발주만 */}
+          {palletSvg && (
+            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold">팔레트 적재 구성도</h2>
+                <button
+                  onClick={savePlanJpg}
+                  disabled={planJpgBusy}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                >
+                  {planJpgBusy ? '변환 중…' : 'JPG 다운로드'}
+                </button>
+              </div>
+              <div className="p-4">
+                <CoupangPalletPlanView svg={palletSvg} />
+              </div>
+            </div>
+          )}
 
           {/* 진도팜분 — 로켓 양식 */}
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
