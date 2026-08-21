@@ -1,0 +1,399 @@
+'use client'
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ProductMaster } from '@/lib/b2b/kurly'
+import {
+  buildRocketRows,
+  indexByBarcode,
+  rocketAoa,
+  rocketFileName,
+  rocketTsv,
+  routeItems,
+  summarizeCoupang,
+  todayKst,
+  type CenterAddress,
+  type CoupangOrderItem,
+} from '@/lib/b2b/coupang'
+import { parseCoupangFiles } from '@/lib/b2b/coupangFile'
+import { buildStyledXlsx, saveBlob } from '@/lib/b2b/xlsxStyled'
+
+/**
+ * B2B 발주 변환 — 쿠팡
+ *
+ * 발주서리스트_*.xlsx 여러 개 업로드 → 출고지(진도팜/위킵) 분기 →
+ * 진도팜분은 쿠팡 로켓 양식(TSV/xlsx), 위킵분은 조회용 표.
+ * 기준정보(상품마스터·센터 주소록)는 /api/b2b/sheets 가 read-only 로 내려준다.
+ */
+
+const num = (n: number) => n.toLocaleString('ko-KR')
+type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
+
+// 로켓 양식 열 너비 (받는분성명 … 송장)
+const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
+
+export default function CoupangB2BPage() {
+  const [products, setProducts] = useState<ProductMaster[]>([])
+  const [centers, setCenters] = useState<CenterAddress[]>([])
+  const [sheetState, setSheetState] = useState<SheetState>('idle')
+  const [sheetError, setSheetError] = useState('')
+
+  const [items, setItems] = useState<CoupangOrderItem[]>([])
+  const [fileNames, setFileNames] = useState<string[]>([])
+  const [skipped, setSkipped] = useState<string[]>([])
+  const [fileError, setFileError] = useState('')
+  const [dragOver, setDragOver] = useState(false)
+
+  const [madeDate, setMadeDate] = useState(todayKst())
+  const [copied, setCopied] = useState(false)
+
+  const loadSheets = useCallback(async () => {
+    setSheetState('loading')
+    setSheetError('')
+    try {
+      const res = await fetch('/api/b2b/sheets', { cache: 'no-store' })
+      const json = await res.json()
+      if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`)
+      setProducts(json.products || [])
+      setCenters(json.centers || [])
+      setSheetState('loaded')
+    } catch (e: unknown) {
+      setSheetError(e instanceof Error ? e.message : String(e))
+      setSheetState('error')
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSheets()
+  }, [loadSheets])
+
+  const parseFiles = useCallback(async (files: File[]) => {
+    setFileError('')
+    try {
+      const { items: parsed, skipped: skip } = await parseCoupangFiles(files)
+      if (parsed.length === 0) {
+        throw new Error('쿠팡 발주서에서 상품 행을 찾지 못했습니다. (발주서리스트_*.xlsx 인지 확인)')
+      }
+      setItems(parsed)
+      setFileNames(files.map((f) => f.name))
+      setSkipped(skip)
+    } catch (err: unknown) {
+      setItems([])
+      setFileNames([])
+      setSkipped([])
+      setFileError('발주서 파싱 실패: ' + (err instanceof Error ? err.message : String(err)))
+    }
+  }, [])
+
+  const productByBarcode = useMemo(() => indexByBarcode(products), [products])
+  const routed = useMemo(() => routeItems(items, productByBarcode), [items, productByBarcode])
+
+  const jindo = useMemo(() => routed.filter((r) => r.shipFrom === '진도팜'), [routed])
+  const wikeep = useMemo(() => routed.filter((r) => r.shipFrom === '위킵'), [routed])
+  const unknown = useMemo(() => routed.filter((r) => r.shipFrom === '미분류'), [routed])
+
+  const rocket = useMemo(
+    () => buildRocketRows(jindo, centers, madeDate),
+    [jindo, centers, madeDate],
+  )
+  const summary = useMemo(() => summarizeCoupang(routed), [routed])
+
+  const missingCenters = useMemo(
+    () => [...new Set(rocket.filter((r) => !r.centerKnown).map((r) => r.recipient))],
+    [rocket],
+  )
+  const missingBoxes = useMemo(
+    () => [...new Set(rocket.filter((r) => r.boxes === null).map((r) => r.itemName))],
+    [rocket],
+  )
+
+  const copyTsv = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(rocketTsv(rocket))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setFileError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
+    }
+  }, [rocket])
+
+  const downloadXlsx = useCallback(async () => {
+    try {
+      const blob = await buildStyledXlsx('대', rocketAoa(rocket), ROCKET_WIDTHS)
+      saveBlob(blob, rocketFileName(madeDate))
+    } catch (e: unknown) {
+      setFileError('xlsx 생성 실패: ' + (e instanceof Error ? e.message : String(e)))
+    }
+  }, [rocket, madeDate])
+
+  const totalQty = routed.reduce((s, r) => s + r.confirmQty, 0)
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold">B2B 발주 변환 — 쿠팡</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          발주서 업로드 → 출고지 분기(진도팜/위킵) · 로켓 양식 · 매출 요약
+        </p>
+      </div>
+
+      {/* 기준정보 + 업로드 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-lg border border-gray-200 bg-white p-6">
+          <div className="text-sm font-medium mb-1">① 기준정보 (구글시트 · 읽기 전용)</div>
+          <p className="text-xs text-gray-500 mb-3">상품마스터(출고지·박스입수·공급가) · 쿠팡 센터 주소록</p>
+          {sheetState === 'loading' && <p className="text-xs text-gray-500">⏳ 불러오는 중…</p>}
+          {sheetState === 'loaded' && (
+            <p className="text-xs text-gray-700">
+              ✅ 상품마스터 {products.length}행 · 센터 주소록 {centers.length}행
+            </p>
+          )}
+          {sheetState === 'error' && <p className="text-xs text-red-600 break-all">⚠️ {sheetError}</p>}
+          <button
+            onClick={loadSheets}
+            className="mt-3 px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700"
+          >
+            새로고침
+          </button>
+        </div>
+
+        <div
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragOver(true)
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragOver(false)
+            const fs = Array.from(e.dataTransfer.files || [])
+            if (fs.length) parseFiles(fs)
+          }}
+          className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+            dragOver ? 'border-teal-500 bg-teal-50' : 'border-gray-300 bg-white'
+          }`}
+        >
+          <div className="text-sm font-medium mb-1">② 쿠팡 발주서 (.xlsx · 여러 개)</div>
+          <p className="text-xs text-gray-500 mb-3">발주서리스트_*.xlsx 드래그앤드롭 또는 클릭</p>
+          <label className="inline-block px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs cursor-pointer hover:bg-gray-700">
+            파일 선택
+            <input
+              type="file"
+              accept=".xlsx,.xls"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const fs = Array.from(e.target.files || [])
+                if (fs.length) parseFiles(fs)
+                e.target.value = ''
+              }}
+            />
+          </label>
+          {fileNames.length > 0 && (
+            <p className="text-xs text-gray-700 mt-3">
+              📄 {fileNames.length}개 파일 · {routed.length}행 · 납품가능 {num(totalQty)}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {fileError && (
+        <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">{fileError}</div>
+      )}
+      {skipped.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-800 p-3 text-sm">
+          쿠팡 발주서가 아니어서 건너뛴 파일: {skipped.join(', ')}
+        </div>
+      )}
+      {unknown.length > 0 && (
+        <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
+          ⚠️ 출고지 미분류 {unknown.length}건 — 상품마스터 출고지 확인 필요:{' '}
+          {[...new Set(unknown.map((u) => `${u.productName}(${u.barcode || '바코드 없음'})`))].join(', ')}
+        </div>
+      )}
+      {missingCenters.length > 0 && (
+        <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
+          ⚠️ 센터 주소록 미등록 {missingCenters.length}곳 — 주소·전화 공란: {missingCenters.join(', ')}
+        </div>
+      )}
+      {missingBoxes.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-800 p-3 text-sm">
+          ⚠️ 상품마스터 미등록(박스 수 공란): {missingBoxes.join(', ')}
+        </div>
+      )}
+
+      {routed.length > 0 && (
+        <>
+          {/* 매출 요약 */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold">이번 발주 매출 요약</h2>
+              <span className="text-xs text-gray-500">
+                부가포함 매출 (과세 상품 ×1.1, 시트 쿠팡 공급가 기준)
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">상품</th>
+                    <th className="px-3 py-2 text-right font-medium">수량</th>
+                    <th className="px-3 py-2 text-right font-medium">공급단가</th>
+                    <th className="px-3 py-2 text-right font-medium">매출 합계</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.rows.map((r) => (
+                    <tr key={r.barcode || r.name} className="border-t border-gray-100">
+                      <td className="px-3 py-2">
+                        <div>{r.name}</div>
+                        <div className="text-[11px] text-gray-400">
+                          {r.barcode}
+                          {r.taxKnown ? (
+                            <span className="ml-1">· {r.taxType}</span>
+                          ) : (
+                            <span className="ml-1 text-amber-600">· 과세구분 미확인(면세 처리)</span>
+                          )}
+                          {!r.masterKnown && <span className="ml-1 text-red-600">· 마스터 미등록</span>}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">{num(r.qty)}</td>
+                      <td className="px-3 py-2 text-right">{num(r.unitPriceIncl)}</td>
+                      <td className="px-3 py-2 text-right">{num(r.totalIncl)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                    <td className="px-3 py-2">합계</td>
+                    <td className="px-3 py-2 text-right">{num(summary.totalQty)}</td>
+                    <td className="px-3 py-2 text-right text-gray-400">—</td>
+                    <td className="px-3 py-2 text-right">{num(summary.totalIncl)}원</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 진도팜분 — 로켓 양식 */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold">진도팜분 — 쿠팡 로켓 양식 ({rocket.length}행)</h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs text-gray-600">
+                  제조일자
+                  <input
+                    type="date"
+                    value={madeDate}
+                    onChange={(e) => setMadeDate(e.target.value)}
+                    className="ml-2 px-2 py-1 border border-gray-300 rounded text-xs"
+                  />
+                </label>
+                <button
+                  onClick={copyTsv}
+                  disabled={rocket.length === 0}
+                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300"
+                >
+                  {copied ? '✅ 복사됨' : 'TSV 복사'}
+                </button>
+                <button
+                  onClick={downloadXlsx}
+                  disabled={rocket.length === 0}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                >
+                  xlsx 다운로드
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm whitespace-nowrap">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">받는분성명</th>
+                    <th className="px-3 py-2 text-left font-medium">받는분전화번호</th>
+                    <th className="px-3 py-2 text-left font-medium">받는분주소</th>
+                    <th className="px-3 py-2 text-left font-medium">배송메세지1</th>
+                    <th className="px-3 py-2 text-left font-medium">내품명</th>
+                    <th className="px-3 py-2 text-right font-medium">내품수량</th>
+                    <th className="px-3 py-2 text-right font-medium">박스 수</th>
+                    <th className="px-3 py-2 text-left font-medium">제조일자</th>
+                    <th className="px-3 py-2 text-left font-medium">송장</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rocket.map((r, i) => (
+                    <tr
+                      key={`${r.poNumber}-${r.itemName}-${i}`}
+                      className={'border-t border-gray-100 ' + (r.centerKnown ? '' : 'bg-red-50')}
+                    >
+                      <td className="px-3 py-2">
+                        {r.recipient}
+                        {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">미등록</span>}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600">{r.phone}</td>
+                      <td className="px-3 py-2 max-w-[26rem] truncate" title={r.address}>
+                        {r.address}
+                      </td>
+                      <td className="px-3 py-2" />
+                      <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
+                        {r.itemName}
+                      </td>
+                      <td className="px-3 py-2 text-right">{num(r.itemQty)}</td>
+                      <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
+                        {r.boxes ?? '—'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
+                      <td className="px-3 py-2" />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
+              정렬: 입고예정일 → 발주번호 · 박스 수 = 올림(납품가능수량 ÷ 박스입수) · 배송메세지1·송장은 공란
+            </p>
+          </div>
+
+          {/* 위킵분 — 조회용 */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold">위킵분 ({wikeep.length}행)</h2>
+              <span className="text-xs text-gray-500">전달 양식 없음 · 조회용</span>
+            </div>
+            {wikeep.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-400">위킵 출고 상품 없음</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium">발주번호</th>
+                      <th className="px-3 py-2 text-left font-medium">센터</th>
+                      <th className="px-3 py-2 text-left font-medium">입고예정일</th>
+                      <th className="px-3 py-2 text-left font-medium">상품명</th>
+                      <th className="px-3 py-2 text-right font-medium">납품가능수량</th>
+                      <th className="px-3 py-2 text-right font-medium">박스 수</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {wikeep.map((r, i) => (
+                      <tr key={`${r.poNumber}-${r.barcode}-${i}`} className="border-t border-gray-100">
+                        <td className="px-3 py-2 text-gray-600">{r.poNumber}</td>
+                        <td className="px-3 py-2">{r.center}</td>
+                        <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
+                        <td className="px-3 py-2 max-w-[24rem] truncate" title={r.productName}>
+                          {r.productName}
+                        </td>
+                        <td className="px-3 py-2 text-right">{num(r.confirmQty)}</td>
+                        <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
+                          {r.boxes ?? '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

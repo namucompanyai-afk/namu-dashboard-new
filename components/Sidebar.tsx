@@ -269,9 +269,17 @@ export default function Sidebar() {
                   <span>🌾</span>
                   <span>진도팜 발주</span>
                 </Link>
-                <Link href="/b2b" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ' + (isActive('/b2b') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                <div className="px-3 pt-2 pb-1 text-xs text-gray-400 flex items-center gap-2">
                   <span>🛒</span>
                   <span>B2B 발주 변환</span>
+                </div>
+                <Link href="/b2b/kurly" className={'flex items-center gap-2 px-3 py-2 ml-4 rounded-lg text-sm transition-colors ' + (isActive('/b2b/kurly') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🟣</span>
+                  <span>컬리</span>
+                </Link>
+                <Link href="/b2b/coupang" className={'flex items-center gap-2 px-3 py-2 ml-4 rounded-lg text-sm transition-colors ' + (isActive('/b2b/coupang') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>🔵</span>
+                  <span>쿠팡</span>
                 </Link>
               </div>
             )}
