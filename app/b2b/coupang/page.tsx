@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ProductMaster } from '@/lib/b2b/kurly'
 import {
   buildRocketRows,
@@ -77,6 +77,8 @@ export default function CoupangB2BPage() {
       setItems(parsed)
       setFileNames(files.map((f) => f.name))
       setSkipped(skip)
+      setHistoryMsg('')
+      setHistorySaved(false)
     } catch (err: unknown) {
       setItems([])
       setFileNames([])
@@ -98,28 +100,32 @@ export default function CoupangB2BPage() {
   )
   const summary = useMemo(() => summarizeCoupang(routed), [routed])
 
-  // 발주 이력 자동 저장 — 파싱 + 기준정보가 모두 준비되면 1회 POST.
+  // 발주 이력 저장 — 버튼을 눌렀을 때만 기록한다(업로드만으로는 시트에 쓰지 않음).
   // 실패해도 변환 기능은 그대로 동작해야 하므로 비차단(작은 문구만).
   const [historyMsg, setHistoryMsg] = useState('')
-  const postedRef = useRef('')
-  useEffect(() => {
-    if (routed.length === 0 || products.length === 0) return
-    const key = `${fileNames.join(',')}|${routed.length}|${products.length}`
-    if (postedRef.current === key) return
-    postedRef.current = key
+  const [historySaving, setHistorySaving] = useState(false)
+  const [historySaved, setHistorySaved] = useState(false)
+
+  const saveHistory = useCallback(async () => {
+    setHistorySaving(true)
     setHistoryMsg('이력 저장 중…')
-    fetch('/api/b2b/history', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows: buildCoupangHistory(routed) }),
-    })
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j?.ok) throw new Error(j?.error || '실패')
-        setHistoryMsg(historyMessage(j.added ?? 0, j.updated ?? 0))
+    try {
+      const res = await fetch('/api/b2b/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: buildCoupangHistory(routed) }),
       })
-      .catch(() => setHistoryMsg('이력 저장 실패 — 변환 기능에는 영향 없음'))
-  }, [routed, products, fileNames])
+      const j = await res.json()
+      if (!j?.ok) throw new Error(j?.error || '실패')
+      setHistoryMsg(historyMessage(j.added ?? 0, j.updated ?? 0))
+      setHistorySaved(true)
+    } catch {
+      setHistoryMsg('이력 저장 실패 — 변환 기능에는 영향 없음')
+      setHistorySaved(false)
+    } finally {
+      setHistorySaving(false)
+    }
+  }, [routed])
 
   const missingCenters = useMemo(
     () => [...new Set(rocket.filter((r) => !r.centerKnown).map((r) => r.recipient))],
@@ -213,9 +219,18 @@ export default function CoupangB2BPage() {
             />
           </label>
           {fileNames.length > 0 && (
-            <p className="text-xs text-gray-700 mt-3">
-              📄 {fileNames.length}개 파일 · {routed.length}행 · 납품가능 {num(totalQty)}
-            </p>
+            <>
+              <p className="text-xs text-gray-700 mt-3">
+                📄 {fileNames.length}개 파일 · {routed.length}행 · 납품가능 {num(totalQty)}
+              </p>
+              <button
+                onClick={saveHistory}
+                disabled={historySaving || routed.length === 0 || products.length === 0}
+                className="mt-2 px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
+              >
+                {historySaving ? '저장 중…' : historySaved ? '✅ 저장됨 (다시 저장)' : '세일즈 히스토리 저장'}
+              </button>
+            </>
           )}
           {historyMsg && (
             <p

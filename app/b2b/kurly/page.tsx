@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ORDER_SHEET_NAME,
   MAX_SKU_PER_PLT,
@@ -26,9 +26,9 @@ import { summarizeOrders } from '@/lib/b2b/kurlySummary'
 import { buildKurlyHistory, historyMessage } from '@/lib/b2b/history'
 
 /**
- * B2B 발주 변환 — 1차: 컬리
+ * B2B 발주 변환 — 컬리
  *
- * 구글시트(상품마스터 · 컬리 밀크런 가격표)는 /api/b2b/kurly 가 서비스 계정으로 read-only 로드.
+ * 구글시트(상품마스터 · 컬리 밀크런 가격표)는 /api/b2b/sheets 가 서비스 계정으로 read-only 로드.
  * 컬리 발주 xlsx 는 브라우저에서 파싱한다(!ref 함정 보정은 lib/b2b/kurlyFile).
  */
 
@@ -81,6 +81,8 @@ export default function B2BPage() {
       setOrders(parsed)
       setFileName(file.name)
       setOpenDests([])
+      setHistoryMsg('')
+      setHistorySaved(false)
     } catch (err: unknown) {
       setOrders([])
       setFileName('')
@@ -112,29 +114,32 @@ export default function B2BPage() {
   // 발주 요약 — 금액은 발주 파일 값 그대로(시트 공급가로 재계산 안 함)
   const summary = useMemo(() => summarizeOrders(orders, masterByCode), [orders, masterByCode])
 
-  // 발주 이력 자동 저장 — 파싱 + 기준정보가 모두 준비되면 1회 POST.
+  // 발주 이력 저장 — 버튼을 눌렀을 때만 기록한다(업로드만으로는 시트에 쓰지 않음).
   // 실패해도 변환 기능은 그대로 동작해야 하므로 비차단(에러 배너 대신 작은 문구만).
   const [historyMsg, setHistoryMsg] = useState('')
-  const postedRef = useRef('')
-  useEffect(() => {
-    if (orders.length === 0 || products.length === 0) return
-    const key = `${fileName}|${orders.length}|${products.length}`
-    if (postedRef.current === key) return
-    postedRef.current = key
-    const rows = buildKurlyHistory(orders, masterByCode)
+  const [historySaving, setHistorySaving] = useState(false)
+  const [historySaved, setHistorySaved] = useState(false)
+
+  const saveHistory = useCallback(async () => {
+    setHistorySaving(true)
     setHistoryMsg('이력 저장 중…')
-    fetch('/api/b2b/history', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rows }),
-    })
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j?.ok) throw new Error(j?.error || '실패')
-        setHistoryMsg(historyMessage(j.added ?? 0, j.updated ?? 0))
+    try {
+      const res = await fetch('/api/b2b/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows: buildKurlyHistory(orders, masterByCode) }),
       })
-      .catch(() => setHistoryMsg('이력 저장 실패 — 변환 기능에는 영향 없음'))
-  }, [orders, products, masterByCode, fileName])
+      const j = await res.json()
+      if (!j?.ok) throw new Error(j?.error || '실패')
+      setHistoryMsg(historyMessage(j.added ?? 0, j.updated ?? 0))
+      setHistorySaved(true)
+    } catch {
+      setHistoryMsg('이력 저장 실패 — 변환 기능에는 영향 없음')
+      setHistorySaved(false)
+    } finally {
+      setHistorySaving(false)
+    }
+  }, [orders, masterByCode])
 
   // 적재 구성도 — 위 팔레트 산정 결과를 소비만 한다(계산 로직 재구현 없음)
   const plan = useMemo(
@@ -238,9 +243,18 @@ export default function B2BPage() {
             />
           </label>
           {fileName && (
-            <p className="text-xs text-gray-700 mt-3">
-              📄 {fileName} · {orders.length}행 · {won(totals.boxes)}박스 / {won(totals.units)}낱개
-            </p>
+            <>
+              <p className="text-xs text-gray-700 mt-3">
+                📄 {fileName} · {orders.length}행 · {won(totals.boxes)}박스 / {won(totals.units)}낱개
+              </p>
+              <button
+                onClick={saveHistory}
+                disabled={historySaving || orders.length === 0 || products.length === 0}
+                className="mt-2 px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
+              >
+                {historySaving ? '저장 중…' : historySaved ? '✅ 저장됨 (다시 저장)' : '세일즈 히스토리 저장'}
+              </button>
+            </>
           )}
           {historyMsg && (
             <p
