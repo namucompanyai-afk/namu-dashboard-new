@@ -186,6 +186,9 @@ export type KurlyOrderRow = {
   boxCount: number // 발주수량 = 박스 수
   totalUnits: number // 총 발주수량 = 낱개 수
   expiry: string // 소비기한(유통기한)
+  // 발주 파일의 실제 금액(프로모션 할인 반영분) — 시트 공급가로 재계산하지 않는다
+  supplyUnit: number // 공급단가
+  supplyTotal: number // 공급가
 }
 
 export const ORDER_SHEET_NAME = '발주 내역'
@@ -203,6 +206,8 @@ const ORDER_COLS: Record<keyof KurlyOrderRow, string[]> = {
   boxCount: ['발주수량'],
   totalUnits: ['총발주수량'],
   expiry: ['소비기한(유통기한)', '소비기한'],
+  supplyUnit: ['공급단가'],
+  supplyTotal: ['공급가'],
 }
 
 /** 엑셀 날짜(Date·serial·문자열) → YYYY-MM-DD */
@@ -253,6 +258,8 @@ export function parseKurlyOrderRows(rows: unknown[][]): KurlyOrderRow[] {
       boxCount: toNum(at(r, c.boxCount)),
       totalUnits: toNum(at(r, c.totalUnits)),
       expiry: fmtDate(at(r, c.expiry)),
+      supplyUnit: toNum(at(r, c.supplyUnit)),
+      supplyTotal: toNum(at(r, c.supplyTotal)),
     })
   }
   return out

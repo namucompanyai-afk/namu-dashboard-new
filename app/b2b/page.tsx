@@ -22,6 +22,7 @@ import {
   renderPalletPlanSvg,
 } from '@/lib/b2b/kurlyDiagram'
 import { buildLabelPlan, openLabelPrint } from '@/lib/b2b/kurlyLabel'
+import { summarizeOrders } from '@/lib/b2b/kurlySummary'
 
 /**
  * B2B 발주 변환 — 1차: 컬리
@@ -106,6 +107,9 @@ export default function B2BPage() {
   )
 
   const costLines = [cost.vehicle, cost.via, cost.moveKimpo, cost.moveChangwon]
+
+  // 발주 요약 — 금액은 발주 파일 값 그대로(시트 공급가로 재계산 안 함)
+  const summary = useMemo(() => summarizeOrders(orders, masterByCode), [orders, masterByCode])
 
   // 적재 구성도 — 위 팔레트 산정 결과를 소비만 한다(계산 로직 재구현 없음)
   const plan = useMemo(
@@ -236,6 +240,50 @@ export default function B2BPage() {
 
       {orders.length > 0 && (
         <>
+          {/* 이번 발주 요약 */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+              <h2 className="text-sm font-semibold">이번 발주 요약</h2>
+              <span className="text-xs text-gray-500">금액은 발주 파일 값 그대로 (프로모션 할인 반영)</span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">상품</th>
+                    <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-right font-medium">낱개</th>
+                    <th className="px-3 py-2 text-right font-medium">공급단가</th>
+                    <th className="px-3 py-2 text-right font-medium">공급가 합계</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.rows.map((r) => (
+                    <tr key={r.masterCode} className="border-t border-gray-100">
+                      <td className="px-3 py-2">
+                        <div>{r.name}</div>
+                        <div className="text-[11px] text-gray-400">{r.masterCode}</div>
+                      </td>
+                      <td className="px-3 py-2 text-right">{won(r.boxes)}</td>
+                      <td className="px-3 py-2 text-right">{won(r.units)}</td>
+                      <td className="px-3 py-2 text-right">
+                        {r.unitPrices.length === 0 ? '—' : r.unitPrices.map(won).join(' / ')}
+                      </td>
+                      <td className="px-3 py-2 text-right">{won(r.supplyTotal)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                    <td className="px-3 py-2">합계</td>
+                    <td className="px-3 py-2 text-right">{won(summary.totalBoxes)}</td>
+                    <td className="px-3 py-2 text-right">{won(summary.totalUnits)}</td>
+                    <td className="px-3 py-2 text-right text-gray-400">—</td>
+                    <td className="px-3 py-2 text-right">{won(summary.totalSupply)}원</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* 팔레트 요약 + 운송비 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
