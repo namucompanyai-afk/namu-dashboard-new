@@ -9,6 +9,7 @@
  */
 import type { KurlyOrderRow, PalletGroup, ProductMaster } from './kurly'
 import { norm } from './kurly'
+import { PREPRINTED_MASTER_CODES } from './kurlyLabel'
 
 // ── 적재 가정 (치수 데이터 없음 → 도면에 가정값 명시) ─────────────
 export const BOX_MM = 400 // 박스 높이 가정
@@ -509,6 +510,13 @@ export function buildWikeepNotice(plan: PalletPlan): string {
   lines.push('※ 팔레트당 상품별 세로 구분 적재(다른 상품 위에 얹기 금지)')
   lines.push('※ 제조·소비기한 확인 부탁드립니다 (발주서·라벨·실물 삼자 일치)')
   lines.push('※ 부착 서류 필히 부착')
+  // 잡곡밥은 겉박스에 기존 바코드가 있어 오스캔 위험 — 발주에 포함될 때만 안내
+  const hasPreprinted = plan.panels.some((p) =>
+    p.items.some((it) => PREPRINTED_MASTER_CODES.some((c) => norm(c) === norm(it.masterCode))),
+  )
+  if (hasPreprinted) {
+    lines.push('※ 잡곡밥: 겉박스 기존 바코드 가림 처리 필수 (오스캔 방지)')
+  }
   if (wrapped.length) {
     lines.push(`※ 1박스 단독 팔레트는 랩핑·결박 필수 (해당: ${wrapped.join(', ')})`)
   }

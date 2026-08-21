@@ -205,13 +205,23 @@ export function buildCoupangWikeepNotice(items: RoutedItem[]): string {
     lines.push(`${head.center} (발주 ${head.poNumber})`)
     for (const it of group) {
       const name = it.master?.alias || it.productName
-      lines.push(`- ${name} ${cm(it.boxes ?? 0)}박스 (${cm(it.confirmQty)}개)`)
+      lines.push(`- ${name} ${cm(it.boxes ?? 0)}박스`)
     }
   }
 
+  // 꼬리 주의문 — 부착 서류·기표기 안내는 해당 상품이 실제로 있을 때만 낸다
+  const hasLabelTarget = items.some((it) => !preprintedOf(it.barcode) && (it.boxes ?? 0) > 0)
+  const has = (code: string) => items.some((it) => norm(it.barcode) === norm(code))
+
   lines.push('')
   lines.push('※ 쉽먼트 라벨 부착 확인')
-  lines.push('※ 부착 서류 필히 부착 (즉석밥 제외 — 박스 기표기)')
+  if (hasLabelTarget) lines.push('※ 부착 서류 필히 부착 (즉석밥은 박스 기표기로 제외)')
+  if (has('8800295820794')) {
+    lines.push('※ 즉석밥 6입: 겉박스 기존 바코드 가림 처리 필수 (오스캔 방지)')
+  }
+  if (has('8800295820800')) {
+    lines.push('※ 즉석밥 24입: 겉박스 바코드 그대로 사용 (가림·부착 불필요)')
+  }
   lines.push(`※ 입고예정일 ${dateLabel} 도착 기준 발송`)
   return lines.join('\n')
 }
