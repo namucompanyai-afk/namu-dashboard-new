@@ -691,8 +691,10 @@ export default function CoupangB2BPage() {
                             <div className="text-[11px] text-gray-500 truncate" title={p.product}>
                               {p.product} ({p.invoiceNos.length})
                             </div>
-                            <div className="text-[11px] text-gray-700 font-mono leading-relaxed break-all">
-                              {p.invoiceNos.join(', ')}
+                            <div className="text-[11px] text-gray-700 font-mono leading-relaxed">
+                              {p.invoiceNos.map((no) => (
+                                <div key={no}>{no}</div>
+                              ))}
                             </div>
                           </div>
                         ))}

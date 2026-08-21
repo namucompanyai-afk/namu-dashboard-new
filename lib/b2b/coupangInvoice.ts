@@ -204,7 +204,12 @@ export function buildInvoiceBlocks(invoices: InvoiceRow[]): CenterInvoiceBlock[]
   return [...byCenter.values()]
 }
 
-/** 블록의 송장번호 — 줄바꿈 구분 플레인 텍스트 */
+/**
+ * 블록의 송장번호 — 상품 헤더 줄 + 송장 1건당 1줄, 상품 블록 사이 빈 줄 1개.
+ * 엑셀에 붙여넣으면 셀당 송장 1개가 되도록 번호 앞뒤 공백을 두지 않는다.
+ */
 export function invoiceNosText(block: CenterInvoiceBlock): string {
-  return block.products.flatMap((p) => p.invoiceNos).join('\n')
+  return block.products
+    .map((p) => [`${p.product} (${p.invoiceNos.length})`, ...p.invoiceNos].join('\n'))
+    .join('\n\n')
 }
