@@ -14,6 +14,12 @@ import {
   type ProductMaster,
 } from '@/lib/b2b/kurly'
 import { parseKurlyFile } from '@/lib/b2b/kurlyFile'
+import {
+  PalletPlanView,
+  buildPalletPlan,
+  downloadPalletPlanSvg,
+  renderPalletPlanSvg,
+} from '@/lib/b2b/kurlyDiagram'
 
 /**
  * B2B 발주 변환 — 1차: 컬리
@@ -93,6 +99,13 @@ export default function B2BPage() {
   )
 
   const costLines = [cost.vehicle, cost.via, cost.moveKimpo, cost.moveChangwon]
+
+  // 적재 구성도 — 위 팔레트 산정 결과를 소비만 한다(계산 로직 재구현 없음)
+  const plan = useMemo(
+    () => buildPalletPlan(orders, pallets, masterByCode),
+    [orders, pallets, masterByCode],
+  )
+  const planSvg = useMemo(() => (plan.panels.length ? renderPalletPlanSvg(plan) : ''), [plan])
 
   return (
     <div className="space-y-6">
@@ -320,6 +333,29 @@ export default function B2BPage() {
               </table>
             </div>
           </div>
+
+          {/* 팔레트 적재 구성도 */}
+          {planSvg && (
+            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold">팔레트 적재 구성도</h2>
+                <button
+                  onClick={() => downloadPalletPlanSvg(planSvg, plan.dueDate)}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700"
+                >
+                  SVG 다운로드
+                </button>
+              </div>
+              <div className="p-4 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
+                <PalletPlanView svg={planSvg} />
+                <div className="text-xs text-gray-600 space-y-2 xl:border-l xl:border-gray-100 xl:pl-4">
+                  <p>① 3PLT 이상 → 2.5톤 이상 배차</p>
+                  <p>② 포털 파렛트수: 같은 입고지 첫 발주만 1, 나머지 0</p>
+                  <p>③ 배차 마감 입고 전일 18:00 / 변경 불가 전일 17:00 / 배차 문자 전일 21:30경</p>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
