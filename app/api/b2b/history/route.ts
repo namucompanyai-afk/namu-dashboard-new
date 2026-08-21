@@ -81,6 +81,27 @@ const padRow = (r: unknown[]): (string | number)[] =>
     return typeof v === 'number' ? v : String(v ?? '')
   })
 
+/** 기록된 이력 조회 (읽기 전용 — '발주 이력' 탭만) */
+export async function GET() {
+  try {
+    const sheets = getSheets()
+    const cur = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: RANGE_ALL,
+      valueRenderOption: 'UNFORMATTED_VALUE',
+    })
+    const vals = (cur.data.values as unknown[][]) || []
+    const hasHeader = (vals[0] || []).some((v) => String(v ?? '').trim() !== '')
+    return NextResponse.json(
+      { ok: true, header: hasHeader ? vals[0] : [], rows: hasHeader ? vals.slice(1) : [] },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '서버 오류'
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 })
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json()
