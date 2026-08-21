@@ -7,7 +7,6 @@ import {
   indexByBarcode,
   rocketAoa,
   rocketFileName,
-  rocketTsv,
   routeItems,
   summarizeCoupang,
   todayKst,
@@ -17,6 +16,11 @@ import {
 import { parseCoupangFiles } from '@/lib/b2b/coupangFile'
 import { buildStyledXlsx, saveBlob } from '@/lib/b2b/xlsxStyled'
 import { buildCoupangHistory, historyMessage } from '@/lib/b2b/history'
+import {
+  buildCoupangLabelPlan,
+  buildCoupangWikeepNotice,
+  openCoupangLabelPrint,
+} from '@/lib/b2b/coupangLabel'
 
 /**
  * B2B 발주 변환 — 쿠팡
@@ -136,15 +140,24 @@ export default function CoupangB2BPage() {
     [rocket],
   )
 
-  const copyTsv = useCallback(async () => {
+  // 위킵분 — 부착 라벨(즉석밥은 박스 기표기라 제외) + 전달 안내문
+  const labelPlan = useMemo(() => buildCoupangLabelPlan(wikeep), [wikeep])
+
+  const printLabels = useCallback(() => {
+    if (!openCoupangLabelPrint(labelPlan)) {
+      setFileError('팝업이 차단되어 인쇄 창을 열지 못했습니다. 브라우저 팝업 허용 후 다시 시도해 주세요.')
+    }
+  }, [labelPlan])
+
+  const copyNotice = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(rocketTsv(rocket))
+      await navigator.clipboard.writeText(buildCoupangWikeepNotice(wikeep))
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
       setFileError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
     }
-  }, [rocket])
+  }, [wikeep])
 
   const downloadXlsx = useCallback(async () => {
     try {
@@ -336,13 +349,6 @@ export default function CoupangB2BPage() {
                   />
                 </label>
                 <button
-                  onClick={copyTsv}
-                  disabled={rocket.length === 0}
-                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300"
-                >
-                  {copied ? '✅ 복사됨' : 'TSV 복사'}
-                </button>
-                <button
                   onClick={downloadXlsx}
                   disabled={rocket.length === 0}
                   className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
@@ -402,9 +408,29 @@ export default function CoupangB2BPage() {
 
           {/* 위킵분 — 조회용 */}
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-sm font-semibold">위킵분 ({wikeep.length}행)</h2>
-              <span className="text-xs text-gray-500">전달 양식 없음 · 조회용</span>
+              <div className="flex flex-wrap items-center gap-3">
+                {labelPlan.skipped.map((s) => (
+                  <span key={s.label} className="text-xs text-amber-700">
+                    {s.label} {num(s.boxes)}박스 라벨 생략(기인쇄)
+                  </span>
+                ))}
+                <button
+                  onClick={copyNotice}
+                  disabled={wikeep.length === 0}
+                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
+                >
+                  {copied ? '✅ 복사됨' : '위킵 안내문 복사'}
+                </button>
+                <button
+                  onClick={printLabels}
+                  disabled={labelPlan.labels.length === 0}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                >
+                  부착 라벨 인쇄 ({labelPlan.labels.length}장)
+                </button>
+              </div>
             </div>
             {wikeep.length === 0 ? (
               <p className="px-4 py-6 text-sm text-gray-400">위킵 출고 상품 없음</p>
