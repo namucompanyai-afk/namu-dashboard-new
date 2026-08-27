@@ -56,7 +56,7 @@ export async function GET(req: Request) {
     if (has(TAB_PRODUCT)) wanted.push({ tab: TAB_PRODUCT, range: `${quote(TAB_PRODUCT)}!A1:Z` })
     if (has(TAB_PRICE)) wanted.push({ tab: TAB_PRICE, range: `${quote(TAB_PRICE)}!A1:J` })
     if (has(TAB_CENTER)) wanted.push({ tab: TAB_CENTER, range: `${quote(TAB_CENTER)}!A1:Z` })
-    if (has(TAB_CP_PRICE)) wanted.push({ tab: TAB_CP_PRICE, range: `${quote(TAB_CP_PRICE)}!A1:AZ` })
+    if (has(TAB_CP_PRICE)) wanted.push({ tab: TAB_CP_PRICE, range: `${quote(TAB_CP_PRICE)}!A1:ZZ` })
 
     const res = wanted.length
       ? await sheets.spreadsheets.values.batchGet({
