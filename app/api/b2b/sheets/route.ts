@@ -21,6 +21,7 @@ const SHEET_ID = '1nujXWT95QWnYBX1LpSAL1hLL3Uv8MBt7kJDz8i6WbFU'
 const TAB_PRODUCT = '상품마스터'
 const TAB_PRICE = '컬리 밀크런 가격표'
 const TAB_CENTER = '쿠팡 센터 주소록'
+const TAB_CP_PRICE = '쿠팡 밀크런 가격표'
 
 const quote = (tab: string) => `'${tab.replace(/'/g, "''")}'`
 
@@ -55,6 +56,7 @@ export async function GET(req: Request) {
     if (has(TAB_PRODUCT)) wanted.push({ tab: TAB_PRODUCT, range: `${quote(TAB_PRODUCT)}!A1:Z` })
     if (has(TAB_PRICE)) wanted.push({ tab: TAB_PRICE, range: `${quote(TAB_PRICE)}!A1:J` })
     if (has(TAB_CENTER)) wanted.push({ tab: TAB_CENTER, range: `${quote(TAB_CENTER)}!A1:Z` })
+    if (has(TAB_CP_PRICE)) wanted.push({ tab: TAB_CP_PRICE, range: `${quote(TAB_CP_PRICE)}!A1:AZ` })
 
     const res = wanted.length
       ? await sheets.spreadsheets.values.batchGet({
@@ -78,7 +80,7 @@ export async function GET(req: Request) {
       products: parseProductMaster(productRows),
       prices: parseMilkrunPrices(valuesOf(TAB_PRICE)),
       centers: parseCenters(centerRows),
-      missingTabs: [TAB_PRODUCT, TAB_PRICE, TAB_CENTER].filter((t) => !has(t)),
+      missingTabs: [TAB_PRODUCT, TAB_PRICE, TAB_CENTER, TAB_CP_PRICE].filter((t) => !has(t)),
     }
     if (debug) {
       body.debug = {
@@ -86,6 +88,7 @@ export async function GET(req: Request) {
         productHeader: productRows[0] || [],
         centerHeader: centerRows[0] || [],
         centerSample: centerRows.slice(1, 4),
+        coupangPriceRows: valuesOf(TAB_CP_PRICE),
       }
     }
 
