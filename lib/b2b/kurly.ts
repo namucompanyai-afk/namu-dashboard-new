@@ -37,6 +37,9 @@ export type ProductMaster = {
   kurlySupply: number // 컬리 공급가
   kurlyDiscount: number // 컬리 할인 공급가
   barcode: string // 바코드
+  boxW: number // 박스가로(mm) — 미등록이면 0
+  boxD: number // 박스세로(mm) — 미등록이면 0
+  boxH: number // 박스높이(mm) — 미등록이면 0
 }
 
 const PRODUCT_COLS: Record<keyof ProductMaster, string[]> = {
@@ -53,6 +56,9 @@ const PRODUCT_COLS: Record<keyof ProductMaster, string[]> = {
   kurlySupply: ['컬리공급가'],
   kurlyDiscount: ['컬리할인공급가'],
   barcode: ['바코드'],
+  boxW: ['박스가로mm', '박스가로'],
+  boxD: ['박스세로mm', '박스세로'],
+  boxH: ['박스높이mm', '박스높이'],
 }
 
 /**
@@ -100,6 +106,9 @@ export function parseProductMaster(rows: unknown[][]): ProductMaster[] {
       kurlySupply: toNum(at(r, c.kurlySupply)),
       kurlyDiscount: toNum(at(r, c.kurlyDiscount)),
       barcode: trim(at(r, c.barcode)),
+      boxW: toNum(at(r, c.boxW)),
+      boxD: toNum(at(r, c.boxD)),
+      boxH: toNum(at(r, c.boxH)),
     })
   }
   return out
