@@ -161,6 +161,7 @@ export default function CoupangB2BPage() {
   const palletGroups = useMemo(() => buildPalletGroups(routed), [routed])
   const needPallet = useMemo(() => palletGroups.filter((g) => g.needsPallet), [palletGroups])
   const advisories = useMemo(() => buildCenterAdvisories(palletGroups), [palletGroups])
+  const [openPos, setOpenPos] = useState<string[]>([]) // 팔레트 안내 펼친 발주(발주번호|출고지)
   const palletPlan = useMemo(() => buildCoupangPalletPlan(palletGroups), [palletGroups])
   const palletSvg = useMemo(
     () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
@@ -426,27 +427,74 @@ export default function CoupangB2BPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {palletGroups.map((g) => (
-                    <tr
-                      key={`${g.poNumber}-${g.shipFrom}`}
-                      className={'border-t border-gray-100 ' + (g.needsPallet ? 'bg-amber-50' : '')}
-                    >
-                      <td className="px-3 py-2 text-gray-600">{g.poNumber}</td>
-                      <td className="px-3 py-2">{g.center}</td>
-                      <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
-                      <td className="px-3 py-2">{g.shipFrom}</td>
-                      <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
-                      <td className="px-3 py-2">
-                        {g.needsPallet ? (
-                          <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 text-xs font-semibold">
-                            팔레트 필요 ({PALLET_BOX_LIMIT}박스 초과)
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400">택배 가능</span>
+                  {palletGroups.map((g) => {
+                    const key = `${g.poNumber}|${g.shipFrom}`
+                    const open = openPos.includes(key)
+                    return (
+                      <React.Fragment key={key}>
+                        <tr
+                          onClick={() =>
+                            setOpenPos((prev) =>
+                              prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+                            )
+                          }
+                          aria-expanded={open}
+                          className={
+                            'border-t border-gray-100 cursor-pointer hover:bg-gray-50 ' +
+                            (g.needsPallet ? 'bg-amber-50' : '')
+                          }
+                        >
+                          <td className="px-3 py-2 text-gray-600">
+                            <span className="inline-block w-4 text-gray-400">{open ? '▾' : '▸'}</span>
+                            {g.poNumber}
+                          </td>
+                          <td className="px-3 py-2">{g.center}</td>
+                          <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
+                          <td className="px-3 py-2">{g.shipFrom}</td>
+                          <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
+                          <td className="px-3 py-2">
+                            {g.needsPallet ? (
+                              <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 text-xs font-semibold">
+                                팔레트 필요 ({PALLET_BOX_LIMIT}박스 초과)
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">택배 가능</span>
+                            )}
+                          </td>
+                        </tr>
+                        {open && (
+                          <tr className="border-t border-gray-100">
+                            <td colSpan={6} className="px-3 py-3 bg-gray-50">
+                              <table className="w-full text-xs">
+                                <thead className="text-gray-500">
+                                  <tr>
+                                    <th className="px-2 py-1 text-left font-medium">상품명</th>
+                                    <th className="px-2 py-1 text-right font-medium">납품가능수량</th>
+                                    <th className="px-2 py-1 text-right font-medium">박스 수</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {g.items.map((it, i) => (
+                                    <tr key={`${it.barcode}-${i}`} className="border-t border-gray-200">
+                                      <td className="px-2 py-1">{it.productName}</td>
+                                      <td className="px-2 py-1 text-right">{num(it.confirmQty)}</td>
+                                      <td className="px-2 py-1 text-right">
+                                        {it.boxes === null ? (
+                                          <span className="text-amber-600">미등록</span>
+                                        ) : (
+                                          num(it.boxes)
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
                         )}
-                      </td>
-                    </tr>
-                  ))}
+                      </React.Fragment>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
