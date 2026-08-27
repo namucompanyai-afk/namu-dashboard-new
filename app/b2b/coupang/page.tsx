@@ -571,6 +571,9 @@ export default function CoupangB2BPage() {
               <p className="text-gray-500">
                 · 운임은 밀크런 요금표 기준 참고용 — 진도 출고는 밀크런 불가, 직접 배차 견적 별도
               </p>
+              <p className="text-gray-500">
+                · PLT 수는 {BOXES_PER_PLT}박스 올림 기준 — SKU 구성에 따라 실제 팔레트 수는 적재 구성도 참고
+              </p>
             </div>
           </div>
 

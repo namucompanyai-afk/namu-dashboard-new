@@ -1,9 +1,10 @@
 /**
  * 쿠팡 팔레트 필요 안내 + 적재 구성도 (SVG).
  *
- * 컬리 도면(lib/b2b/kurlyDiagram.tsx)과 같은 구성이되,
- * 쿠팡은 운송비 계산이 없고 PLT 분할도 **판정하지 않는다** — 발주당 1PLT 가정의 참고용 도면이다.
- * 파싱·분기·로켓 양식·매출·이력·라벨 로직은 소비만 한다.
+ * 컬리 도면(lib/b2b/kurlyDiagram.tsx)과 같은 구성이되, 쿠팡은 운송비 계산이 없다.
+ * 적재는 상품마스터 실측 박스 치수로 1,100×1,100 바닥 자리를 계산하고,
+ * 한 자리에 한 SKU만 올린다(SKU별 더미 분리). 자리가 차면 다음 PLT 로 넘긴다.
+ * 파싱·분기·로켓 양식·매출·이력·라벨·운임 로직은 소비만 한다.
  */
 import React from 'react'
 import { norm } from './kurly'
@@ -12,10 +13,12 @@ import { downloadSvgAsJpg } from './svgExport'
 
 // ── 적재 가정 ────────────────────────────────────────────────────
 export const PALLET_BOX_LIMIT = 9 // 초과 시 택배 불가 → 팔레트 안내
-export const BOX_MM = 400 // 박스 높이 가정
+export const DEFAULT_BOX_MM = 400 // 치수 미등록 상품 가정값
 export const PALLET_MM = 150
 export const LIMIT_MM = 1700 // 팔레트 포함 높이 한도 (컬리와 동일)
-const BASE_FOOTPRINTS = 4 // 표준 2×2 적재면 가정
+export const PALLET_W_MM = 1100 // 팔레트 바닥 가로
+export const PALLET_D_MM = 1100 // 팔레트 바닥 세로
+export const MAX_TIERS_PER_SLOT = 5 // 자리당 최대 단수 (30박스/PLT 운용 기준)
 
 /** 출고지별 안내 — 운송수단은 자동 판정하지 않고 문구만 낸다 */
 export const SHIP_FROM_GUIDE: Record<string, string> = {
@@ -94,7 +97,7 @@ export function buildCenterAdvisories(groups: PoPalletGroup[]): CenterAdvisory[]
     .map((e) => ({ center: e.center, dueDate: e.dueDate, boxes: e.boxes, poCount: e.pos.size }))
 }
 
-// ── 도면 모델 ────────────────────────────────────────────────────
+// ── 자리(더미) 모델 ──────────────────────────────────────────────
 const COLORS = [
   '#64B5F6', '#F5C542', '#81C784', '#E57373',
   '#BA68C8', '#4DB6AC', '#FFB74D', '#90A4AE',
@@ -113,12 +116,40 @@ export function shortName(raw: string): string {
   return core.length > 8 ? core.slice(0, 8) : core
 }
 
-export type PlanItem = {
+/** 박스 실측 치수(mm). 마스터 미등록이면 가정값 + unknown 플래그 */
+export type BoxDims = { w: number; d: number; h: number; unknown: boolean }
+
+export const dimsOf = (m: RoutedItem['master']): BoxDims => {
+  const w = m?.boxW ?? 0
+  const d = m?.boxD ?? 0
+  const h = m?.boxH ?? 0
+  return w > 0 && d > 0 && h > 0
+    ? { w, d, h, unknown: false }
+    : { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true }
+}
+
+/** 1,100×1,100 바닥 격자 — 한 박스가 차지하는 자리 배열 */
+export function floorGrid(dims: BoxDims): { cols: number; rows: number; slots: number } {
+  const cols = Math.max(1, Math.floor(PALLET_W_MM / dims.w))
+  const rows = Math.max(1, Math.floor(PALLET_D_MM / dims.d))
+  return { cols, rows, slots: cols * rows }
+}
+
+export type PlanSku = {
   sku: string
   fullName: string
   color: string
   boxes: number
-  columns: number[] // 기둥별 단수
+  dims: BoxDims
+}
+
+/** 자리 하나 = SKU 하나(한 자리에 한 SKU만) */
+export type PlanSlot = {
+  sku: string
+  fullName: string
+  color: string
+  tiers: number
+  dims: BoxDims
 }
 
 export type PlanPanel = {
@@ -126,39 +157,45 @@ export type PlanPanel = {
   center: string
   dueDate: string
   shipFrom: ShipFrom
-  items: PlanItem[]
-  boxes: number
+  index: number // PLT 번호 (1부터)
+  total: number // 발주의 PLT 수
+  cols: number
+  rows: number
+  slotCount: number
+  slots: (PlanSlot | null)[] // length = slotCount
+  items: { sku: string; fullName: string; color: string; boxes: number; slots: number }[]
+  boxes: number // 이 PLT 박스 수
+  poBoxes: number // 발주 총 박스 수
   maxTier: number
   heightMm: number
   slackMm: number
   over: boolean // 한도 초과 → 빨강 경고
+  dimsUnknown: boolean // 치수 미등록 상품 포함
 }
 
 export type CoupangPalletPlan = {
   dueDate: string
   panels: PlanPanel[]
   legend: { sku: string; fullName: string; color: string }[]
+  dimsUnknown: boolean
 }
 
-/**
- * 적재면(기둥) 배분 — SKU 마다 최소 1기둥을 주고, 남는 면은 가장 높이 쌓이는 SKU 에 준다.
- * 각 SKU 는 자기 기둥만 쓴다(세로 구분 적재).
- */
-function allocateColumns(boxesPerSku: number[]): number[] {
-  const cols = boxesPerSku.map(() => 1)
-  let left = Math.max(0, Math.max(BASE_FOOTPRINTS, boxesPerSku.length) - boxesPerSku.length)
-  while (left > 0) {
-    let worst = 0
-    for (let i = 1; i < cols.length; i++) {
-      if (Math.ceil(boxesPerSku[i] / cols[i]) > Math.ceil(boxesPerSku[worst] / cols[worst])) worst = i
+/** 박스 많은 순 → 자리 배분(자리당 최대 MAX_TIERS_PER_SLOT단), 같은 SKU 는 인접 자리 연속 */
+export function allocateSlots(skus: PlanSku[]): PlanSlot[] {
+  const out: PlanSlot[] = []
+  const sorted = [...skus].sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
+  for (const s of sorted) {
+    let left = s.boxes
+    while (left > 0) {
+      const tiers = Math.min(MAX_TIERS_PER_SLOT, left)
+      out.push({ sku: s.sku, fullName: s.fullName, color: s.color, tiers, dims: s.dims })
+      left -= tiers
     }
-    cols[worst]++
-    left--
   }
-  return cols
+  return out
 }
 
-/** 팔레트 필요 발주만 도면 모델로 (1PLT 가정) */
+/** 팔레트 필요 발주 → PLT 단위 패널 (자리 수를 넘기면 다음 PLT 로 넘긴다) */
 export function buildCoupangPalletPlan(groups: PoPalletGroup[]): CoupangPalletPlan {
   const need = groups.filter((g) => g.needsPallet)
 
@@ -171,44 +208,78 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[]): CoupangPalletPl
     }
   }
 
-  const panels: PlanPanel[] = need.map((g) => {
+  const panels: PlanPanel[] = []
+  for (const g of need) {
     // 같은 발주 안에서 상품 단위 합산
-    const byKey = new Map<string, PlanItem>()
+    const byKey = new Map<string, PlanSku>()
     for (const it of g.items) {
       const k = norm(it.barcode) || norm(it.productName)
       let p = byKey.get(k)
       if (!p) {
         const full = it.master?.alias || it.productName
-        p = { sku: shortName(full), fullName: full, color: colorOf.get(k) || COLORS[0], boxes: 0, columns: [] }
+        p = {
+          sku: shortName(full),
+          fullName: full,
+          color: colorOf.get(k) || COLORS[0],
+          boxes: 0,
+          dims: dimsOf(it.master),
+        }
         byKey.set(k, p)
       }
       p.boxes += it.boxes ?? 0
     }
-    const items = [...byKey.values()].filter((i) => i.boxes > 0)
+    const skus = [...byKey.values()].filter((s) => s.boxes > 0)
+    if (!skus.length) continue
 
-    const alloc = allocateColumns(items.map((i) => i.boxes))
-    items.forEach((it, i) => {
-      const c = Math.max(1, alloc[i])
-      const base = Math.floor(it.boxes / c)
-      const rem = it.boxes % c
-      it.columns = Array.from({ length: c }, (_, k) => base + (k < rem ? 1 : 0)).filter((t) => t > 0)
-    })
+    // 바닥 격자는 가장 큰 박스 기준(자리 수가 제일 적게 나오는 쪽)으로 잡는다
+    const grids = skus.map((s) => floorGrid(s.dims))
+    const grid = grids.reduce((a, b) => (b.slots < a.slots ? b : a))
+    const dimsUnknown = skus.some((s) => s.dims.unknown)
 
-    const maxTier = items.reduce((m, it) => Math.max(m, ...it.columns, 0), 0)
-    const heightMm = PALLET_MM + maxTier * BOX_MM
-    return {
-      poNumber: g.poNumber,
-      center: g.center,
-      dueDate: g.dueDate,
-      shipFrom: g.shipFrom,
-      items,
-      boxes: g.boxes,
-      maxTier,
-      heightMm,
-      slackMm: LIMIT_MM - heightMm,
-      over: heightMm > LIMIT_MM,
+    const slots = allocateSlots(skus)
+    const total = Math.max(1, Math.ceil(slots.length / grid.slots))
+
+    for (let i = 0; i < total; i++) {
+      const mine = slots.slice(i * grid.slots, (i + 1) * grid.slots)
+      const padded: (PlanSlot | null)[] = Array.from(
+        { length: grid.slots },
+        (_, k) => mine[k] ?? null,
+      )
+      const items: PlanPanel['items'] = []
+      for (const s of mine) {
+        let e = items.find((x) => x.fullName === s.fullName)
+        if (!e) {
+          e = { sku: s.sku, fullName: s.fullName, color: s.color, boxes: 0, slots: 0 }
+          items.push(e)
+        }
+        e.boxes += s.tiers
+        e.slots += 1
+      }
+      const maxTier = mine.reduce((m, s) => Math.max(m, s.tiers), 0)
+      const stackMm = mine.reduce((m, s) => Math.max(m, s.tiers * s.dims.h), 0)
+      const heightMm = PALLET_MM + stackMm
+      panels.push({
+        poNumber: g.poNumber,
+        center: g.center,
+        dueDate: g.dueDate,
+        shipFrom: g.shipFrom,
+        index: i + 1,
+        total,
+        cols: grid.cols,
+        rows: grid.rows,
+        slotCount: grid.slots,
+        slots: padded,
+        items,
+        boxes: mine.reduce((a, s) => a + s.tiers, 0),
+        poBoxes: g.boxes,
+        maxTier,
+        heightMm,
+        slackMm: LIMIT_MM - heightMm,
+        over: heightMm > LIMIT_MM,
+        dimsUnknown,
+      })
     }
-  })
+  }
 
   const seen = new Set<string>()
   const legend: CoupangPalletPlan['legend'] = []
@@ -220,7 +291,12 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[]): CoupangPalletPl
     }
   }
 
-  return { dueDate: need.find((g) => g.dueDate)?.dueDate || '', panels, legend }
+  return {
+    dueDate: need.find((g) => g.dueDate)?.dueDate || '',
+    panels,
+    legend,
+    dimsUnknown: panels.some((p) => p.dimsUnknown),
+  }
 }
 
 // ── SVG ──────────────────────────────────────────────────────────
@@ -234,9 +310,10 @@ const cm = (v: number): string => v.toLocaleString('en-US')
 const M = 28
 const PANEL_W = 344
 const PANEL_GAP = 18
+const PANELS_PER_ROW = 4
 const ART_W = 260
 const ART_X = (PANEL_W - ART_W) / 2
-const PAL = ART_W
+const PAL = ART_W // 팔레트 1,100mm 을 그리는 폭
 const SIDE_H = 210
 const ITEM_LH = 15
 const LEGEND_W = 178
@@ -257,8 +334,6 @@ const rect = (
   (o.dash ? ` stroke-dasharray="${o.dash}"` : '') +
   (o.rx ? ` rx="${o.rx}"` : '') + '/>'
 
-const gridSideFor = (cols: number): number => Math.max(2, Math.ceil(Math.sqrt(Math.max(1, cols))))
-
 /** 대략적인 렌더 폭 — 한글은 글자당 ~1em, 그 외는 ~0.55em. 캔버스가 제목보다 좁아지지 않게 쓴다 */
 function textWidth(s: string, size: number): number {
   let w = 0
@@ -266,43 +341,44 @@ function textWidth(s: string, size: number): number {
   return w
 }
 
+/** 탑뷰 — 자리를 실측 치수 비율 그대로 1,100×1,100 위에 놓는다 */
 function topView(p: PlanPanel, ox: number, oy: number): string {
-  const slots: (PlanItem | null)[] = []
-  for (const it of p.items) for (let k = 0; k < it.columns.length; k++) slots.push(it)
-  const g = gridSideFor(slots.length)
-  const pad = 10
-  const cell = (PAL - pad * (g + 1)) / g
-
+  const scale = PAL / PALLET_W_MM
   let out = rect(ox, oy, PAL, PAL, { fill: '#D7B899', stroke: '#8D6E63', sw: 2, rx: 4 })
   for (let i = 1; i < 5; i++) {
     const y = oy + (PAL / 5) * i
     out += `<line x1="${n(ox + 4)}" y1="${n(y)}" x2="${n(ox + PAL - 4)}" y2="${n(y)}" stroke="#C0A183" stroke-width="1"/>`
   }
-  for (let i = 0; i < g * g; i++) {
-    const r = Math.floor(i / g)
-    const c = i % g
-    const x = ox + pad + c * (cell + pad)
-    const y = oy + pad + r * (cell + pad)
-    const it = slots[i]
-    if (!it) {
-      out += rect(x, y, cell, cell, { stroke: '#9CA3AF', sw: 1.2, dash: '5 4', rx: 3 })
-      out += text({ x: x + cell / 2, y: y + cell / 2 + 4, s: '빈 공간', size: 10, fill: '#9CA3AF', anchor: 'middle' })
+
+  const first = p.slots.find((s) => s) || null
+  const bw = (first?.dims.w ?? DEFAULT_BOX_MM) * scale
+  const bd = (first?.dims.d ?? DEFAULT_BOX_MM) * scale
+  const padX = (PAL - p.cols * bw) / (p.cols + 1)
+  const padY = (PAL - p.rows * bd) / (p.rows + 1)
+
+  for (let i = 0; i < p.slotCount; i++) {
+    const r = Math.floor(i / p.cols)
+    const c = i % p.cols
+    const x = ox + padX + c * (bw + padX)
+    const y = oy + padY + r * (bd + padY)
+    const s = p.slots[i]
+    if (!s) {
+      out += rect(x, y, bw, bd, { stroke: '#9CA3AF', sw: 1.2, dash: '5 4', rx: 3 })
+      out += text({ x: x + bw / 2, y: y + bd / 2 + 4, s: '빈 자리', size: 10, fill: '#9CA3AF', anchor: 'middle' })
       continue
     }
-    const nth = slots.slice(0, i + 1).filter((s) => s === it).length
-    const tiers = it.columns[nth - 1] ?? 1
-    out += rect(x, y, cell, cell, { fill: it.color, stroke: '#111827', sw: 1.5, rx: 3 })
-    out += text({ x: x + cell / 2, y: y + cell / 2 - 6, s: it.sku, size: 11, bold: true, anchor: 'middle' })
-    out += text({ x: x + cell / 2, y: y + cell / 2 + 9, s: `${tiers}박스`, size: 9.5, fill: '#1F2937', anchor: 'middle' })
+    out += rect(x, y, bw, bd, { fill: s.color, stroke: '#111827', sw: 1.5, rx: 3 })
+    out += text({ x: x + bw / 2, y: y + bd / 2 - 4, s: s.sku, size: 10.5, bold: true, anchor: 'middle' })
+    out += text({ x: x + bw / 2, y: y + bd / 2 + 10, s: `${s.tiers}단`, size: 9.5, fill: '#1F2937', anchor: 'middle' })
   }
   return out
 }
 
+/** 사이드뷰 — 자리별 실측 단수 × 실측 박스 높이 */
 function sideView(p: PlanPanel, ox: number, oy: number): string {
   const base = oy + SIDE_H
   const scale = (SIDE_H - 26) / LIMIT_MM
   const palH = PALLET_MM * scale
-  const boxH = BOX_MM * scale
   const palTop = base - palH
 
   let out = `<line x1="${n(ox - 6)}" y1="${n(base)}" x2="${n(ox + ART_W + 6)}" y2="${n(base)}" stroke="#6B7280" stroke-width="1.5"/>`
@@ -312,29 +388,38 @@ function sideView(p: PlanPanel, ox: number, oy: number): string {
   out += rect(ox, palTop, ART_W, palH, { fill: '#B08968', stroke: '#7A5C48', sw: 1.2 })
   out += text({ x: ox + 4, y: palTop + palH / 2 + 3.5, s: `팔레트 ${PALLET_MM}mm`, size: 8.5, fill: '#3E2723' })
 
-  const cols: { it: PlanItem; tiers: number }[] = []
-  for (const it of p.items) for (const t of it.columns) cols.push({ it, tiers: t })
+  // 자리 전부를 열(row) 단위로 끊어 나란히 세운다 — 뒷줄도 실제 단수 그대로 보이게
   const avail = ART_W - 12
-  const slot = avail / Math.max(1, cols.length)
-  const colW = Math.min(50, Math.max(16, slot - 8))
+  const slot = avail / Math.max(1, p.slotCount)
+  const colW = Math.min(56, Math.max(14, slot - 6))
 
-  cols.forEach((c, i) => {
+  p.slots.forEach((s, i) => {
     const x = ox + 6 + i * slot + (slot - colW) / 2
-    for (let t = 0; t < c.tiers; t++) {
-      out += rect(x, palTop - (t + 1) * boxH, colW, boxH, { fill: c.it.color, stroke: '#111827', sw: 1.2 })
+    if (i > 0 && i % p.cols === 0) {
+      const sx = ox + 6 + i * slot - 1
+      out += `<line x1="${n(sx)}" y1="${n(palTop - (SIDE_H - 40))}" x2="${n(sx)}" y2="${n(palTop)}" stroke="#9CA3AF" stroke-width="1" stroke-dasharray="3 3"/>`
     }
+    if (i % p.cols === 0) {
+      out += text({
+        x: ox + 6 + i * slot + (p.cols * slot) / 2, y: base + 11,
+        s: `${Math.floor(i / p.cols) + 1}열`, size: 8.5, fill: '#6B7280', anchor: 'middle',
+      })
+    }
+    if (!s) {
+      out += rect(x, palTop - 10, colW, 10, { stroke: '#9CA3AF', sw: 1, dash: '4 3' })
+      return
+    }
+    const boxH = s.dims.h * scale
+    for (let t = 0; t < s.tiers; t++) {
+      out += rect(x, palTop - (t + 1) * boxH, colW, boxH, { fill: s.color, stroke: '#111827', sw: 1.2 })
+    }
+    // 자리가 많으면 라벨이 겹치므로 단수만 — SKU 는 색과 탑뷰로 읽는다
     out += text({
-      x: x + colW / 2, y: palTop - c.tiers * boxH - 5,
-      s: `${c.it.sku} ${c.tiers}단`, size: 8.5, bold: true, anchor: 'middle',
+      x: x + colW / 2, y: palTop - s.tiers * boxH - 5,
+      s: p.slotCount > 4 ? `${s.tiers}단` : `${s.sku} ${s.tiers}단`,
+      size: 8.5, bold: true, anchor: 'middle',
     })
   })
-
-  let acc = 0
-  for (let k = 0; k < p.items.length - 1; k++) {
-    acc += p.items[k].columns.length
-    const x = ox + 6 + acc * slot
-    out += `<line x1="${n(x)}" y1="${n(palTop - SIDE_H * 0.6)}" x2="${n(x)}" y2="${n(palTop)}" stroke="#9CA3AF" stroke-width="1" stroke-dasharray="3 3"/>`
-  }
   return out
 }
 
@@ -346,67 +431,91 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
   const sideY = sideLabelY + 8
   const heightY = sideY + SIDE_H + 22
 
+  const dims = (p.slots.find((s) => s) || null)?.dims
   let out = rect(ox, oy, PANEL_W, panelH, { fill: '#FFFFFF', stroke: '#D1D5DB', sw: 1, rx: 6 })
-  out += text({ x: ox + 14, y: oy + 26, s: `발주 ${p.poNumber}`, size: 14, bold: true })
+  out += text({ x: ox + 14, y: oy + 26, s: `발주 ${p.poNumber} — PLT ${p.index}/${p.total}`, size: 14, bold: true })
   out += text({ x: ox + 14, y: oy + 44, s: `${p.center} · ${p.dueDate}`, size: 10.5, fill: '#4B5563' })
-  out += text({ x: ox + 14, y: oy + 60, s: `출고지 ${p.shipFrom} · 총 ${cm(p.boxes)}박스`, size: 10.5, bold: true, fill: '#374151' })
+  out += text({
+    x: ox + 14, y: oy + 60,
+    s: `출고지 ${p.shipFrom} · 이 PLT ${cm(p.boxes)}박스 / 발주 ${cm(p.poBoxes)}박스 · 자리 ${p.slots.filter((s) => s).length}/${p.slotCount}`,
+    size: 10.5, bold: true, fill: '#374151',
+  })
 
   p.items.forEach((it, i) => {
-    out += text({ x: ox + 14, y: oy + 78 + i * ITEM_LH, s: `${it.sku} ${cm(it.boxes)}박스`, size: 10, fill: '#374151' })
+    out += text({
+      x: ox + 14, y: oy + 78 + i * ITEM_LH,
+      s: `${it.sku} ${cm(it.boxes)}박스 · ${it.slots}자리`, size: 10, fill: '#374151',
+    })
     out += rect(ox + PANEL_W - 24, oy + 78 + i * ITEM_LH - 8, 10, 10, { fill: it.color, stroke: '#111827', sw: 1 })
   })
 
-  out += text({ x: ox + 14, y: oy + topLabelY, s: '탑뷰 (위에서 본 배치)', size: 10.5, bold: true, fill: '#374151' })
+  out += text({
+    x: ox + 14, y: oy + topLabelY,
+    s: `탑뷰 — ${p.cols}×${p.rows} = ${p.slotCount}자리 (박스 ${dims ? `${dims.w}×${dims.d}` : '—'}mm)`,
+    size: 10.5, bold: true, fill: '#374151',
+  })
   out += topView(p, ox + ART_X, oy + topY)
   out += text({ x: ox + 14, y: oy + sideLabelY, s: '사이드뷰 (옆에서 본 적재)', size: 10.5, bold: true, fill: '#374151' })
   out += sideView(p, ox + ART_X, oy + sideY)
 
   out += text({
     x: ox + 14, y: oy + heightY,
-    s: `총 높이 ${PALLET_MM} + ${BOX_MM}×${p.maxTier}단 = ${cm(p.heightMm)}mm · 여유 ${cm(p.slackMm)}mm`,
+    s: `총 높이 ${PALLET_MM} + ${cm(p.heightMm - PALLET_MM)} = ${cm(p.heightMm)}mm · 여유 ${cm(p.slackMm)}mm`,
     size: 10, bold: true, fill: p.over ? '#DC2626' : '#15803D',
   })
   out += text({
     x: ox + 14, y: oy + heightY + 16,
-    s: p.over ? `⚠ 한도 ${cm(LIMIT_MM)}mm 초과 — 팔레트 분할 필요` : `한도 ${cm(LIMIT_MM)}mm 이내`,
+    s: p.over ? `⚠ 한도 ${cm(LIMIT_MM)}mm 초과 — 단수 조정 필요` : `한도 ${cm(LIMIT_MM)}mm 이내 (최대 ${p.maxTier}단)`,
     size: 10, bold: p.over, fill: p.over ? '#DC2626' : '#15803D',
   })
+  if (p.dimsUnknown) {
+    out += text({
+      x: ox + 14, y: oy + heightY + 32,
+      s: `⚠ 치수 미등록 — ${DEFAULT_BOX_MM}mm 가정`, size: 10, bold: true, fill: '#B45309',
+    })
+  }
   return out
 }
 
 export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
   const panels = plan.panels
   if (!panels.length) return ''
-  const cols = panels.length
+  const perRow = Math.min(PANELS_PER_ROW, panels.length)
+  const panelRows = Math.ceil(panels.length / perRow)
   const maxItems = Math.max(1, ...panels.map((p) => p.items.length))
 
   const itemsBottom = 78 + (maxItems - 1) * ITEM_LH + 8
-  const panelH = itemsBottom + 16 + 8 + PAL + 24 + 8 + SIDE_H + 22 + 16 + 14
+  const panelH = itemsBottom + 16 + 8 + PAL + 24 + 8 + SIDE_H + 22 + 16 + 14 + (plan.dimsUnknown ? 16 : 0)
 
-  const bodyW = cols * PANEL_W + (cols - 1) * PANEL_GAP
-  const perRow = Math.max(1, Math.floor(bodyW / LEGEND_W))
-  const legendRows = Math.max(1, Math.ceil(plan.legend.length / perRow))
+  const bodyW = perRow * PANEL_W + (perRow - 1) * PANEL_GAP
+  const legendPerRow = Math.max(1, Math.floor(bodyW / LEGEND_W))
+  const legendRows = Math.max(1, Math.ceil(plan.legend.length / legendPerRow))
   const legendY = M + 70
   const panelsY = legendY + (legendRows - 1) * 20 + 22
 
-  const foot1 = panelsY + panelH + 26
-  const foot2 = foot1 + 18
-  const foot3 = foot2 + 18
-  const foot4 = foot3 + 18
-  const H = foot4 + M
+  const bodyBottom = panelsY + panelRows * panelH + (panelRows - 1) * PANEL_GAP
+  const foots = [
+    'KPP/AJ 팔레트 사용 (목재·일회용 금지)',
+    '랩핑 필수',
+    'SKU별 자리(더미) 분리 — 더미 외부에 품목 스티커 부착',
+    '같은 SKU 블록은 현장에서 교차 적재 + 랩핑',
+    '부착물: 적재리스트(2면) + 쉽먼트 라벨(앞·옆면), 발주서·거래명세서는 기사 전달',
+    `자리당 최대 ${MAX_TIERS_PER_SLOT}단 · 높이 = 팔레트 ${PALLET_MM}mm + 박스높이 × 단수`,
+  ]
+  if (plan.dimsUnknown) foots.push(`치수 미등록 상품은 ${DEFAULT_BOX_MM}mm 가정 — 마스터에 박스 치수 등록 필요`)
+  const footY0 = bodyBottom + 26
+  const H = footY0 + (foots.length - 1) * 18 + M
 
   const totalBoxes = panels.reduce((s, p) => s + p.boxes, 0)
-  const title = `쿠팡 로켓 ${plan.dueDate || ''} 입고 — 팔레트 적재 구성도 (팔레트 필요 발주 ${panels.length}건 · 총 ${cm(totalBoxes)}박스)`.replace(/\s+/g, ' ')
-  const subtitle = `참고용 — 발주당 1PLT 가정, 실제 팔레트 수는 부피 확인 · 박스 높이 ${BOX_MM}mm 가정 · 팔레트 ${PALLET_MM}mm · 한도 ${cm(LIMIT_MM)}mm`
-  const footer3 = '부착물: 적재리스트(2면) + 쉽먼트 라벨(앞·옆면), 발주서·거래명세서는 기사 전달'
-  const footer4 = `각 상품 바닥부터 자기 기둥만 사용(세로 구분) · 높이 = 팔레트 ${PALLET_MM}mm + 박스 ${BOX_MM}mm × 단수`
+  const poCount = new Set(panels.map((p) => p.poNumber)).size
+  const title = `쿠팡 로켓 ${plan.dueDate || ''} 입고 — 팔레트 적재 구성도 (발주 ${poCount}건 · ${panels.length}PLT · 총 ${cm(totalBoxes)}박스)`.replace(/\s+/g, ' ')
+  const subtitle = `실측 치수 기준 — 팔레트 ${cm(PALLET_W_MM)}×${cm(PALLET_D_MM)}mm · 자리당 최대 ${MAX_TIERS_PER_SLOT}단 · 팔레트 ${PALLET_MM}mm · 한도 ${cm(LIMIT_MM)}mm`
 
-  // 패널이 1개일 때 제목·캡션이 캔버스 밖으로 잘리지 않도록 폭을 넓혀 준다
+  // 패널이 적을 때 제목·캡션이 캔버스 밖으로 잘리지 않도록 폭을 넓혀 준다
   const textW = Math.max(
     textWidth(title, 16),
     textWidth(subtitle, 10.5),
-    textWidth(footer3, 11),
-    textWidth(footer4, 11),
+    ...foots.map((f) => textWidth(f, 11)),
   )
   const W = M * 2 + Math.max(bodyW, textW)
 
@@ -415,8 +524,8 @@ export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
   s += text({ x: M, y: M + 46, s: subtitle, size: 10.5, fill: '#6B7280' })
 
   plan.legend.forEach((l, i) => {
-    const r = Math.floor(i / perRow)
-    const c = i % perRow
+    const r = Math.floor(i / legendPerRow)
+    const c = i % legendPerRow
     const x = M + c * LEGEND_W
     const y = legendY + r * 20
     s += rect(x, y - 10, 13, 13, { fill: l.color, stroke: '#111827', sw: 1, rx: 2 })
@@ -424,13 +533,14 @@ export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
   })
 
   panels.forEach((p, i) => {
-    s += panelSvg(p, M + i * (PANEL_W + PANEL_GAP), panelsY, maxItems, panelH)
+    const r = Math.floor(i / perRow)
+    const c = i % perRow
+    s += panelSvg(p, M + c * (PANEL_W + PANEL_GAP), panelsY + r * (panelH + PANEL_GAP), maxItems, panelH)
   })
 
-  s += text({ x: M, y: foot1, s: 'KPP/AJ 팔레트 사용 (목재·일회용 금지)', size: 11, bold: true, fill: '#111827' })
-  s += text({ x: M, y: foot2, s: '랩핑 필수', size: 11, bold: true, fill: '#111827' })
-  s += text({ x: M, y: foot3, s: footer3, size: 11, fill: '#374151' })
-  s += text({ x: M, y: foot4, s: footer4, size: 11, fill: '#374151' })
+  foots.forEach((f, i) => {
+    s += text({ x: M, y: footY0 + i * 18, s: f, size: 11, bold: i < 2, fill: i < 2 ? '#111827' : '#374151' })
+  })
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${n(W)}" height="${n(H)}" viewBox="0 0 ${n(W)} ${n(H)}" font-family="${FONT}">` +
