@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import { parseProductMaster, parseMilkrunPrices } from '@/lib/b2b/kurly'
 import { parseCenters } from '@/lib/b2b/coupang'
+import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
 
 /**
  * B2B 발주 변환 공용 기준정보 — 구글시트 read-only API (컬리·쿠팡 공용).
@@ -10,7 +11,7 @@ import { parseCenters } from '@/lib/b2b/coupang'
  * 이 라우트는 읽기 전용이다 — scope 를 spreadsheets.readonly 로 고정하고
  * values.update/append/clear 등 쓰기 호출은 두지 않는다.
  *
- * GET /api/b2b/sheets        → { ok, products, prices, centers }
+ * GET /api/b2b/sheets        → { ok, products, prices, centers, coupangPrices }
  * GET /api/b2b/sheets?debug=1 → + { debug: 탭 목록·헤더 } (컬럼명 확인용)
  */
 
@@ -80,6 +81,7 @@ export async function GET(req: Request) {
       products: parseProductMaster(productRows),
       prices: parseMilkrunPrices(valuesOf(TAB_PRICE)),
       centers: parseCenters(centerRows),
+      coupangPrices: parseCoupangMilkrun(valuesOf(TAB_CP_PRICE)),
       missingTabs: [TAB_PRODUCT, TAB_PRICE, TAB_CENTER, TAB_CP_PRICE].filter((t) => !has(t)),
     }
     if (debug) {
@@ -88,7 +90,7 @@ export async function GET(req: Request) {
         productHeader: productRows[0] || [],
         centerHeader: centerRows[0] || [],
         centerSample: centerRows.slice(1, 4),
-        coupangPriceRows: valuesOf(TAB_CP_PRICE),
+        coupangPriceHeader: (valuesOf(TAB_CP_PRICE)[0] || []).slice(0, 8),
       }
     }
 

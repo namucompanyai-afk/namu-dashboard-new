@@ -38,6 +38,14 @@ import {
   downloadCoupangPalletPlanJpg,
   renderCoupangPalletPlanSvg,
 } from '@/lib/b2b/coupangDiagram'
+import {
+  BOXES_PER_PLT,
+  buildMilkrunShipments,
+  pltOf,
+  shipmentByPo,
+  sumMilkrun,
+  type CoupangMilkrunRow,
+} from '@/lib/b2b/coupangMilkrun'
 
 /**
  * B2B 발주 변환 — 쿠팡
@@ -56,6 +64,7 @@ const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
 export default function CoupangB2BPage() {
   const [products, setProducts] = useState<ProductMaster[]>([])
   const [centers, setCenters] = useState<CenterAddress[]>([])
+  const [milkrunPrices, setMilkrunPrices] = useState<CoupangMilkrunRow[]>([])
   const [sheetState, setSheetState] = useState<SheetState>('idle')
   const [sheetError, setSheetError] = useState('')
 
@@ -77,6 +86,7 @@ export default function CoupangB2BPage() {
       if (!res.ok || !json.ok) throw new Error(json?.error || `HTTP ${res.status}`)
       setProducts(json.products || [])
       setCenters(json.centers || [])
+      setMilkrunPrices(json.coupangPrices || [])
       setSheetState('loaded')
     } catch (e: unknown) {
       setSheetError(e instanceof Error ? e.message : String(e))
@@ -163,6 +173,13 @@ export default function CoupangB2BPage() {
   const advisories = useMemo(() => buildCenterAdvisories(palletGroups), [palletGroups])
   const [openPos, setOpenPos] = useState<string[]>([]) // 팔레트 안내 펼친 발주(발주번호|출고지)
   const palletPlan = useMemo(() => buildCoupangPalletPlan(palletGroups), [palletGroups])
+  // 밀크런 운임(참고) — 진도팜 팔레트 발주만, 센터 × 입고예정일 묶음에 차량 배정
+  const shipments = useMemo(
+    () => buildMilkrunShipments(palletGroups, milkrunPrices),
+    [palletGroups, milkrunPrices],
+  )
+  const shipmentOf = useMemo(() => shipmentByPo(shipments), [shipments])
+  const milkrunTotals = useMemo(() => sumMilkrun(shipments), [shipments])
   const palletSvg = useMemo(
     () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
     [palletPlan],
@@ -423,6 +440,9 @@ export default function CoupangB2BPage() {
                     <th className="px-3 py-2 text-left font-medium">입고예정일</th>
                     <th className="px-3 py-2 text-left font-medium">출고지</th>
                     <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-right font-medium">PLT</th>
+                    <th className="px-3 py-2 text-left font-medium">차량</th>
+                    <th className="px-3 py-2 text-right font-medium">밀크런 운임(참고)</th>
                     <th className="px-3 py-2 text-left font-medium">판정</th>
                   </tr>
                 </thead>
@@ -430,6 +450,8 @@ export default function CoupangB2BPage() {
                   {palletGroups.map((g) => {
                     const key = `${g.poNumber}|${g.shipFrom}`
                     const open = openPos.includes(key)
+                    const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
+                    const feeLead = ship && ship.poNumbers[0] === g.poNumber
                     return (
                       <React.Fragment key={key}>
                         <tr
@@ -452,6 +474,21 @@ export default function CoupangB2BPage() {
                           <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
                           <td className="px-3 py-2">{g.shipFrom}</td>
                           <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
+                          <td className="px-3 py-2 text-right">{pltOf(g.boxes)}</td>
+                          <td className="px-3 py-2 text-gray-600">
+                            {ship ? ship.vehicleLabel : <span className="text-gray-400">—</span>}
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            {!ship ? (
+                              <span className="text-gray-400">—</span>
+                            ) : !feeLead ? (
+                              <span className="text-xs text-gray-400">↑ 합산</span>
+                            ) : ship.fee === null ? (
+                              <span className="text-xs text-amber-600">요금 미등록</span>
+                            ) : (
+                              num(ship.fee) + '원'
+                            )}
+                          </td>
                           <td className="px-3 py-2">
                             {g.needsPallet ? (
                               <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 text-xs font-semibold">
@@ -464,7 +501,7 @@ export default function CoupangB2BPage() {
                         </tr>
                         {open && (
                           <tr className="border-t border-gray-100">
-                            <td colSpan={6} className="px-3 py-3 bg-gray-50">
+                            <td colSpan={9} className="px-3 py-3 bg-gray-50">
                               <table className="w-full text-xs">
                                 <thead className="text-gray-500">
                                   <tr>
@@ -498,6 +535,21 @@ export default function CoupangB2BPage() {
                 </tbody>
               </table>
             </div>
+            {shipments.length > 0 && (
+              <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
+                <span className="text-gray-600">
+                  진도팜 팔레트분 차량 {shipments.length}건 · 총 {milkrunTotals.totalPlt} PLT
+                </span>
+                <span className="font-semibold">
+                  운임 합계 {num(milkrunTotals.totalFee)}원
+                  {milkrunTotals.unpriced > 0 && (
+                    <span className="ml-2 text-xs font-normal text-amber-600">
+                      (요금 미등록 {milkrunTotals.unpriced}건 제외)
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
             <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs">
               {advisories.map((a) => (
                 <p key={`${a.center}-${a.dueDate}`} className="text-amber-700">
@@ -512,6 +564,13 @@ export default function CoupangB2BPage() {
               {needPallet.length === 0 && advisories.length === 0 && (
                 <p className="text-gray-400">전 발주 {PALLET_BOX_LIMIT}박스 이하 — 택배 발송 가능</p>
               )}
+              <p className="text-gray-500">
+                · PLT는 {BOXES_PER_PLT}박스/PLT 올림 · 같은 센터·같은 입고예정일 발주는 PLT 합산 후 차량 배정
+                ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
+              </p>
+              <p className="text-gray-500">
+                · 운임은 밀크런 요금표 기준 참고용 — 진도 출고는 밀크런 불가, 직접 배차 견적 별도
+              </p>
             </div>
           </div>
 
