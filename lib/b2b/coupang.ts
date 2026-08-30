@@ -25,7 +25,8 @@ export type CoupangOrderItem = {
   orderQty: number // 발주수량 (G열) — 참고 필드
   confirmQty: number // 납품가능수량 (H열) ← 실제 출고·매출·박스·PLT·이력 기준 (불변)
   unitPrice: number // 매입가 (공급가 블록 첫 컬럼) ← 매출 단가. 빈값·0이면 '단가 미확인'
-  qtyUnconfirmed: boolean // H가 0·빈값인데 G>0 → 납품가능 미확정(구버전 발주서 의심)
+  qtyUnconfirmed: boolean // 발주서 전 행이 H=0 → 확정 전/구버전 발주서 (저장 차단)
+  notDelivered: boolean // 확정 발주서 안의 H=0 행 → 미납품 확정 (차단 아님, 이력 제외)
   displayQty: number // 화면 표시용 — 미확정이면 G, 아니면 H
   barcode: string // 상품마스터 매칭 키
   centerAddress: string // 발주서 '주소' 셀 (택배수령담당자 괄호부 제거)
@@ -59,6 +60,10 @@ export function isCoupangRows(rows: unknown[][]): boolean {
  *   A열 '입고예정일시'   → 다음 행 C열 = 센터명, F열 = 입고예정일
  *   A열 '3. 상품정보'    → +4행부터 상품 1개당 2행 (1행 C/G/H, 2행 C=바코드)
  * 상품 블록은 A열이 비거나 '합계' 또는 '4.' 로 시작하면 끝난다.
+ *
+ * H(납품가능)=0 의 뜻은 **파일 단위**로 갈린다 — 한 행이라도 H>0 이면 확정
+ * 발주서이므로 H=0 은 '미납품 확정', 전 행이 H=0 이면 확정 전 발주서다.
+ * 그래서 행을 다 모은 뒤에 판정한다.
  *
  * 상품 표 헤더는 2단 병합이다 — 윗줄(+2행)에 '공급가/발주금액/입고금액' 그룹,
  * 아랫줄(+3행)에 그룹마다 '매입가/공급가액/부가세'. '매입가'가 세 번 나오므로
@@ -102,7 +107,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   if (prodIdx < 0) return []
   const priceCol = supplyPriceCol(rows, prodIdx)
 
-  const items: CoupangOrderItem[] = []
+  const raw: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {
     const a = A(r)
     if (a === '' || norm(a) === '합계' || a.startsWith('4.')) break
@@ -110,9 +115,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
     if (!productName) break
     const orderQty = toNum(cellAt(rows, r, 6))
     const confirmQty = toNum(cellAt(rows, r, 7))
-    // 확정 전 발주서(또는 구버전 양식)는 H가 비어 내려온다 — 계산은 H 그대로 두고 표시만 G로 대체
-    const qtyUnconfirmed = confirmQty <= 0 && orderQty > 0
-    items.push({
+    raw.push({
       poNumber,
       center,
       dueDate,
@@ -120,15 +123,29 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       orderQty,
       confirmQty,
       unitPrice: toNum(cellAt(rows, r, priceCol)),
-      qtyUnconfirmed,
-      displayQty: qtyUnconfirmed ? orderQty : confirmQty,
+      qtyUnconfirmed: false,
+      notDelivered: false,
+      displayQty: confirmQty,
       barcode: textAt(rows, r + 1, 2),
       centerAddress,
       centerPhone,
       sourceFile,
     })
   }
-  return items
+
+  // 파일 단위 판정 — H>0 행이 하나라도 있으면 확정 발주서
+  const confirmed = raw.some((it) => it.confirmQty > 0)
+  return raw.map((it) => {
+    const zero = it.confirmQty <= 0
+    // 확정 전 발주서(또는 구버전 양식)는 H가 비어 내려온다 — 계산은 H 그대로 두고 표시만 G로 대체
+    const qtyUnconfirmed = !confirmed && zero && it.orderQty > 0
+    return {
+      ...it,
+      qtyUnconfirmed,
+      notDelivered: confirmed && zero,
+      displayQty: qtyUnconfirmed ? it.orderQty : it.confirmQty,
+    }
+  })
 }
 
 /** 업로드 파일별 수량 합 — 구버전/미확정 발주서를 눈으로 잡기 위한 보조 정보 */
@@ -137,7 +154,8 @@ export type CoupangFileStat = {
   rows: number
   orderQty: number // 발주수량 합 (G)
   confirmQty: number // 납품가능수량 합 (H)
-  unconfirmed: number // 미확정 행 수
+  unconfirmed: number // 미확정 행 수 (파일 전체가 H=0)
+  notDelivered: number // 미납품 행 수 (확정 발주서 안의 H=0)
 }
 
 export function summarizeCoupangFiles(items: CoupangOrderItem[]): CoupangFileStat[] {
@@ -146,13 +164,14 @@ export function summarizeCoupangFiles(items: CoupangOrderItem[]): CoupangFileSta
     const fileName = it.sourceFile || '(파일명 없음)'
     let f = map.get(fileName)
     if (!f) {
-      f = { fileName, rows: 0, orderQty: 0, confirmQty: 0, unconfirmed: 0 }
+      f = { fileName, rows: 0, orderQty: 0, confirmQty: 0, unconfirmed: 0, notDelivered: 0 }
       map.set(fileName, f)
     }
     f.rows += 1
     f.orderQty += it.orderQty
     f.confirmQty += it.confirmQty
     if (it.qtyUnconfirmed) f.unconfirmed += 1
+    if (it.notDelivered) f.notDelivered += 1
   }
   return [...map.values()]
 }
@@ -339,15 +358,17 @@ const boxesByPo = (items: RoutedItem[]): Record<string, number> => {
  *   트럭분 — 주소는 발주서가 자동 출력한 값, 전화는 그 주소 괄호부의 택배수령담당자
  *            (발주서 값이 비면 주소록으로 대체)
  * 파렛트 수는 발주 단위 1회(첫 행)만 기입한다.
+ * 미납품(확정 발주서의 H=0) 행은 실제로 나가지 않으므로 양식에서 뺀다.
  */
 export function buildRocketRows(
   items: RoutedItem[],
   centers: CenterAddress[],
   madeDate: string,
 ): RocketRow[] {
-  const poBoxes = boxesByPo(items)
+  const shipping = items.filter((it) => !it.notDelivered)
+  const poBoxes = boxesByPo(shipping)
   const palletDone = new Set<string>()
-  return items.map((it) => {
+  return shipping.map((it) => {
     const c = findCenter(centers, it.center)
     const truck = (poBoxes[it.poNumber] ?? 0) > PALLET_BOX_LIMIT
     const address = truck ? it.centerAddress || c?.address || '' : c?.address || ''
@@ -439,7 +460,8 @@ export type CoupangSummaryRow = {
   taxable: boolean
   taxKnown: boolean
   masterKnown: boolean
-  priceKnown: boolean // 매입가가 빈값·0인 행이 있으면 false → '단가 미확인'
+  priceKnown: boolean // 납품분 매입가가 빈값·0이면 false → '단가 미확인'
+  notDelivered: boolean // 이 상품이 전부 미납품(수량 0) → 회색 '미납품' 표기
 }
 
 export type CoupangSummary = {
@@ -475,11 +497,15 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
         taxKnown: taxType !== '',
         masterKnown: !!it.master,
         priceKnown: true,
+        notDelivered: true,
       }
       byKey.set(key, r)
     }
     r.qty += it.confirmQty
     r.total += it.confirmQty * it.unitPrice
+    // 미납품 행은 매출이 0이라 단가를 따지지 않는다(잘못된 차단 방지)
+    if (it.notDelivered) continue
+    r.notDelivered = false
     if (it.unitPrice > 0) {
       if (!r.unitPrices.includes(it.unitPrice)) r.unitPrices.push(it.unitPrice)
     } else {

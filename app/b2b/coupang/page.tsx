@@ -137,7 +137,13 @@ export default function CoupangB2BPage() {
   // 납품가능 미확정 — 확정 전/구버전 발주서 업로드 방어 (있으면 이력 저장 차단)
   const unconfirmed = useMemo(() => routed.filter((r) => r.qtyUnconfirmed), [routed])
   // 발주서 매입가 미확인 — 잘못된 매출을 이력에 남기지 않도록 저장 차단
-  const noPrice = useMemo(() => routed.filter((r) => r.unitPrice <= 0), [routed])
+  // (미납품 행은 매출이 0이고 이력에도 안 들어가므로 차단 대상이 아니다)
+  const noPrice = useMemo(
+    () => routed.filter((r) => !r.notDelivered && r.unitPrice <= 0),
+    [routed],
+  )
+  // 미납품 — 확정 발주서 안의 납품가능 0 행. 차단하지 않고 표기만 한다
+  const notDelivered = useMemo(() => routed.filter((r) => r.notDelivered), [routed])
   const fileStats = useMemo(() => summarizeCoupangFiles(items), [items])
 
   const rocket = useMemo(
@@ -381,6 +387,7 @@ export default function CoupangB2BPage() {
                   <li key={f.fileName} className={f.unconfirmed > 0 ? 'text-amber-700' : ''}>
                     {f.fileName} · {f.rows}행 · 발주 {num(f.orderQty)} / 납품가능 {num(f.confirmQty)}
                     {f.unconfirmed > 0 && <> · 미확정 {f.unconfirmed}행</>}
+                    {f.notDelivered > 0 && <> · 미납품 {f.notDelivered}행</>}
                   </li>
                 ))}
               </ul>
@@ -444,6 +451,13 @@ export default function CoupangB2BPage() {
           컬럼을 추가하고 진도팜 행 <b>전남진도_2</b> · 위킵 행 <b>화성시_1</b> · 곰표 행 <b>시흥시_1</b> 을 채워 주세요.
         </div>
       )}
+      {notDelivered.length > 0 && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 text-gray-600 p-3 text-sm">
+          미납품 {notDelivered.length}건 — 확정 발주서의 납품가능 0 품목입니다. 로켓 양식·박스·PLT·세일즈
+          히스토리에서 제외되며 저장을 막지 않습니다:{' '}
+          {[...new Set(notDelivered.map((u) => `${u.poNumber} ${u.master?.alias || u.productName}`))].join(', ')}
+        </div>
+      )}
       {noPrice.length > 0 && (
         <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
           ⚠️ 단가 미확인 {noPrice.length}건 — 발주서 매입가(공급가 &gt; 매입가)를 읽지 못했습니다. 매출·세일즈
@@ -503,6 +517,7 @@ export default function CoupangB2BPage() {
                             <span className="ml-1 text-amber-600">· 과세구분 미확인(면세 처리)</span>
                           )}
                           {!r.masterKnown && <span className="ml-1 text-red-600">· 마스터 미등록</span>}
+                          {r.notDelivered && <span className="ml-1 text-gray-400">· 미납품</span>}
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right">{num(r.qty)}</td>
@@ -958,6 +973,9 @@ export default function CoupangB2BPage() {
                           {r.qtyUnconfirmed && (
                             <span className="ml-1 text-[11px]">미확정 — 발주수량 기준</span>
                           )}
+                          {r.notDelivered && (
+                            <span className="ml-1 text-[11px] text-gray-400">미납품</span>
+                          )}
                         </td>
                         <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
                           {r.boxes ?? '—'}
@@ -1016,6 +1034,9 @@ export default function CoupangB2BPage() {
                               {num(r.displayQty)}
                               {r.qtyUnconfirmed && (
                                 <span className="ml-1 text-[11px]">미확정 — 발주수량 기준</span>
+                              )}
+                              {r.notDelivered && (
+                                <span className="ml-1 text-[11px] text-gray-400">미납품</span>
                               )}
                             </td>
                             <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>

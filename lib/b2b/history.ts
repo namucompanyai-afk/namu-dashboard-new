@@ -95,9 +95,10 @@ export function buildKurlyHistory(
  * 쿠팡 — 발주번호 × 상품 단위 1행.
  * 매출은 **발주서 매입가** × 납품가능수량, 과세면 ×1.1 (화면 매출 요약과 같은 소스).
  * 시트 쿠팡 공급가는 쓰지 않는다 — 발주서마다 단가가 바뀌기 때문.
+ * 미납품(확정 발주서의 H=0) 행은 매출이 없으므로 이력에 남기지 않는다.
  */
 export function buildCoupangHistory(items: RoutedItem[]): HistoryRow[] {
-  return items.map((it) => ({
+  return items.filter((it) => !it.notDelivered).map((it) => ({
     channel: '쿠팡',
     poNumber: it.poNumber,
     center: it.center,
