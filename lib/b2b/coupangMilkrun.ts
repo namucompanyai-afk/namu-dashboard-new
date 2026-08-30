@@ -1,9 +1,9 @@
 /**
  * 쿠팡 밀크런 운임 참고 계산 (진도팜 출고분).
  *
- * 시트 '쿠팡 밀크런 가격표' → 출고지 '전남진도_2' · 계산단위 '차량' 행만 쓴다.
+ * 시트 '쿠팡 밀크런 가격표' 전 행을 그대로 읽는다(출고지·계산단위별).
  * 컬럼은 센터별 요금(부가포함 값 그대로)이고, 헤더가 '고양1(27)' 형식이라
- * 괄호 앞 센터명으로 매칭한다.
+ * 괄호 앞 센터명으로 매칭한다. 어느 출고지 행을 쓸지는 호출부가 정한다.
  *
  * ⚠️ 참고용 — 밀크런 트럭 요금표 기준값이라 실제 청구와 다를 수 있다.
  * 팔레트 산정·출고지 분기·로켓 양식 로직은 소비만 하고 건드리지 않는다.
@@ -25,15 +25,16 @@ export const TON_TIERS: { maxPlt: number; tons: number }[] = [
 
 const MAX_TIER = TON_TIERS[TON_TIERS.length - 1]
 
-/** 가격표 한 행(차량 단위) — fees 는 센터명 → 요금(빈칸이면 키 없음) */
+/** 가격표 한 행 — fees 는 센터명 → 요금(빈칸이면 키 없음) */
 export type CoupangMilkrunRow = {
-  shipFrom: string
-  label: string // '1톤 (1~2pallet)'
-  tons: number
+  shipFrom: string // 출고지명 ('전남진도_2' / '시흥시_1' / '시흥시_1-1' …)
+  unit: string // 계산단위 ('차량' / 'BASIC' 등 시트 표기 그대로)
+  label: string // 단위 ('1톤 (1~2pallet)' 등)
+  tons: number // 차량 행만 의미 있음(라벨에서 추출), 그 외 0
   fees: Record<string, number>
 }
 
-const UNIT_VEHICLE = '차량'
+export const UNIT_VEHICLE = '차량'
 const COL_SHIP_FROM = 0
 const COL_UNIT = 2
 const COL_LABEL = 3
@@ -48,7 +49,7 @@ const tonsOf = (label: string): number => {
   return m ? Number(m[1]) : 0
 }
 
-/** 가격표 rows(헤더 1행 포함) → 전남진도_2 차량 요금 행 */
+/** 가격표 rows(헤더 1행 포함) → 전 출고지·전 계산단위 요금 행 */
 export function parseCoupangMilkrun(rows: unknown[][]): CoupangMilkrunRow[] {
   if (!rows.length) return []
   const header = rows[0] || []
@@ -56,8 +57,8 @@ export function parseCoupangMilkrun(rows: unknown[][]): CoupangMilkrunRow[] {
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i] || []
     const shipFrom = String(r[COL_SHIP_FROM] ?? '').trim()
-    if (norm(shipFrom) !== norm(JINDO_SHIP_FROM)) continue
-    if (norm(r[COL_UNIT]) !== norm(UNIT_VEHICLE)) continue
+    if (!shipFrom) continue
+    const unit = String(r[COL_UNIT] ?? '').trim()
     const label = String(r[COL_LABEL] ?? '').trim()
     const fees: Record<string, number> = {}
     for (let c = COL_FIRST_CENTER; c < header.length; c++) {
@@ -70,23 +71,26 @@ export function parseCoupangMilkrun(rows: unknown[][]): CoupangMilkrunRow[] {
       if (full && !(full in fees)) fees[full] = fee
       if (key && !(key in fees)) fees[key] = fee
     }
-    out.push({ shipFrom, label, tons: tonsOf(label), fees })
+    out.push({ shipFrom, unit, label, tons: tonsOf(label), fees })
   }
   return out
 }
 
-/** 센터 × 톤수 → 요금. 미등록이면 null */
+/** 행에서 센터 요금 뽑기 (전체 헤더 우선, 없으면 괄호 앞 센터명) */
+const feeOf = (row: CoupangMilkrunRow, center: string): number | null =>
+  row.fees[norm(center)] ?? row.fees[centerKeyOf(center)] ?? null
+
+/** 출고지 × 센터 × 톤수 → 요금. 미등록이면 null */
 export function lookupCoupangFee(
   rows: CoupangMilkrunRow[],
+  shipFrom: string,
   center: string,
   tons: number,
 ): number | null {
-  const row = rows.find((r) => r.tons === tons)
-  if (!row) return null
-  const full = norm(center)
-  const key = centerKeyOf(center)
-  const fee = row.fees[full] ?? row.fees[key]
-  return fee ?? null
+  const row = rows.find(
+    (r) => norm(r.shipFrom) === norm(shipFrom) && norm(r.unit) === norm(UNIT_VEHICLE) && r.tons === tons,
+  )
+  return row ? feeOf(row, center) : null
 }
 
 /**
@@ -129,6 +133,7 @@ export const vehicleLabelOf = (vs: { tons: number }[]): string =>
 export function buildMilkrunShipments(
   groups: PoPalletGroup[],
   prices: CoupangMilkrunRow[],
+  priceShipFrom: string = JINDO_SHIP_FROM,
 ): MilkrunShipment[] {
   const map = new Map<string, MilkrunShipment>()
   for (const g of groups) {
@@ -155,7 +160,7 @@ export function buildMilkrunShipments(
   for (const s of list) {
     s.vehicles = assignVehicles(s.plt)
     s.vehicleLabel = vehicleLabelOf(s.vehicles)
-    const fees = s.vehicles.map((v) => lookupCoupangFee(prices, s.center, v.tons))
+    const fees = s.vehicles.map((v) => lookupCoupangFee(prices, priceShipFrom, s.center, v.tons))
     s.fee = fees.some((f) => f === null) ? null : fees.reduce((a: number, b) => a + (b ?? 0), 0)
   }
   return list.sort((a, b) =>
