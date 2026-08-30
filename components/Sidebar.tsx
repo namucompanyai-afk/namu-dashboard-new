@@ -281,6 +281,10 @@ export default function Sidebar() {
                   <span>🔵</span>
                   <span>쿠팡</span>
                 </Link>
+                <Link href="/b2b/sales" className={'flex items-center gap-2 px-3 py-2 ml-4 rounded-lg text-sm transition-colors ' + (isActive('/b2b/sales') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
+                  <span>📊</span>
+                  <span>세일즈</span>
+                </Link>
               </div>
             )}
           </div>
