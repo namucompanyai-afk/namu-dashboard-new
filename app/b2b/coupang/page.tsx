@@ -4,6 +4,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ProductMaster } from '@/lib/b2b/kurly'
 import {
   buildRocketRows,
+  GOMPYO_BOXES_PER_PLT,
+  GOMPYO_UNITS_PER_PLT,
   indexByBarcode,
   rocketAoa,
   rocketFileName,
@@ -46,16 +48,18 @@ import {
   BOXES_PER_PLT,
   buildMilkrunShipments,
   pltOf,
+  priceOriginByShipFrom,
   shipmentByPo,
   sumMilkrun,
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
+import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 
 /**
  * B2B 발주 변환 — 쿠팡
  *
- * 발주서리스트_*.xlsx 여러 개 업로드 → 출고지(진도팜/위킵) 분기 →
- * 진도팜분은 쿠팡 로켓 양식(TSV/xlsx), 위킵분은 조회용 표.
+ * 발주서리스트_*.xlsx 여러 개 업로드 → 출고지(진도팜/위킵/곰표) 분기 →
+ * 진도팜분은 쿠팡 로켓 양식(TSV/xlsx), 위킵분·곰표분은 조회용 표(곰표는 전 발주 밀크런).
  * 기준정보(상품마스터·센터 주소록)는 /api/b2b/sheets 가 read-only 로 내려준다.
  */
 
@@ -128,6 +132,7 @@ export default function CoupangB2BPage() {
 
   const jindo = useMemo(() => routed.filter((r) => r.shipFrom === '진도팜'), [routed])
   const wikeep = useMemo(() => routed.filter((r) => r.shipFrom === '위킵'), [routed])
+  const gompyo = useMemo(() => routed.filter((r) => r.shipFrom === '곰표'), [routed])
   const unknown = useMemo(() => routed.filter((r) => r.shipFrom === '미분류'), [routed])
   // 납품가능 미확정 — 확정 전/구버전 발주서 업로드 방어 (있으면 이력 저장 차단)
   const unconfirmed = useMemo(() => routed.filter((r) => r.qtyUnconfirmed), [routed])
@@ -183,10 +188,13 @@ export default function CoupangB2BPage() {
   const advisories = useMemo(() => buildCenterAdvisories(palletGroups), [palletGroups])
   const [openPos, setOpenPos] = useState<string[]>([]) // 팔레트 안내 펼친 발주(발주번호|출고지)
   const palletPlan = useMemo(() => buildCoupangPalletPlan(palletGroups), [palletGroups])
+  // 요금표 출고지 매핑 — 상품마스터 '요금표 출고지' 컬럼이 단일 소스(코드 하드코딩 없음)
+  const priceOrigin = useMemo(() => priceOriginByShipFrom(products), [products])
+  const priceOriginMissing = products.length > 0 && Object.keys(priceOrigin).length === 0
   // 밀크런 운임(참고) — 진도팜 팔레트 발주만, 센터 × 입고예정일 묶음에 차량 배정
   const shipments = useMemo(
-    () => buildMilkrunShipments(palletGroups, milkrunPrices),
-    [palletGroups, milkrunPrices],
+    () => buildMilkrunShipments(palletGroups, milkrunPrices, priceOrigin['진도팜'] ?? ''),
+    [palletGroups, milkrunPrices, priceOrigin],
   )
   const shipmentOf = useMemo(() => shipmentByPo(shipments), [shipments])
   const milkrunTotals = useMemo(() => sumMilkrun(shipments), [shipments])
@@ -239,6 +247,24 @@ export default function CoupangB2BPage() {
     }
   }, [])
 
+  // 곰표분 — 전 발주 밀크런. PLT 는 봉 수 합(400봉/PLT), 운임은 BASIC×PLT vs 차량 구간 최저가
+  const gompyoShipments = useMemo(
+    () => buildGompyoShipments(gompyo, milkrunPrices, priceOrigin['곰표'] ?? ''),
+    [gompyo, milkrunPrices, priceOrigin],
+  )
+  const gompyoTotals = useMemo(() => sumGompyo(gompyoShipments), [gompyoShipments])
+  const [gompyoCopied, setGompyoCopied] = useState(false)
+
+  const copyGompyoNotice = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildGompyoNotice(gompyoShipments))
+      setGompyoCopied(true)
+      setTimeout(() => setGompyoCopied(false), 2000)
+    } catch {
+      setFileError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
+    }
+  }, [gompyoShipments])
+
   // 위킵분 — 부착 라벨(즉석밥은 박스 기표기라 제외) + 전달 안내문
   const labelPlan = useMemo(() => buildCoupangLabelPlan(wikeep), [wikeep])
 
@@ -287,7 +313,7 @@ export default function CoupangB2BPage() {
       <div>
         <h1 className="text-2xl font-semibold">B2B 발주 변환 — 쿠팡</h1>
         <p className="text-sm text-gray-500 mt-1">
-          발주서 업로드 → 출고지 분기(진도팜/위킵) · 로켓 양식 · 매출 요약
+          발주서 업로드 → 출고지 분기(진도팜/위킵/곰표) · 로켓 양식 · 매출 요약
         </p>
       </div>
 
@@ -401,6 +427,12 @@ export default function CoupangB2BPage() {
         <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
           ⚠️ 출고지 미분류 {unknown.length}건 — 상품마스터 출고지 확인 필요:{' '}
           {[...new Set(unknown.map((u) => `${u.productName}(${u.barcode || '바코드 없음'})`))].join(', ')}
+        </div>
+      )}
+      {priceOriginMissing && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-800 p-3 text-sm">
+          ⚠️ 상품마스터에 &lsquo;요금표 출고지&rsquo; 컬럼이 없거나 비어 있어 밀크런 운임을 계산하지 못합니다 —
+          컬럼을 추가하고 진도팜 행 <b>전남진도_2</b> · 위킵 행 <b>화성시_1</b> · 곰표 행 <b>시흥시_1</b> 을 채워 주세요.
         </div>
       )}
       {unconfirmed.length > 0 && (
@@ -910,6 +942,112 @@ export default function CoupangB2BPage() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </div>
+
+          {/* 곰표분 — 전 발주 밀크런 (택배 판정 없음) */}
+          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold">곰표분 ({gompyo.length}행)</h2>
+              <button
+                onClick={copyGompyoNotice}
+                disabled={gompyoShipments.length === 0}
+                className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
+              >
+                {gompyoCopied ? '✅ 복사됨' : '곰표 상차 안내문 복사'}
+              </button>
+            </div>
+            {gompyo.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-400">곰표 출고 상품 없음</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm whitespace-nowrap">
+                    <thead className="bg-gray-50 text-gray-600">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-medium">발주번호</th>
+                        <th className="px-3 py-2 text-left font-medium">센터</th>
+                        <th className="px-3 py-2 text-left font-medium">입고예정일</th>
+                        <th className="px-3 py-2 text-left font-medium">상품명</th>
+                        <th className="px-3 py-2 text-right font-medium">봉</th>
+                        <th className="px-3 py-2 text-right font-medium">박스</th>
+                        <th className="px-3 py-2 text-right font-medium">PLT</th>
+                        <th className="px-3 py-2 text-right font-medium">운임(참고)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {gompyoShipments.map((s) =>
+                        s.items.map((r, i) => (
+                          <tr key={`${s.key}-${r.poNumber}-${r.barcode}-${i}`} className="border-t border-gray-100">
+                            <td className="px-3 py-2 text-gray-600">{r.poNumber}</td>
+                            <td className="px-3 py-2">{r.center}</td>
+                            <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
+                            <td className="px-3 py-2 max-w-[24rem] truncate" title={r.productName}>
+                              {r.master?.alias || r.productName}
+                            </td>
+                            <td
+                              className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}
+                            >
+                              {num(r.displayQty)}
+                              {r.qtyUnconfirmed && (
+                                <span className="ml-1 text-[11px]">미확정 — 발주수량 기준</span>
+                              )}
+                            </td>
+                            <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
+                              {r.boxes ?? '—'}
+                            </td>
+                            {i === 0 && (
+                              <>
+                                <td
+                                  rowSpan={s.items.length}
+                                  className="px-3 py-2 text-right font-medium align-top border-l border-gray-100"
+                                >
+                                  {num(s.plt)}
+                                </td>
+                                <td rowSpan={s.items.length} className="px-3 py-2 text-right align-top">
+                                  {s.fare.fee === null ? (
+                                    <span className="text-amber-600">요금 미등록</span>
+                                  ) : (
+                                    <>
+                                      <span className="font-medium">{num(s.fare.fee)}원</span>
+                                      <span className="block text-[11px] text-gray-500">{s.fare.method}</span>
+                                    </>
+                                  )}
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        )),
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
+                  <span className="text-gray-600">
+                    밀크런 {gompyoShipments.length}건 · 총 {num(gompyoTotals.totalPlt)} PLT (
+                    {num(gompyoTotals.totalUnits)}봉)
+                  </span>
+                  <span className="font-semibold">
+                    운임 합계 {num(gompyoTotals.totalFee)}원
+                    {gompyoTotals.unpriced > 0 && (
+                      <span className="ml-2 text-xs font-normal text-amber-600">
+                        (요금 미등록 {gompyoTotals.unpriced}건 제외)
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs text-gray-500">
+                  <p>
+                    · 1PLT = {GOMPYO_UNITS_PER_PLT}봉({GOMPYO_BOXES_PER_PLT}박스) 올림 · 같은 센터·같은
+                    입고예정일 발주는 봉 수를 합산해 한 건으로 묶는다
+                  </p>
+                  <p>· 곰표분은 전 발주 밀크런 — 택배 판정·로켓 양식·부착 라벨 대상이 아니다</p>
+                  <p>
+                    · 운임은 참고용 — 매 PLT 마다 BASIC(1pt 당)×PLT 와 차량 구간 요금을 계산해 싼 쪽을 적용한다
+                    (적용 방식은 운임 칸에 표기)
+                  </p>
+                </div>
+              </>
             )}
           </div>
         </>

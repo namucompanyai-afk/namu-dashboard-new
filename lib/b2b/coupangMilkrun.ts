@@ -8,11 +8,10 @@
  * ⚠️ 참고용 — 밀크런 트럭 요금표 기준값이라 실제 청구와 다를 수 있다.
  * 팔레트 산정·출고지 분기·로켓 양식 로직은 소비만 하고 건드리지 않는다.
  */
-import { norm, toNum } from './kurly'
-import { BOXES_PER_PLT, pltOf } from './coupang'
+import { norm, toNum, type ProductMaster } from './kurly'
+import { BOXES_PER_PLT, pltOf, shipFromOf, type ShipFrom } from './coupang'
 import type { PoPalletGroup } from './coupangDiagram'
 
-export const JINDO_SHIP_FROM = '전남진도_2'
 export { BOXES_PER_PLT, pltOf } // 단일 소스: lib/b2b/coupang.ts
 
 /** 톤수 구간 — 최대 PLT 오름차순. 14PLT 초과는 차량 분할로 처리한다. */
@@ -35,6 +34,7 @@ export type CoupangMilkrunRow = {
 }
 
 export const UNIT_VEHICLE = '차량'
+export const UNIT_BASIC = 'BASIC' // 계산단위 'BASIC(1pt 당)' — 팔레트 1장당 요금
 const COL_SHIP_FROM = 0
 const COL_UNIT = 2
 const COL_LABEL = 3
@@ -80,6 +80,23 @@ export function parseCoupangMilkrun(rows: unknown[][]): CoupangMilkrunRow[] {
 const feeOf = (row: CoupangMilkrunRow, center: string): number | null =>
   row.fees[norm(center)] ?? row.fees[centerKeyOf(center)] ?? null
 
+/**
+ * 출고지명 뒤의 표 구획 번호를 떼어 같은 출고지 묶음 키를 만든다.
+ *   '시흥시_1' · '시흥시_1-1' → '시흥시'   (차량 행과 BASIC 행이 갈려 있음)
+ *   '시흥시(택배)_1-2' → '시흥시(택배)'    (택배 요금은 별도 묶음)
+ * 접미사 번호는 출고지마다 순서가 달라(안성시_1-1=BASIC, 여주시_1=BASIC)
+ * 번호가 아니라 계산단위로 행을 고른다.
+ */
+export const originBaseOf = (shipFrom: string): string =>
+  norm(String(shipFrom ?? '').replace(/_[\d-]+$/, ''))
+
+/** 같은 출고지 묶음 + 계산단위로 행 추리기 */
+const rowsOf = (rows: CoupangMilkrunRow[], shipFrom: string, unit: string): CoupangMilkrunRow[] => {
+  const base = originBaseOf(shipFrom)
+  if (!base) return []
+  return rows.filter((r) => originBaseOf(r.shipFrom) === base && norm(r.unit).includes(norm(unit)))
+}
+
 /** 출고지 × 센터 × 톤수 → 요금. 미등록이면 null */
 export function lookupCoupangFee(
   rows: CoupangMilkrunRow[],
@@ -87,10 +104,56 @@ export function lookupCoupangFee(
   center: string,
   tons: number,
 ): number | null {
-  const row = rows.find(
-    (r) => norm(r.shipFrom) === norm(shipFrom) && norm(r.unit) === norm(UNIT_VEHICLE) && r.tons === tons,
-  )
+  const row = rowsOf(rows, shipFrom, UNIT_VEHICLE).find((r) => r.tons === tons)
   return row ? feeOf(row, center) : null
+}
+
+/** 출고지 × 센터 → BASIC 1PLT 요금. 미등록이면 null */
+export function lookupBasicFee(
+  rows: CoupangMilkrunRow[],
+  shipFrom: string,
+  center: string,
+): number | null {
+  const row = rowsOf(rows, shipFrom, UNIT_BASIC)[0]
+  return row ? feeOf(row, center) : null
+}
+
+// ── 요금표 출고지 매핑 ───────────────────────────────────────────
+/**
+ * 상품마스터 '요금표 출고지' 컬럼 → 출고지별 가격표 출고지명.
+ * 컬럼이 비어 있으면 키가 없고, 그러면 운임은 '요금 미등록'으로 남는다
+ * (임시 하드코딩 매핑을 두지 않는다 — 매핑의 단일 소스는 시트).
+ */
+export function priceOriginByShipFrom(products: ProductMaster[]): Partial<Record<ShipFrom, string>> {
+  const out: Partial<Record<ShipFrom, string>> = {}
+  for (const p of products) {
+    const sf = shipFromOf(p)
+    if (sf === '미분류') continue
+    const v = String(p.priceShipFrom ?? '').trim()
+    if (v && !out[sf]) out[sf] = v
+  }
+  return out
+}
+
+// ── 차량 구간 (가격표 라벨에서 직접 읽는다) ──────────────────────
+export type VehicleTier = { tons: number; label: string; minPlt: number; maxPlt: number }
+
+/** '1톤 (1~2pallet)' → {1, 2} · '2.5톤 (3pallet)' → {3, 3} */
+const rangeOf = (label: string): { minPlt: number; maxPlt: number } | null => {
+  const m = String(label).match(/(\d+)\s*(?:~\s*(\d+))?\s*pallet/i)
+  if (!m) return null
+  const a = Number(m[1])
+  return { minPlt: a, maxPlt: m[2] ? Number(m[2]) : a }
+}
+
+/** 출고지의 차량 구간표 — 커버 PLT 오름차순. 시트 라벨이 기준이라 고정 경계가 없다 */
+export function vehicleTiers(rows: CoupangMilkrunRow[], shipFrom: string): VehicleTier[] {
+  const out: VehicleTier[] = []
+  for (const r of rowsOf(rows, shipFrom, UNIT_VEHICLE)) {
+    const range = rangeOf(r.label)
+    if (range) out.push({ tons: r.tons, label: r.label, ...range })
+  }
+  return out.sort((a, b) => a.maxPlt - b.maxPlt)
 }
 
 /**
@@ -133,7 +196,7 @@ export const vehicleLabelOf = (vs: { tons: number }[]): string =>
 export function buildMilkrunShipments(
   groups: PoPalletGroup[],
   prices: CoupangMilkrunRow[],
-  priceShipFrom: string = JINDO_SHIP_FROM,
+  priceShipFrom: string,
 ): MilkrunShipment[] {
   const map = new Map<string, MilkrunShipment>()
   for (const g of groups) {

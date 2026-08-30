@@ -181,7 +181,7 @@ export function findCenter(centers: CenterAddress[], name: string): CenterAddres
 }
 
 // ── 출고지 분기 ──────────────────────────────────────────────────
-export type ShipFrom = '진도팜' | '위킵' | '미분류'
+export type ShipFrom = '진도팜' | '위킵' | '곰표' | '미분류'
 
 /** 바코드 → 상품마스터 (바코드 있는 행만) */
 export function indexByBarcode(list: ProductMaster[]): Record<string, ProductMaster> {
@@ -198,6 +198,7 @@ export function shipFromOf(m: ProductMaster | undefined): ShipFrom {
   const v = norm(m?.shipFrom)
   if (v.includes('진도팜')) return '진도팜'
   if (v.includes('위킵')) return '위킵'
+  if (v.includes('곰표')) return '곰표'
   return '미분류'
 }
 
@@ -238,6 +239,15 @@ export const BOXES_PER_PLT = 30 // 팔레트 1장 적재 박스 수
 
 /** 발주 박스 수 → PLT (30박스/PLT 올림) */
 export const pltOf = (boxes: number): number => Math.ceil(boxes / BOXES_PER_PLT)
+
+// ── 곰표 출고 기준 ───────────────────────────────────────────────
+/** 곰표는 봉 단위로 팔레트를 센다 — 1PLT = 400봉 = 40박스 */
+export const GOMPYO_UNITS_PER_PLT = 400
+export const GOMPYO_BOXES_PER_PLT = 40
+
+/** 곰표 발주 봉 수 → PLT (400봉/PLT 올림) */
+export const gompyoPltOf = (units: number): number =>
+  Math.ceil(Math.max(0, units) / GOMPYO_UNITS_PER_PLT)
 
 // ── 쿠팡 로켓 양식 (진도팜분) ────────────────────────────────────
 /** 택배 발송분 컬럼 (기존 9개 그대로) */

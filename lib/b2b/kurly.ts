@@ -28,7 +28,8 @@ export type ProductMaster = {
   alias: string // 별칭
   name: string // 상품명
   taxType: string // 과세 구분 (과세/면세)
-  shipFrom: string // 출고지 (진도팜/위킵)
+  shipFrom: string // 출고지 (진도팜/위킵/곰표)
+  priceShipFrom: string // 요금표 출고지 — 밀크런 가격표의 출고지명 (미입력이면 빈 문자열)
   boxQty: number // 박스입수
   coupangSkuId: string // 쿠팡 SKU ID
   coupangSupply: number // 쿠팡 공급가
@@ -48,6 +49,7 @@ const PRODUCT_COLS: Record<keyof ProductMaster, string[]> = {
   name: ['상품명'],
   taxType: ['과세구분', '과세여부', '과세'],
   shipFrom: ['출고지'],
+  priceShipFrom: ['요금표출고지'],
   boxQty: ['박스입수'],
   coupangSkuId: ['쿠팡skuid', '쿠팡sku', 'skuid'],
   coupangSupply: ['쿠팡공급가'],
@@ -98,6 +100,7 @@ export function parseProductMaster(rows: unknown[][]): ProductMaster[] {
       name,
       taxType: trim(at(r, c.taxType)),
       shipFrom: trim(at(r, c.shipFrom)),
+      priceShipFrom: trim(at(r, c.priceShipFrom)),
       boxQty: toNum(at(r, c.boxQty)),
       coupangSkuId: trim(at(r, c.coupangSkuId)),
       coupangSupply: toNum(at(r, c.coupangSupply)),
