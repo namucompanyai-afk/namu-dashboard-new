@@ -28,7 +28,7 @@ export function colName(i: number): string {
 
 const isNum = (v: CellValue): v is number => typeof v === 'number' && Number.isFinite(v)
 
-// s=1 헤더(굵게·노랑·테두리·가운데), s=2 본문(테두리)
+// s=1 헤더(굵게·노랑·테두리·가운데), s=2 본문(테두리), s=3 안내 제목(굵게·병합)
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <fonts count="2">
@@ -45,20 +45,21 @@ const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <border><left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right><top style="thin"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/></border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="3">
+<cellXfs count="4">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`
 
-const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+const contentTypes = (n: number): string => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
-<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${Array.from({ length: n }, (_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('')}
 <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>`
 
@@ -67,10 +68,10 @@ const ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
 </Relationships>`
 
-const WB_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+const wbRels = (n: number): string => `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+${Array.from({ length: n }, (_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}
+<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`
 
 // 시트명 제한: 31자 · : \ / ? * [ ] 금지
@@ -79,7 +80,7 @@ function safeSheetName(name: string): string {
   return (s || 'Sheet1').slice(0, 31)
 }
 
-function sheetXml(rows: CellValue[][], widths: number[]): string {
+function sheetXml(rows: CellValue[][], widths: number[], titleRows = 0): string {
   const cols = widths.length
     ? `<cols>${widths
         .map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`)
@@ -88,28 +89,74 @@ function sheetXml(rows: CellValue[][], widths: number[]): string {
 
   const body = rows
     .map((row, r) => {
+      // 0..titleRows-1 = 안내 제목(s=3), 그다음 1행 = 헤더(s=1), 나머지 = 본문(s=2)
+      const s = r < titleRows ? 3 : r === titleRows ? 1 : 2
       const cells = row
         .map((v, c) => {
           if (v === null || v === undefined || v === '') return ''
           const ref = `${colName(c)}${r + 1}`
-          const s = r === 0 ? 1 : 2
           return isNum(v)
             ? `<c r="${ref}" s="${s}"><v>${v}</v></c>`
             : `<c r="${ref}" s="${s}" t="inlineStr"><is><t xml:space="preserve">${esc(v)}</t></is></c>`
         })
         .join('')
-      return `<row r="${r + 1}">${cells}</row>`
+      return `<row r="${r + 1}"${r < titleRows ? ' ht="20" customHeight="1"' : ''}>${cells}</row>`
     })
     .join('')
 
-  const lastCol = colName(Math.max(1, rows.reduce((m, r) => Math.max(m, r.length), 0)) - 1)
+  const width = Math.max(1, rows.reduce((m, r) => Math.max(m, r.length), 0), widths.length)
+  const lastCol = colName(width - 1)
+  // 안내 제목은 데이터 폭 전체로 병합
+  const merges = titleRows
+    ? `<mergeCells count="${titleRows}">${Array.from(
+        { length: titleRows },
+        (_, i) => `<mergeCell ref="A${i + 1}:${lastCol}${i + 1}"/>`,
+      ).join('')}</mergeCells>`
+    : ''
+
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <dimension ref="A1:${lastCol}${Math.max(1, rows.length)}"/>
-<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+<sheetViews><sheetView workbookViewId="0"><pane ySplit="${titleRows + 1}" topLeftCell="A${titleRows + 2}" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
 <sheetFormatPr defaultRowHeight="15"/>
-${cols}<sheetData>${body}</sheetData>
+${cols}<sheetData>${body}</sheetData>${merges}
 </worksheet>`
+}
+
+export type StyledSheet = {
+  name: string
+  rows: CellValue[][]
+  widths?: number[]
+  titleRows?: number // 선두 안내 제목 행 수(병합·굵게). 헤더는 그 다음 행
+}
+
+/** 시트 여러 장 → xlsx Blob */
+export async function buildStyledXlsxSheets(sheets: StyledSheet[]): Promise<Blob> {
+  const list = sheets.length ? sheets : [{ name: 'Sheet1', rows: [] as CellValue[][] }]
+  const zip = new JSZip()
+  zip.file('[Content_Types].xml', contentTypes(list.length))
+  zip.file('_rels/.rels', ROOT_RELS)
+  zip.file(
+    'xl/workbook.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>${list
+      .map(
+        (s, i) =>
+          `<sheet name="${esc(safeSheetName(s.name))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`,
+      )
+      .join('')}</sheets>
+</workbook>`,
+  )
+  zip.file('xl/_rels/workbook.xml.rels', wbRels(list.length))
+  zip.file('xl/styles.xml', STYLES)
+  list.forEach((s, i) => {
+    zip.file(`xl/worksheets/sheet${i + 1}.xml`, sheetXml(s.rows, s.widths ?? [], s.titleRows ?? 0))
+  })
+  return zip.generateAsync({
+    type: 'blob',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  })
 }
 
 /** 행 배열(0행 = 헤더) → xlsx Blob. widths 는 열 너비(문자 수) */
@@ -118,23 +165,7 @@ export async function buildStyledXlsx(
   rows: CellValue[][],
   widths: number[] = [],
 ): Promise<Blob> {
-  const zip = new JSZip()
-  zip.file('[Content_Types].xml', CONTENT_TYPES)
-  zip.file('_rels/.rels', ROOT_RELS)
-  zip.file(
-    'xl/workbook.xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets><sheet name="${esc(safeSheetName(sheetName))}" sheetId="1" r:id="rId1"/></sheets>
-</workbook>`,
-  )
-  zip.file('xl/_rels/workbook.xml.rels', WB_RELS)
-  zip.file('xl/styles.xml', STYLES)
-  zip.file('xl/worksheets/sheet1.xml', sheetXml(rows, widths))
-  return zip.generateAsync({
-    type: 'blob',
-    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  })
+  return buildStyledXlsxSheets([{ name: sheetName, rows, widths }])
 }
 
 /** Blob 파일 저장 */

@@ -5,14 +5,15 @@
  * 컬럼은 센터별 요금(부가포함 값 그대로)이고, 헤더가 '고양1(27)' 형식이라
  * 괄호 앞 센터명으로 매칭한다.
  *
- * ⚠️ 참고용 — 진도 출고는 실제로는 밀크런 불가(직접 배차 견적 별도).
+ * ⚠️ 참고용 — 밀크런 트럭 요금표 기준값이라 실제 청구와 다를 수 있다.
  * 팔레트 산정·출고지 분기·로켓 양식 로직은 소비만 하고 건드리지 않는다.
  */
 import { norm, toNum } from './kurly'
+import { BOXES_PER_PLT, pltOf } from './coupang'
 import type { PoPalletGroup } from './coupangDiagram'
 
 export const JINDO_SHIP_FROM = '전남진도_2'
-export const BOXES_PER_PLT = 30
+export { BOXES_PER_PLT, pltOf } // 단일 소스: lib/b2b/coupang.ts
 
 /** 톤수 구간 — 최대 PLT 오름차순. 14PLT 초과는 차량 분할로 처리한다. */
 export const TON_TIERS: { maxPlt: number; tons: number }[] = [
@@ -87,9 +88,6 @@ export function lookupCoupangFee(
   const fee = row.fees[full] ?? row.fees[key]
   return fee ?? null
 }
-
-/** 발주 박스 수 → PLT (30박스/PLT 올림) */
-export const pltOf = (boxes: number): number => Math.ceil(boxes / BOXES_PER_PLT)
 
 /**
  * PLT → 차량 배정. 14PLT 이하는 한 대, 초과분은 큰 차부터 분할한다.

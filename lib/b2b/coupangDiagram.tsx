@@ -8,11 +8,11 @@
  */
 import React from 'react'
 import { norm } from './kurly'
-import type { RoutedItem, ShipFrom } from './coupang'
+import { PALLET_BOX_LIMIT, type RoutedItem, type ShipFrom } from './coupang'
 import { downloadSvgAsJpg } from './svgExport'
 
 // ── 적재 가정 ────────────────────────────────────────────────────
-export const PALLET_BOX_LIMIT = 9 // 초과 시 택배 불가 → 팔레트 안내
+export { PALLET_BOX_LIMIT } // 9박스 초과 → 팔레트 안내 (단일 소스: lib/b2b/coupang.ts)
 export const DEFAULT_BOX_MM = 400 // 치수 미등록 상품 가정값
 export const PALLET_MM = 150
 export const LIMIT_MM = 1700 // 팔레트 포함 높이 한도 (컬리와 동일)
@@ -23,7 +23,7 @@ export const MAX_TIERS_PER_SLOT = 5 // 자리당 최대 단수 (30박스/PLT 운
 /** 출고지별 안내 — 운송수단은 자동 판정하지 않고 문구만 낸다 */
 export const SHIP_FROM_GUIDE: Record<string, string> = {
   진도팜:
-    '진도 출고는 밀크런 불가 — 팔레트 시 직접 화물 배차 (마감 입고 전일 18:00, 트럭 납품 시 쉽먼트 예약 필수)',
+    '진도 출고 팔레트 건은 밀크런 트럭 배차 (마감 입고 전일 18:00, 쉽먼트 예약 필수)',
   위킵: '화성 출고는 밀크런 이용 가능 (접수 마감 D-1 영업일 16:00, 유료·매입대금 차감)',
 }
 

@@ -8,13 +8,16 @@ import {
   rocketAoa,
   rocketFileName,
   routeItems,
+  splitRocketRows,
+  ROCKET_SHEETS,
   summarizeCoupang,
   todayKst,
   type CenterAddress,
   type CoupangOrderItem,
+  type RocketRow,
 } from '@/lib/b2b/coupang'
 import { parseCoupangFiles } from '@/lib/b2b/coupangFile'
-import { buildStyledXlsx, saveBlob } from '@/lib/b2b/xlsxStyled'
+import { buildStyledXlsxSheets, saveBlob } from '@/lib/b2b/xlsxStyled'
 import { buildCoupangHistory, historyMessage } from '@/lib/b2b/history'
 import {
   buildCoupangLabelPlan,
@@ -60,6 +63,7 @@ type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
 const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
+const TRUCK_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 10, 14]
 
 export default function CoupangB2BPage() {
   const [products, setProducts] = useState<ProductMaster[]>([])
@@ -129,6 +133,8 @@ export default function CoupangB2BPage() {
     () => buildRocketRows(jindo, centers, madeDate),
     [jindo, centers, madeDate],
   )
+  // 9박스 이하 = 택배 발송분 / 초과 = 트럭 발송분(밀크런)
+  const { parcel: rocketParcel, truck: rocketTruck } = useMemo(() => splitRocketRows(rocket), [rocket])
   const summary = useMemo(() => summarizeCoupang(routed), [routed])
 
   // 발주 이력 저장 — 버튼을 눌렀을 때만 기록한다(업로드만으로는 시트에 쓰지 않음).
@@ -250,12 +256,25 @@ export default function CoupangB2BPage() {
 
   const downloadXlsx = useCallback(async () => {
     try {
-      const blob = await buildStyledXlsx('대', rocketAoa(rocket), ROCKET_WIDTHS)
+      const blob = await buildStyledXlsxSheets([
+        {
+          name: ROCKET_SHEETS['택배'].sheetName,
+          rows: rocketAoa(rocketParcel, '택배'),
+          widths: ROCKET_WIDTHS,
+          titleRows: 1,
+        },
+        {
+          name: ROCKET_SHEETS['트럭'].sheetName,
+          rows: rocketAoa(rocketTruck, '트럭'),
+          widths: TRUCK_WIDTHS,
+          titleRows: 1,
+        },
+      ])
       saveBlob(blob, rocketFileName(madeDate))
     } catch (e: unknown) {
       setFileError('xlsx 생성 실패: ' + (e instanceof Error ? e.message : String(e)))
     }
-  }, [rocket, madeDate])
+  }, [rocketParcel, rocketTruck, madeDate])
 
   const totalQty = routed.reduce((s, r) => s + r.confirmQty, 0)
 
@@ -363,7 +382,8 @@ export default function CoupangB2BPage() {
       )}
       {missingCenters.length > 0 && (
         <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
-          ⚠️ 센터 주소록 미등록 {missingCenters.length}곳 — 주소·전화 공란: {missingCenters.join(', ')}
+          ⚠️ 주소 확보 실패 {missingCenters.length}곳 — 주소·전화 공란(센터 주소록·발주서 모두 없음):{' '}
+          {missingCenters.join(', ')}
         </div>
       )}
       {missingBoxes.length > 0 && (
@@ -569,7 +589,7 @@ export default function CoupangB2BPage() {
                 ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
               </p>
               <p className="text-gray-500">
-                · 운임은 밀크런 요금표 기준 참고용 — 진도 출고는 밀크런 불가, 직접 배차 견적 별도
+                · 운임은 참고용 — 밀크런 트럭 요금표 기준
               </p>
               <p className="text-gray-500">
                 · PLT 수는 {BOXES_PER_PLT}박스 올림 기준 — SKU 구성에 따라 실제 팔레트 수는 적재 구성도 참고
@@ -596,10 +616,12 @@ export default function CoupangB2BPage() {
             </div>
           )}
 
-          {/* 진도팜분 — 로켓 양식 */}
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">진도팜분 — 쿠팡 로켓 양식 ({rocket.length}행)</h2>
+          {/* 진도팜분 — 로켓 양식 (택배 발송분 / 트럭 발송분 2분할) */}
+          <div className="space-y-4">
+            <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold">
+                진도팜분 — 쿠팡 로켓 양식 (택배 {rocketParcel.length}행 · 트럭 {rocketTruck.length}행)
+              </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-gray-600">
                   제조일자
@@ -615,57 +637,23 @@ export default function CoupangB2BPage() {
                   disabled={rocket.length === 0}
                   className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
                 >
-                  xlsx 다운로드
+                  xlsx 다운로드 (2시트)
                 </button>
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm whitespace-nowrap">
-                <thead className="bg-gray-50 text-gray-600">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium">받는분성명</th>
-                    <th className="px-3 py-2 text-left font-medium">받는분전화번호</th>
-                    <th className="px-3 py-2 text-left font-medium">받는분주소</th>
-                    <th className="px-3 py-2 text-left font-medium">배송메세지1</th>
-                    <th className="px-3 py-2 text-left font-medium">내품명</th>
-                    <th className="px-3 py-2 text-right font-medium">내품수량</th>
-                    <th className="px-3 py-2 text-right font-medium">박스 수</th>
-                    <th className="px-3 py-2 text-left font-medium">제조일자</th>
-                    <th className="px-3 py-2 text-left font-medium">송장</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rocket.map((r, i) => (
-                    <tr
-                      key={`${r.poNumber}-${r.itemName}-${i}`}
-                      className={'border-t border-gray-100 ' + (r.centerKnown ? '' : 'bg-red-50')}
-                    >
-                      <td className="px-3 py-2">
-                        {r.recipient}
-                        {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">미등록</span>}
-                      </td>
-                      <td className="px-3 py-2 text-gray-600">{r.phone}</td>
-                      <td className="px-3 py-2 max-w-[26rem] truncate" title={r.address}>
-                        {r.address}
-                      </td>
-                      <td className="px-3 py-2" />
-                      <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
-                        {r.itemName}
-                      </td>
-                      <td className="px-3 py-2 text-right">{num(r.itemQty)}</td>
-                      <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
-                        {r.boxes ?? '—'}
-                      </td>
-                      <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
-                      <td className="px-3 py-2" />
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
-              정렬: 입고예정일 → 발주번호 · 박스 수 = 올림(납품가능수량 ÷ 박스입수) · 배송메세지1·송장은 공란
-            </p>
+
+            <RocketTable
+              title={ROCKET_SHEETS['택배'].title}
+              note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1·송장은 공란`}
+              rows={rocketParcel}
+              truck={false}
+            />
+            <RocketTable
+              title={ROCKET_SHEETS['트럭'].title}
+              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 ${BOXES_PER_PLT}박스/PLT 올림, 발주 첫 행에만 기입`}
+              rows={rocketTruck}
+              truck
+            />
           </div>
 
           {/* 진도팜 송장 회신 대사 */}
@@ -879,6 +867,79 @@ export default function CoupangB2BPage() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+/** 로켓 양식 표 — 택배분/트럭분 공통(트럭분만 '파렛트 수' 열이 붙는다) */
+function RocketTable({
+  title,
+  note,
+  rows,
+  truck,
+}: {
+  title: string
+  note: string
+  rows: RocketRow[]
+  truck: boolean
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50">
+        <span className="text-sm font-semibold">{title}</span>
+        <span className="ml-2 text-xs text-gray-500">{rows.length}행</span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="px-4 py-6 text-xs text-gray-400">해당 발주 없음</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm whitespace-nowrap">
+            <thead className="bg-gray-50 text-gray-600">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">받는분성명</th>
+                <th className="px-3 py-2 text-left font-medium">받는분전화번호</th>
+                <th className="px-3 py-2 text-left font-medium">받는분주소</th>
+                <th className="px-3 py-2 text-left font-medium">배송메세지1</th>
+                <th className="px-3 py-2 text-left font-medium">내품명</th>
+                <th className="px-3 py-2 text-right font-medium">내품수량</th>
+                <th className="px-3 py-2 text-right font-medium">박스 수</th>
+                <th className="px-3 py-2 text-left font-medium">제조일자</th>
+                {truck && <th className="px-3 py-2 text-right font-medium">파렛트 수</th>}
+                <th className="px-3 py-2 text-left font-medium">송장</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr
+                  key={`${r.poNumber}-${r.itemName}-${i}`}
+                  className={'border-t border-gray-100 ' + (r.centerKnown ? '' : 'bg-red-50')}
+                >
+                  <td className="px-3 py-2">
+                    {r.recipient}
+                    {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">주소 없음</span>}
+                  </td>
+                  <td className="px-3 py-2 text-gray-600">{r.phone}</td>
+                  <td className="px-3 py-2 max-w-[26rem] truncate" title={r.address}>
+                    {r.address}
+                  </td>
+                  <td className="px-3 py-2" />
+                  <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
+                    {r.itemName}
+                  </td>
+                  <td className="px-3 py-2 text-right">{num(r.itemQty)}</td>
+                  <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
+                    {r.boxes ?? '—'}
+                  </td>
+                  <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
+                  {truck && <td className="px-3 py-2 text-right font-medium">{r.pallet ?? ''}</td>}
+                  <td className="px-3 py-2" />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">{note}</p>
     </div>
   )
 }

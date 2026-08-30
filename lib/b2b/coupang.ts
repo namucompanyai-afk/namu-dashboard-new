@@ -25,12 +25,24 @@ export type CoupangOrderItem = {
   orderQty: number // 발주수량
   confirmQty: number // 납품가능수량 ← 실제 출고 기준
   barcode: string // 상품마스터 매칭 키
+  centerAddress: string // 발주서 '주소' 셀 (택배수령담당자 괄호부 제거)
+  centerPhone: string // 주소 괄호부에서 분리한 택배수령담당자 번호
   sourceFile: string
 }
 
 const cellAt = (rows: unknown[][], r: number, c: number): unknown => rows[r]?.[c]
 const textAt = (rows: unknown[][], r: number, c: number): string =>
   String(cellAt(rows, r, c) ?? '').trim()
+
+/** 쿠팡이 붙이는 '(택배수령담당자 :+82…)' 괄호부를 떼어 주소/전화로 나눈다 */
+export function splitCenterAddress(raw: string): { address: string; phone: string } {
+  const src = String(raw ?? '').trim()
+  const m = src.match(/\(\s*택배수령담당자\s*:?\s*([^)]*)\)/)
+  return {
+    address: src.replace(/\(\s*택배수령담당자\s*:?[^)]*\)/g, '').replace(/\s+/g, ' ').trim(),
+    phone: (m?.[1] ?? '').trim(),
+  }
+}
 
 export function isCoupangRows(rows: unknown[][]): boolean {
   return textAt(rows, 0, 0).startsWith(COUPANG_FILE_MARK)
@@ -55,6 +67,17 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   const dueIdx = findRow((s) => norm(s) === '입고예정일시')
   const center = dueIdx >= 0 ? textAt(rows, dueIdx + 1, 2) : ''
   const dueDate = dueIdx >= 0 ? fmtDate(cellAt(rows, dueIdx + 1, 5)) : ''
+  // 주소·택배수령담당자는 마커 행의 라벨로 열을 찾는다(못 찾으면 실측 위치 D/I열)
+  const labelCol = (label: string, fallback: number): number => {
+    if (dueIdx < 0) return fallback
+    const i = (rows[dueIdx] || []).findIndex((v) => norm(v) === norm(label))
+    return i >= 0 ? i : fallback
+  }
+  const rawAddr = dueIdx >= 0 ? textAt(rows, dueIdx + 1, labelCol('주소', 3)) : ''
+  const addr = splitCenterAddress(rawAddr)
+  const centerAddress = addr.address
+  const centerPhone =
+    addr.phone || (dueIdx >= 0 ? textAt(rows, dueIdx + 1, labelCol('택배수령담당자', 8)) : '')
 
   const prodIdx = findRow((s) => norm(s).startsWith('3.상품정보'))
   if (prodIdx < 0) return []
@@ -73,6 +96,8 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       orderQty: toNum(cellAt(rows, r, 6)),
       confirmQty: toNum(cellAt(rows, r, 7)),
       barcode: textAt(rows, r + 1, 2),
+      centerAddress,
+      centerPhone,
       sourceFile,
     })
   }
@@ -173,7 +198,15 @@ export function routeItems(
     .sort(byDueThenPo)
 }
 
+// ── 팔레트/PLT 기준 (택배·트럭 분기 공통 소스) ──────────────────
+export const PALLET_BOX_LIMIT = 9 // 초과 시 택배 불가 → 트럭(밀크런) 발송
+export const BOXES_PER_PLT = 30 // 팔레트 1장 적재 박스 수
+
+/** 발주 박스 수 → PLT (30박스/PLT 올림) */
+export const pltOf = (boxes: number): number => Math.ceil(boxes / BOXES_PER_PLT)
+
 // ── 쿠팡 로켓 양식 (진도팜분) ────────────────────────────────────
+/** 택배 발송분 컬럼 (기존 9개 그대로) */
 export const ROCKET_HEADERS = [
   '받는분성명',
   '받는분전화번호',
@@ -186,7 +219,30 @@ export const ROCKET_HEADERS = [
   '송장',
 ] as const
 
+/** 트럭 발송분 컬럼 — 송장 앞에 '파렛트 수' 추가 */
+export const TRUCK_HEADERS = [
+  '받는분성명',
+  '받는분전화번호',
+  '받는분주소',
+  '배송메세지1',
+  '내품명',
+  '내품수량',
+  '박스 수',
+  '제조일자',
+  '파렛트 수',
+  '송장',
+] as const
+
+export type RocketMode = '택배' | '트럭'
+
+/** 시트명 + 1행 안내 제목 */
+export const ROCKET_SHEETS: Record<RocketMode, { sheetName: string; title: string }> = {
+  택배: { sheetName: '택배 발송분', title: '■ 택배 발송분 — 박스별 택배 발송' },
+  트럭: { sheetName: '트럭 발송분(밀크런)', title: '■ 트럭 발송분 — 밀크런 트럭, 팔레트 적재' },
+}
+
 export type RocketRow = {
+  mode: RocketMode // 택배(9박스 이하) / 트럭(9박스 초과)
   recipient: string // 받는분성명 = 센터명
   phone: string
   address: string
@@ -195,32 +251,60 @@ export type RocketRow = {
   itemQty: number // 내품수량 = 납품가능수량
   boxes: number | null // 박스 수
   madeDate: string // 제조일자
+  pallet: number | null // 파렛트 수 — 트럭분 발주 첫 행에만 기입, 나머지는 null
   invoice: string // 송장 (공란)
-  centerKnown: boolean // 주소록 미등록이면 false → 행 강조 + 주소·전화 공란
+  centerKnown: boolean // 주소를 못 구하면 false → 행 강조
   masterKnown: boolean // 상품마스터 미등록이면 false → 박스 수 공란
   poNumber: string
   dueDate: string
 }
 
-/** 진도팜분 → 로켓 양식 행 (정렬은 routeItems 에서 이미 적용된 순서 유지) */
+/** 발주번호 → 박스 합계 (마스터 미등록 행은 0으로 본다) */
+const boxesByPo = (items: RoutedItem[]): Record<string, number> => {
+  const m: Record<string, number> = {}
+  for (const it of items) m[it.poNumber] = (m[it.poNumber] ?? 0) + (it.boxes ?? 0)
+  return m
+}
+
+/**
+ * 진도팜분 → 로켓 양식 행 (정렬은 routeItems 에서 이미 적용된 순서 유지).
+ *
+ * 발주 단위 박스 합계가 9박스 이하면 택배분, 초과면 트럭분(밀크런)으로 나눈다.
+ *   택배분 — 주소·전화는 기존 센터 주소록 lookup
+ *   트럭분 — 주소는 발주서가 자동 출력한 값, 전화는 그 주소 괄호부의 택배수령담당자
+ *            (발주서 값이 비면 주소록으로 대체)
+ * 파렛트 수는 발주 단위 1회(첫 행)만 기입한다.
+ */
 export function buildRocketRows(
   items: RoutedItem[],
   centers: CenterAddress[],
   madeDate: string,
 ): RocketRow[] {
+  const poBoxes = boxesByPo(items)
+  const palletDone = new Set<string>()
   return items.map((it) => {
     const c = findCenter(centers, it.center)
+    const truck = (poBoxes[it.poNumber] ?? 0) > PALLET_BOX_LIMIT
+    const address = truck ? it.centerAddress || c?.address || '' : c?.address || ''
+    const phone = truck ? it.centerPhone || c?.phone || '' : c?.phone || ''
+    let pallet: number | null = null
+    if (truck && !palletDone.has(it.poNumber)) {
+      palletDone.add(it.poNumber)
+      pallet = pltOf(poBoxes[it.poNumber] ?? 0)
+    }
     return {
+      mode: (truck ? '트럭' : '택배') as RocketMode,
       recipient: it.center,
-      phone: c?.phone || '',
-      address: c?.address || '',
+      phone,
+      address,
       memo: '',
       itemName: it.productName,
       itemQty: it.confirmQty,
       boxes: it.boxes,
       madeDate,
+      pallet,
       invoice: '',
-      centerKnown: !!c,
+      centerKnown: !!address,
       masterKnown: !!it.master,
       poNumber: it.poNumber,
       dueDate: it.dueDate,
@@ -228,29 +312,35 @@ export function buildRocketRows(
   })
 }
 
-/** 헤더 + 데이터 (엑셀/TSV 공통 소스) */
-export function rocketAoa(rows: RocketRow[]): (string | number)[][] {
-  return [
-    [...ROCKET_HEADERS],
-    ...rows.map((r) => [
-      r.recipient,
-      r.phone,
-      r.address,
-      r.memo,
-      r.itemName,
-      r.itemQty,
-      r.boxes ?? '',
-      r.madeDate,
-      r.invoice,
-    ]),
-  ]
+/** 택배분/트럭분 분리 (순서 유지) */
+export function splitRocketRows(rows: RocketRow[]): { parcel: RocketRow[]; truck: RocketRow[] } {
+  return {
+    parcel: rows.filter((r) => r.mode === '택배'),
+    truck: rows.filter((r) => r.mode === '트럭'),
+  }
 }
 
-/** 붙여넣기용 TSV */
-export function rocketTsv(rows: RocketRow[]): string {
-  return rocketAoa(rows)
-    .map((r) => r.map((v) => String(v ?? '').replace(/[\t\r\n]+/g, ' ')).join('\t'))
-    .join('\n')
+/** 안내 제목 1행 + 헤더 + 데이터 (xlsx 소스) */
+export function rocketAoa(rows: RocketRow[], mode: RocketMode): (string | number)[][] {
+  const truck = mode === '트럭'
+  const headers = truck ? TRUCK_HEADERS : ROCKET_HEADERS
+  return [
+    [ROCKET_SHEETS[mode].title],
+    [...headers],
+    ...rows.map((r) => {
+      const base: (string | number)[] = [
+        r.recipient,
+        r.phone,
+        r.address,
+        r.memo,
+        r.itemName,
+        r.itemQty,
+        r.boxes ?? '',
+        r.madeDate,
+      ]
+      return truck ? [...base, r.pallet ?? '', r.invoice] : [...base, r.invoice]
+    }),
+  ]
 }
 
 /** coupang_rocket_{YYYYMMDD}.xlsx */
