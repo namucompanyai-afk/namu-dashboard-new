@@ -512,6 +512,7 @@ export default function B2BPage() {
                 <thead className="bg-gray-50 text-gray-600">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">발주상품코드</th>
+                    <th className="px-3 py-2 text-left font-medium">입고예정일</th>
                     <th className="px-3 py-2 text-left font-medium">입고지</th>
                     <th className="px-3 py-2 text-left font-medium">경유센터</th>
                     <th className="px-3 py-2 text-left font-medium">상품</th>
@@ -527,6 +528,9 @@ export default function B2BPage() {
                     return (
                       <tr key={`${o.productCode}-${i}`} className="border-t border-gray-100">
                         <td className="px-3 py-2 text-gray-600">{o.productCode}</td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {o.dueDate || <span className="text-amber-600">미입력</span>}
+                        </td>
                         <td className="px-3 py-2">{o.dest}</td>
                         <td className="px-3 py-2 text-gray-600">{o.viaCenter}</td>
                         <td className="px-3 py-2">
