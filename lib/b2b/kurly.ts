@@ -192,7 +192,7 @@ export function lookupVehicleFee(prices: MilkrunPrice[], totalPlt: number): Milk
 
 // ── 컬리 발주 xlsx ───────────────────────────────────────────────
 export type KurlyOrderRow = {
-  productCode: string // 발주상품코드
+  productCode: string // 발주코드 (구 양식 '발주상품코드')
   status: string // 상태
   dueDate: string // 입고예정일
   masterCode: string // 마스터코드 ← 상품마스터 매칭 키
@@ -201,8 +201,8 @@ export type KurlyOrderRow = {
   viaCenter: string // 경유센터
   shipMethod: string // 출고방법
   unitsPerBox: number // 박스당입수
-  boxCount: number // 발주수량 = 박스 수
-  totalUnits: number // 총 발주수량 = 낱개 수
+  boxCount: number // 발주확정 수량(박스) — 확정 칸이 비면 발주생성 수량(박스)
+  totalUnits: number // 발주확정 수량(낱개) — 확정 칸이 비면 발주생성 수량(낱개)
   expiry: string // 소비기한(유통기한)
   // 발주 파일의 실제 금액(프로모션 할인 반영분) — 시트 공급가로 재계산하지 않는다
   supplyUnit: number // 공급단가
@@ -211,9 +211,17 @@ export type KurlyOrderRow = {
 
 export const ORDER_SHEET_NAME = '발주 내역'
 
+/**
+ * 컬리 발주서 헤더 매핑.
+ *
+ * 컬리 다운로드 양식은 수량 컬럼이 '발주생성 수량(박스/낱개)'과
+ * '발주확정 수량(박스/낱개)' 두 벌로 내려온다 — 구 양식의 '발주수량/총 발주수량'
+ * 은 어느 쪽에도 부분일치하지 않아 그대로 두면 박스가 0으로 읽힌다.
+ * 실제 출고 기준인 **확정** 컬럼을 먼저 보고, 구 양식 이름은 뒤에 남겨 둔다.
+ */
 const ORDER_COLS: Record<keyof KurlyOrderRow, string[]> = {
-  productCode: ['발주상품코드'],
-  status: ['상태'],
+  productCode: ['발주코드', '발주상품코드'],
+  status: ['발주상태', '상태'],
   dueDate: ['입고예정일'],
   masterCode: ['마스터코드'],
   productName: ['상품명'],
@@ -221,11 +229,17 @@ const ORDER_COLS: Record<keyof KurlyOrderRow, string[]> = {
   viaCenter: ['경유센터'],
   shipMethod: ['출고방법'],
   unitsPerBox: ['박스당입수'],
-  boxCount: ['발주수량'],
-  totalUnits: ['총발주수량'],
-  expiry: ['소비기한(유통기한)', '소비기한'],
+  boxCount: ['발주확정수량(박스)', '발주수량'],
+  totalUnits: ['발주확정수량(낱개)', '총발주수량'],
+  expiry: ['유통기한/소비기한', '소비기한(유통기한)', '소비기한'],
   supplyUnit: ['공급단가'],
   supplyTotal: ['공급가'],
+}
+
+/** 확정 칸이 비어 내려온 발주서(확정 전)용 폴백 — 값이 0 이면 0 그대로 쓴다 */
+const ORDER_CREATED_COLS = {
+  boxCreated: ['발주생성수량(박스)'],
+  unitsCreated: ['발주생성수량(낱개)'],
 }
 
 /** 엑셀 날짜(Date·serial·문자열) → YYYY-MM-DD */
@@ -248,13 +262,23 @@ export function fmtDate(v: unknown): string {
 
 /**
  * '발주 내역' rows(헤더 1행 포함) → KurlyOrderRow[].
- * 발주수량 = 박스 수 / 총 발주수량 = 낱개 수 (혼동 금지).
+ * 박스 수 = 확정 수량(박스) / 낱개 수 = 확정 수량(낱개) (혼동 금지).
  */
 export function parseKurlyOrderRows(rows: unknown[][]): KurlyOrderRow[] {
   if (!rows.length) return []
   const c = resolveCols(rows[0], ORDER_COLS)
+  const alt = resolveCols(rows[0], ORDER_CREATED_COLS)
   if (c.dest < 0 || c.masterCode < 0) {
     throw new Error("'발주 내역' 헤더에서 입고지/마스터코드 컬럼을 찾지 못했습니다.")
+  }
+  // 수량 컬럼을 하나도 못 찾으면 전 행이 0박스가 되므로 조용히 넘기지 않는다
+  if (c.boxCount < 0 && alt.boxCreated < 0) {
+    throw new Error("'발주 내역' 헤더에서 발주 수량(박스) 컬럼을 찾지 못했습니다.")
+  }
+  /** 확정 칸이 비었으면(확정 전) 생성 칸으로 대체 — 0 은 0 그대로 */
+  const qtyOf = (r: unknown[], confirmed: number, created: number): number => {
+    const v = at(r, confirmed)
+    return trim(v) === '' ? toNum(at(r, created)) : toNum(v)
   }
   const out: KurlyOrderRow[] = []
   for (let i = 1; i < rows.length; i++) {
@@ -273,8 +297,8 @@ export function parseKurlyOrderRows(rows: unknown[][]): KurlyOrderRow[] {
       viaCenter: trim(at(r, c.viaCenter)),
       shipMethod: trim(at(r, c.shipMethod)),
       unitsPerBox: toNum(at(r, c.unitsPerBox)),
-      boxCount: toNum(at(r, c.boxCount)),
-      totalUnits: toNum(at(r, c.totalUnits)),
+      boxCount: qtyOf(r, c.boxCount, alt.boxCreated),
+      totalUnits: qtyOf(r, c.totalUnits, alt.unitsCreated),
       expiry: fmtDate(at(r, c.expiry)),
       supplyUnit: toNum(at(r, c.supplyUnit)),
       supplyTotal: toNum(at(r, c.supplyTotal)),
