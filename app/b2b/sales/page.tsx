@@ -20,10 +20,10 @@ import {
   buildKpi,
   byChannel,
   byMonth,
-  byProduct,
+  byProductKey,
   channelStats,
   listMonths,
-  listProducts,
+  listProductOptions,
   monthLabel,
   monthlyTrend,
   parseSalesHistory,
@@ -34,6 +34,7 @@ import {
   sortForTable,
   type ChannelFilter,
   type ChannelStat,
+  type ProductOption,
   type ProductPoint,
   type RankRow,
   type SalesChannel,
@@ -87,7 +88,7 @@ export default function B2BSalesPage() {
   const [month, setMonth] = useState('')
   const [limit, setLimit] = useState(PAGE_SIZE)
   const [topScope, setTopScope] = useState<TopScope>('month')
-  // 상품별 트렌드 — 월·채널 필터와 독립 (빈 문자열 = 전체 상품 합계)
+  // 상품별 트렌드 — 월·채널 필터와 독립 (빈 문자열 = 전체 상품 합계, 아니면 채널×상품 키)
   const [product, setProduct] = useState('')
   const [productLimit, setProductLimit] = useState(PAGE_SIZE)
 
@@ -131,14 +132,14 @@ export default function B2BSalesPage() {
   const tableRows = useMemo(() => sortForTable(scoped), [scoped])
 
   // 상품 트렌드는 항상 '데이터가 있는 최신 월' 기준 최근 6개월 (월 필터와 무관)
-  const productList = useMemo(() => listProducts(records), [records])
+  const productList = useMemo(() => listProductOptions(records), [records])
   const trendMonths = useMemo(() => recentMonths(months[0] || '', 6), [months])
   const productSeries = useMemo(
     () => productTrend(records, trendMonths, product),
     [records, trendMonths, product],
   )
   const productRows = useMemo(
-    () => sortForTable(byProduct(records, product).filter((r) => trendMonths.includes(r.month))),
+    () => sortForTable(byProductKey(records, product).filter((r) => trendMonths.includes(r.month))),
     [records, product, trendMonths],
   )
 
@@ -611,7 +612,7 @@ function ProductTrendSection({
   onMore,
   months,
 }: {
-  products: string[]
+  products: ProductOption[]
   product: string
   onProduct: (p: string) => void
   series: ProductPoint[]
@@ -620,7 +621,8 @@ function ProductTrendSection({
   onMore: () => void
   months: string[]
 }) {
-  const label = product || '전체 상품 합계'
+  const selected = products.find((p) => p.key === product)
+  const label = selected?.label || '전체 상품 합계'
   const range =
     months.length > 0 ? `${monthLabel(months[0])} ~ ${monthLabel(months[months.length - 1])}` : ''
   const total = rows.reduce(
@@ -645,8 +647,8 @@ function ProductTrendSection({
             >
               <option value="">전체 상품 합계</option>
               {products.map((p) => (
-                <option key={p} value={p}>
-                  {p}
+                <option key={p.key} value={p.key}>
+                  {p.label}
                 </option>
               ))}
             </select>
@@ -679,6 +681,7 @@ function ProductTrendSection({
         </ChartBox>
       </div>
 
+      {selected && (
       <div className="border-t border-gray-200">
         <div className="px-4 py-3 flex items-baseline justify-between">
           <h3 className="text-xs font-semibold text-gray-700">
@@ -699,7 +702,6 @@ function ProductTrendSection({
                     <th className="px-3 py-2 text-left font-medium">채널</th>
                     <th className="px-3 py-2 text-left font-medium">센터·입고지</th>
                     <th className="px-3 py-2 text-left font-medium">입고예정일</th>
-                    {!product && <th className="px-3 py-2 text-left font-medium">상품</th>}
                     <th className="px-3 py-2 text-right font-medium">박스</th>
                     <th className="px-3 py-2 text-right font-medium">낱개</th>
                     <th className="px-3 py-2 text-right font-medium">매출</th>
@@ -714,18 +716,13 @@ function ProductTrendSection({
                       <td className="px-3 py-2">{r.channel}</td>
                       <td className="px-3 py-2">{r.center}</td>
                       <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
-                      {!product && (
-                        <td className="px-3 py-2 max-w-[22rem] truncate" title={r.product}>
-                          {r.product}
-                        </td>
-                      )}
                       <td className="px-3 py-2 text-right">{r.boxes ? num(r.boxes) : '—'}</td>
                       <td className="px-3 py-2 text-right">{num(r.units)}</td>
                       <td className="px-3 py-2 text-right font-medium">{num(r.revenue)}</td>
                     </tr>
                   ))}
                   <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
-                    <td className="px-3 py-2" colSpan={product ? 3 : 4}>
+                    <td className="px-3 py-2" colSpan={3}>
                       합계
                     </td>
                     <td className="px-3 py-2 text-right">{num(total.boxes)}</td>
@@ -748,6 +745,7 @@ function ProductTrendSection({
           </>
         )}
       </div>
+      )}
     </div>
   )
 }

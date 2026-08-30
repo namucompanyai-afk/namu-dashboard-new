@@ -232,22 +232,55 @@ export function rankBy(
   return [...map.values()].sort((a, b) => b.revenue - a.revenue).slice(0, n)
 }
 
-/** 발주 이력에 등장한 상품(별칭) 목록 — 가나다순 */
-export const listProducts = (recs: SalesRecord[]): string[] =>
-  [...new Set(recs.map((r) => r.product).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'))
+export type ProductOption = { key: string; channel: string; product: string; label: string }
+
+/** 채널×상품 키 구분자 — 상품명·채널명에 나올 수 없는 제어문자 */
+const PRODUCT_SEP = '\u0001'
+export const productKey = (channel: string, product: string): string =>
+  `${channel}${PRODUCT_SEP}${product}`
+
+/**
+ * 발주 이력에 등장한 채널×상품 조합 — 상품명 오름차순(같으면 채널명).
+ * 양채널 판매 상품은 채널별로 각각 항목이 생긴다.
+ */
+export function listProductOptions(recs: SalesRecord[]): ProductOption[] {
+  const map = new Map<string, ProductOption>()
+  for (const r of recs) {
+    if (!r.product) continue
+    const key = productKey(r.channel, r.product)
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        channel: r.channel,
+        product: r.product,
+        label: `${r.channel} · ${r.product}`,
+      })
+    }
+  }
+  return [...map.values()].sort(
+    (a, b) => a.product.localeCompare(b.product, 'ko') || a.channel.localeCompare(b.channel, 'ko'),
+  )
+}
+
+/** 채널×상품 필터 — 빈 문자열이면 전체 */
+export const byProductKey = (recs: SalesRecord[], key: string): SalesRecord[] => {
+  if (!key) return recs
+  const [channel, product] = key.split(PRODUCT_SEP)
+  return recs.filter((r) => r.channel === channel && r.product === product)
+}
 
 export type ProductPoint = { month: string; revenue: number; boxes: number; units: number }
 
 /**
- * 상품별 월별 매출 — product 가 비면 전체 상품 합계.
+ * 채널×상품별 월별 매출 — key 가 비면 전체 상품 합계.
  * 채널·월 필터와 무관하게 전체 이력에서 집계한다(상품 트렌드 섹션 전용).
  */
 export function productTrend(
   all: SalesRecord[],
   months: string[],
-  product: string,
+  key: string,
 ): ProductPoint[] {
-  const rows = byProduct(all, product)
+  const rows = byProductKey(all, key)
   return months.map((m) => {
     const mr = rows.filter((r) => r.month === m)
     return {
@@ -258,10 +291,6 @@ export function productTrend(
     }
   })
 }
-
-/** 상품 필터 — 빈 문자열이면 전체 */
-export const byProduct = (recs: SalesRecord[], product: string): SalesRecord[] =>
-  product ? recs.filter((r) => r.product === product) : recs
 
 /** 표 정렬 — 입고예정일 내림차순, 같으면 발주번호 */
 export const sortForTable = (recs: SalesRecord[]): SalesRecord[] =>
