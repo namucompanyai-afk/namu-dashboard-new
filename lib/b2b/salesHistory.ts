@@ -324,6 +324,8 @@ export type OrderPattern = {
   orders: number // 발주 횟수 = 입고예정일 distinct
   lastGap: number | null // 마지막 ↔ 직전 발주 간격(일)
   prevGap: number | null // 그 이전 구간(일)
+  lastQty: number | null // 마지막 발주 수량(같은 입고예정일 합산)
+  prevQty: number | null // 직전 발주 수량
   recentAvgQty: number | null // 최근 3회 발주당 평균 수량
   priorAvgQty: number | null // 그 이전 3회 평균
   lastDate: string
@@ -353,6 +355,8 @@ export function orderPattern(recs: SalesRecord[]): OrderPattern {
     orders: dates.length,
     lastGap: dates.length >= 2 ? dayDiff(dates[0], dates[1]) : null,
     prevGap: dates.length >= 3 ? dayDiff(dates[1], dates[2]) : null,
+    lastQty: dates.length >= 1 ? (byDate.get(dates[0]) ?? 0) : null,
+    prevQty: dates.length >= 2 ? (byDate.get(dates[1]) ?? 0) : null,
     recentAvgQty: avg(0, 3),
     priorAvgQty: avg(3, 3),
     lastDate: dates[0] ?? '',

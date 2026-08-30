@@ -781,7 +781,10 @@ function OrderPatternCards({ pattern }: { pattern: OrderPattern }) {
       </div>
     )
   }
-  const { lastGap, prevGap, recentAvgQty, priorAvgQty } = pattern
+  const { lastGap, prevGap, lastQty, prevQty, recentAvgQty, priorAvgQty } = pattern
+  // '4일 · 792개' — 간격 옆에 그 발주의 수량(같은 입고예정일 합산)을 병기
+  const gapValue = (gap: number | null, qty: number | null): string =>
+    gap === null ? '—' : qty === null ? `${num(gap)}일` : `${num(gap)}일 · ${num(qty)}개`
   // 간격은 짧아질수록, 수량은 늘어날수록 좋다
   const gapTone =
     lastGap === null || prevGap === null ? undefined : lastGap <= prevGap ? 'up' : 'down'
@@ -795,13 +798,13 @@ function OrderPatternCards({ pattern }: { pattern: OrderPattern }) {
     <div className="mb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
       <PatternCard
         title="최근 발주 간격"
-        value={lastGap === null ? '—' : `${num(lastGap)}일`}
+        value={gapValue(lastGap, lastQty)}
         sub={`마지막 발주 ${pattern.lastDate}`}
         tone={gapTone}
       />
       <PatternCard
         title="직전 발주 간격"
-        value={prevGap === null ? '—' : `${num(prevGap)}일`}
+        value={gapValue(prevGap, prevQty)}
         sub={
           lastGap === null || prevGap === null
             ? '비교 데이터 없음'
