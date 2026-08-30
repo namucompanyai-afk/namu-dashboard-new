@@ -239,8 +239,15 @@ const PRODUCT_SEP = '\u0001'
 export const productKey = (channel: string, product: string): string =>
   `${channel}${PRODUCT_SEP}${product}`
 
+/** 트렌드 드롭다운 채널 묶음 순서 — 컬리 먼저, 그다음 쿠팡, 나머지는 뒤 */
+const PRODUCT_CHANNEL_ORDER: string[] = ['컬리', '쿠팡']
+const channelRank = (c: string): number => {
+  const i = PRODUCT_CHANNEL_ORDER.indexOf(c)
+  return i === -1 ? PRODUCT_CHANNEL_ORDER.length : i
+}
+
 /**
- * 발주 이력에 등장한 채널×상품 조합 — 상품명 오름차순(같으면 채널명).
+ * 발주 이력에 등장한 채널×상품 조합 — 채널 묶음(컬리→쿠팡) 안에서 상품명 오름차순.
  * 양채널 판매 상품은 채널별로 각각 항목이 생긴다.
  */
 export function listProductOptions(recs: SalesRecord[]): ProductOption[] {
@@ -258,7 +265,10 @@ export function listProductOptions(recs: SalesRecord[]): ProductOption[] {
     }
   }
   return [...map.values()].sort(
-    (a, b) => a.product.localeCompare(b.product, 'ko') || a.channel.localeCompare(b.channel, 'ko'),
+    (a, b) =>
+      channelRank(a.channel) - channelRank(b.channel) ||
+      a.channel.localeCompare(b.channel, 'ko') ||
+      a.product.localeCompare(b.product, 'ko'),
   )
 }
 
