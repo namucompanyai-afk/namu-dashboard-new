@@ -23,7 +23,7 @@ export type LabelRow = {
   dest: string // 입고지
   viaCenter: string // 경유센터 ('경유안함'이면 표기 생략)
   dueDate: string // 입고예정일 YYYY-MM-DD
-  productCode: string // 발주상품코드
+  orderCode: string // 발주 단위 코드 (거래명세서코드 K···, 없으면 발주코드 T···)
   productName: string
   masterCode: string
   barcode: string // 상품마스터 lookup (컬리 마스터 코드 기준)
@@ -31,7 +31,7 @@ export type LabelRow = {
   unitsPerBox: number // 박스 내 입수량
   totalUnits: number // 발주 총 수량
   ctIndex: number // 박스 번호 (1-based)
-  ctTotal: number // 발주코드 기준 합산 총 박스 수
+  ctTotal: number // 발주 단위 합산 총 박스 수
 }
 
 export type LabelSkip = { masterCode: string; name: string; boxes: number }
@@ -51,8 +51,10 @@ const isViaReal = (v: string): boolean => !!v && !norm(v).includes('경유안함
 /**
  * 라벨 목록 생성.
  *
- * C/T 연번은 **발주상품코드 기준 합산** — 같은 발주코드에 상품이 여러 개면
+ * C/T 연번은 **발주 단위(orderKey) 합산** — 같은 발주에 상품이 여러 개면
  * 발주 행 순서대로 이어서 매긴다(상품A 4박스 + 상품B 3박스 → 1/7 … 7/7).
+ * 발주 내역 양식의 발주상품코드(P···)는 행마다 달라 분모가 상품별로 쪼개지므로
+ * 거래명세서코드(K···)를 쓴다 — orderKey 가 그 판단을 이미 해 둔다.
  * 기인쇄 제외분은 인쇄 대상이 아니므로 분모에서도 빠진다(번호에 빈칸이 생기지 않게).
  */
 export function buildLabelPlan(
@@ -61,25 +63,25 @@ export function buildLabelPlan(
 ): LabelPlan {
   const printable = orders.filter((o) => !isPreprinted(o.masterCode))
 
-  // 발주코드별 인쇄 대상 박스 총수 (C/T 분모)
+  // 발주 단위 인쇄 대상 박스 총수 (C/T 분모)
   const totalByCode = new Map<string, number>()
   for (const o of printable) {
-    totalByCode.set(o.productCode, (totalByCode.get(o.productCode) || 0) + o.boxCount)
+    totalByCode.set(o.orderKey, (totalByCode.get(o.orderKey) || 0) + o.boxCount)
   }
 
   const seq = new Map<string, number>()
   const labels: LabelRow[] = []
   for (const o of printable) {
     const m = masterByCode[norm(o.masterCode)]
-    const ctTotal = totalByCode.get(o.productCode) || o.boxCount
+    const ctTotal = totalByCode.get(o.orderKey) || o.boxCount
     for (let b = 0; b < o.boxCount; b++) {
-      const i = (seq.get(o.productCode) || 0) + 1
-      seq.set(o.productCode, i)
+      const i = (seq.get(o.orderKey) || 0) + 1
+      seq.set(o.orderKey, i)
       labels.push({
         dest: o.dest,
         viaCenter: o.viaCenter,
         dueDate: o.dueDate,
-        productCode: o.productCode,
+        orderCode: o.orderKey,
         productName: o.productName || m?.name || m?.alias || o.masterCode,
         masterCode: o.masterCode,
         barcode: m?.barcode || '',
@@ -189,7 +191,7 @@ function sheetHtml(l: LabelRow): string {
       <div class="band-sup">${esc(SUPPLIER)}</div>
     </div>
   </div>
-  <div class="code">${esc(l.productCode)}</div>
+  <div class="code">${esc(l.orderCode)}</div>
   <div class="pname">${esc(l.productName)}</div>
   <div class="mcode">${mline}</div>
   <div class="exp">

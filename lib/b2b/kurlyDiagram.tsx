@@ -149,7 +149,8 @@ export function buildPalletPlan(
     viaByDest.set(dest, via)
 
     const k = `${dest}|${norm(o.masterCode)}`
-    const tail = String(o.productCode || '').slice(-6)
+    // 꼬리표는 발주 단위 코드 기준 (발주상품코드는 행마다 달라 의미가 없다)
+    const tail = String(o.orderKey || '').slice(-6)
     const tails = tailsByKey.get(k) ?? []
     if (tail && !tails.includes(tail)) tails.push(tail)
     tailsByKey.set(k, tails)

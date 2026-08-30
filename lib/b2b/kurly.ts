@@ -192,7 +192,10 @@ export function lookupVehicleFee(prices: MilkrunPrice[], totalPlt: number): Milk
 
 // ── 컬리 발주 xlsx ───────────────────────────────────────────────
 export type KurlyOrderRow = {
-  productCode: string // 발주코드 (구 양식 '발주상품코드')
+  productCode: string // 발주 내역='발주상품코드'(P···, 행 단위) / 발주서내역='발주코드'(T···)
+  invoiceCode: string // 거래명세서코드 (K···) — 발주 내역 양식에만 있다
+  orderKey: string // 발주 단위 그룹핑 키 = 거래명세서코드, 없으면 productCode
+  taxType: string // 발주 파일 과세구분 (금액 계산은 상품마스터 과세 구분을 쓴다)
   status: string // 상태
   dueDate: string // 입고예정일
   masterCode: string // 마스터코드 ← 상품마스터 매칭 키
@@ -212,16 +215,20 @@ export type KurlyOrderRow = {
 export const ORDER_SHEET_NAME = '발주 내역'
 
 /**
- * 컬리 발주서 헤더 매핑.
+ * 컬리 발주 파일 헤더 매핑 — 두 양식을 모두 정식 지원한다.
  *
- * 컬리 다운로드 양식은 수량 컬럼이 '발주생성 수량(박스/낱개)'과
- * '발주확정 수량(박스/낱개)' 두 벌로 내려온다 — 구 양식의 '발주수량/총 발주수량'
- * 은 어느 쪽에도 부분일치하지 않아 그대로 두면 박스가 0으로 읽힌다.
- * 실제 출고 기준인 **확정** 컬럼을 먼저 보고, 구 양식 이름은 뒤에 남겨 둔다.
+ *   '발주 내역'   (46컬럼) : 발주상품코드(P···) · 거래명세서코드(K···) · 발주수량/총 발주수량
+ *   '발주서내역'  (41컬럼) : 발주코드(T···) · 발주생성/발주확정 수량(박스·낱개)
+ *
+ * resolveCols 는 후보 완전일치를 먼저 훑으므로 배열 순서와 무관하게 파일에 있는
+ * 이름이 잡힌다. 두 양식 이름을 나란히 두고, 부분일치 폴백에 기대지 않는다.
  */
 const ORDER_COLS: Record<keyof KurlyOrderRow, string[]> = {
-  productCode: ['발주코드', '발주상품코드'],
-  status: ['발주상태', '상태'],
+  productCode: ['발주상품코드', '발주코드'],
+  invoiceCode: ['거래명세서코드'],
+  orderKey: [], // 파생 필드 — 시트 컬럼 아님
+  taxType: ['과세구분'],
+  status: ['상태', '발주상태'],
   dueDate: ['입고예정일'],
   masterCode: ['마스터코드'],
   productName: ['상품명'],
@@ -229,9 +236,9 @@ const ORDER_COLS: Record<keyof KurlyOrderRow, string[]> = {
   viaCenter: ['경유센터'],
   shipMethod: ['출고방법'],
   unitsPerBox: ['박스당입수'],
-  boxCount: ['발주확정수량(박스)', '발주수량'],
-  totalUnits: ['발주확정수량(낱개)', '총발주수량'],
-  expiry: ['유통기한/소비기한', '소비기한(유통기한)', '소비기한'],
+  boxCount: ['발주수량', '발주확정수량(박스)'],
+  totalUnits: ['총발주수량', '발주확정수량(낱개)'],
+  expiry: ['소비기한/유통기한', '유통기한/소비기한', '소비기한(유통기한)', '소비기한'],
   supplyUnit: ['공급단가'],
   supplyTotal: ['공급가'],
 }
@@ -287,8 +294,13 @@ export function parseKurlyOrderRows(rows: unknown[][]): KurlyOrderRow[] {
     const productName = trim(at(r, c.productName))
     const productCode = trim(at(r, c.productCode))
     if (!masterCode && !productName && !productCode) continue
+    const invoiceCode = trim(at(r, c.invoiceCode))
     out.push({
       productCode,
+      invoiceCode,
+      // 발주 단위 키 — 발주 내역 양식의 P코드는 행마다 달라 그룹핑에 못 쓴다
+      orderKey: invoiceCode || productCode,
+      taxType: trim(at(r, c.taxType)),
       status: trim(at(r, c.status)),
       dueDate: fmtDate(at(r, c.dueDate)),
       masterCode,
