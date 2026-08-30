@@ -466,6 +466,30 @@ export type PalletGroup = {
   overSku: boolean // SKU 3 초과 → 경고
 }
 
+// ── 입고예정일 분리 ──────────────────────────────────────────────
+/** 입고예정일 한 건의 발주 행 (rowIndexes 는 원본 orders 인덱스) */
+export type DueSlice = { dueDate: string; rowIndexes: number[]; orders: KurlyOrderRow[] }
+
+/**
+ * 입고예정일별로 발주 행을 나눈다.
+ * 입고일마다 배차가 따로 나가므로 팔레트·혼적·운송비는 이 단위로 계산한다.
+ * (매출 요약·발주 이력은 파일 전체 기준 그대로다)
+ */
+export function sliceByDueDate(orders: KurlyOrderRow[]): DueSlice[] {
+  const map = new Map<string, DueSlice>()
+  orders.forEach((o, i) => {
+    const key = o.dueDate || '(입고예정일 미상)'
+    let sl = map.get(key)
+    if (!sl) {
+      sl = { dueDate: key, rowIndexes: [], orders: [] }
+      map.set(key, sl)
+    }
+    sl.rowIndexes.push(i)
+    sl.orders.push(o)
+  })
+  return [...map.values()].sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+}
+
 // ── 물리 팔레트 (혼적 포함) ──────────────────────────────────────
 /** 팔레트 한 자리 — 어느 입고지의 어떤 SKU 가 몇 단 올라갔는지 */
 export type UnitSlot = {

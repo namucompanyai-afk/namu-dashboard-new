@@ -10,9 +10,13 @@ import {
   indexByMasterCode,
   norm,
   palletInputValues,
+  sliceByDueDate,
   type KurlyOrderRow,
   type MilkrunPrice,
+  type PalletGroup,
+  type PalletUnit,
   type ProductMaster,
+  type TransportCost,
 } from '@/lib/b2b/kurly'
 import { parseKurlyFile } from '@/lib/b2b/kurlyFile'
 import {
@@ -21,6 +25,7 @@ import {
   buildWikeepNotice,
   downloadPalletPlanJpg,
   renderPalletPlanSvg,
+  type PalletPlan,
 } from '@/lib/b2b/kurlyDiagram'
 import { buildLabelPlan, openLabelPrint } from '@/lib/b2b/kurlyLabel'
 import { summarizeOrders } from '@/lib/b2b/kurlySummary'
@@ -92,15 +97,44 @@ export default function B2BPage() {
   }, [])
 
   const masterByCode = useMemo(() => indexByMasterCode(products), [products])
-  // 팔레트 장수는 실측 박스 치수로 계산한다 — 상품마스터가 로드된 뒤 확정된다
-  const pallets = useMemo(() => buildPallets(orders, masterByCode), [orders, masterByCode])
-  // 실제로 싣는 팔레트 장수 (김포·창원 자투리 경유 혼적 반영) — 차량비 구간 기준
-  const palletUnits = useMemo(() => buildPalletUnits(orders, masterByCode), [orders, masterByCode])
-  const pltInputs = useMemo(() => palletInputValues(orders, pallets), [orders, pallets])
-  const cost = useMemo(
-    () => calcTransportCost(pallets, prices, palletUnits.length),
-    [pallets, prices, palletUnits],
+
+  /**
+   * 입고일마다 배차가 따로 나가므로 팔레트·혼적·운송비·도면은 **입고예정일 단위**로
+   * 각각 계산한다. 입고일이 하나면 섹션이 한 벌이라 화면은 종전과 같다.
+   */
+  const sections = useMemo(
+    () =>
+      sliceByDueDate(orders).map((sl) => {
+        // 팔레트 장수는 실측 박스 치수로 계산한다 — 상품마스터가 로드된 뒤 확정된다
+        const pallets = buildPallets(sl.orders, masterByCode)
+        // 실제로 싣는 팔레트 장수 (김포·창원 자투리 경유 혼적 반영) — 차량비 구간 기준
+        const units = buildPalletUnits(sl.orders, masterByCode)
+        const cost = calcTransportCost(pallets, prices, units.length)
+        const plan = buildPalletPlan(sl.orders, units, masterByCode)
+        return {
+          ...sl,
+          pallets,
+          units,
+          cost,
+          plan,
+          svg: plan.panels.length ? renderPalletPlanSvg(plan) : '',
+          inputs: palletInputValues(sl.orders, pallets),
+        }
+      }),
+    [orders, masterByCode, prices],
   )
+  const multiDue = sections.length > 1
+
+  // 포털 파렛트수 — 입고일 단위로 매긴 값을 원본 행 순서로 되돌린다
+  const pltInputs = useMemo(() => {
+    const out: number[] = new Array(orders.length).fill(0)
+    for (const sec of sections) sec.rowIndexes.forEach((oi, k) => (out[oi] = sec.inputs[k]))
+    return out
+  }, [orders, sections])
+
+  const totalPlt = sections.reduce((a, sec) => a + sec.cost.totalPlt, 0)
+  const totalCost = sections.reduce((a, sec) => a + sec.cost.total, 0)
+  const costWarnings = sections.flatMap((sec) => sec.cost.warnings)
 
   // 상품마스터에 없는 마스터코드 (매칭 키는 컬리 마스터 코드 — 상품명 매칭 안 함)
   const unmatched = useMemo(
@@ -115,8 +149,6 @@ export default function B2BPage() {
     }),
     [orders],
   )
-
-  const costLines = [cost.vehicle, cost.via, cost.moveKimpo, cost.moveChangwon]
 
   // 발주 요약 — 금액은 발주 파일 값 그대로(시트 공급가로 재계산 안 함)
   const summary = useMemo(() => summarizeOrders(orders, masterByCode), [orders, masterByCode])
@@ -147,37 +179,6 @@ export default function B2BPage() {
       setHistorySaving(false)
     }
   }, [orders, masterByCode])
-
-  // 적재 구성도 — 위 팔레트 산정 결과를 소비만 한다(계산 로직 재구현 없음)
-  const plan = useMemo(
-    () => buildPalletPlan(orders, palletUnits, masterByCode),
-    [orders, palletUnits, masterByCode],
-  )
-  const planSvg = useMemo(() => (plan.panels.length ? renderPalletPlanSvg(plan) : ''), [plan])
-
-  const [jpgBusy, setJpgBusy] = useState(false)
-  const [copied, setCopied] = useState(false)
-
-  const saveJpg = useCallback(async () => {
-    setJpgBusy(true)
-    try {
-      await downloadPalletPlanJpg(planSvg, plan.dueDate)
-    } catch (e: unknown) {
-      setFileError('JPG 저장 실패: ' + (e instanceof Error ? e.message : String(e)))
-    } finally {
-      setJpgBusy(false)
-    }
-  }, [planSvg, plan.dueDate])
-
-  const copyNotice = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(buildWikeepNotice(plan))
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      setFileError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
-    }
-  }, [plan])
 
   // 박스 부착 라벨 (잡곡밥 등 기인쇄 상품은 제외)
   const labelPlan = useMemo(() => buildLabelPlan(orders, masterByCode), [orders, masterByCode])
@@ -286,9 +287,9 @@ export default function B2BPage() {
         </div>
       )}
 
-      {cost.warnings.length > 0 && (
+      {costWarnings.length > 0 && (
         <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm space-y-1">
-          {cost.warnings.map((w, i) => (
+          {costWarnings.map((w, i) => (
             <div key={i}>⚠️ {w}</div>
           ))}
         </div>
@@ -349,141 +350,26 @@ export default function B2BPage() {
             </div>
           </div>
 
-          {/* 팔레트 요약 + 운송비 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
-                <h2 className="text-sm font-semibold">팔레트 요약</h2>
-                <span className="text-xs text-gray-500">
-                  총 {cost.totalPlt} PLT · 입고지 {pallets.length}곳
-                </span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-gray-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium">입고지</th>
-                      <th className="px-3 py-2 text-left font-medium">권역</th>
-                      <th className="px-3 py-2 text-right font-medium">PLT</th>
-                      <th className="px-3 py-2 text-right font-medium">SKU</th>
-                      <th className="px-3 py-2 text-right font-medium">박스</th>
-                      <th className="px-3 py-2 text-right font-medium">낱개</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pallets.map((g) => {
-                      const open = openDests.includes(g.dest)
-                      return (
-                        <React.Fragment key={g.dest}>
-                          <tr
-                            onClick={() =>
-                              setOpenDests((prev) =>
-                                prev.includes(g.dest) ? prev.filter((d) => d !== g.dest) : [...prev, g.dest],
-                              )
-                            }
-                            aria-expanded={open}
-                            className={
-                              'border-t border-gray-100 cursor-pointer hover:bg-gray-50 ' +
-                              (g.overSku ? 'bg-red-50' : '')
-                            }
-                          >
-                            <td className="px-3 py-2">
-                              <span className="inline-block w-4 text-gray-400">{open ? '▾' : '▸'}</span>
-                              {g.dest}
-                            </td>
-                            <td className="px-3 py-2 text-gray-600">{g.region}</td>
-                            <td className="px-3 py-2 text-right">{g.plt}</td>
-                            <td className={'px-3 py-2 text-right ' + (g.overSku ? 'text-red-600 font-semibold' : '')}>
-                              {g.skuCodes.length}
-                              {g.overSku && <span className="ml-1 text-xs">⚠️ 3초과</span>}
-                            </td>
-                            <td className="px-3 py-2 text-right">{won(g.totalBoxes)}</td>
-                            <td className="px-3 py-2 text-right">{won(g.totalUnits)}</td>
-                          </tr>
-                          {open && (
-                            <tr className="border-t border-gray-100">
-                              <td colSpan={6} className="px-3 py-3 bg-gray-50">
-                                <table className="w-full text-xs">
-                                  <thead className="text-gray-500">
-                                    <tr>
-                                      <th className="px-2 py-1 text-left font-medium">발주상품코드</th>
-                                      <th className="px-2 py-1 text-left font-medium">상품명</th>
-                                      <th className="px-2 py-1 text-right font-medium">박스</th>
-                                      <th className="px-2 py-1 text-right font-medium">낱개</th>
-                                      <th className="px-2 py-1 text-left font-medium">소비기한</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {g.rowIndexes.map((ri) => {
-                                      const o = orders[ri]
-                                      return (
-                                        <tr key={`${o.productCode}-${ri}`} className="border-t border-gray-200">
-                                          <td className="px-2 py-1 text-gray-600">{o.productCode}</td>
-                                          <td className="px-2 py-1">
-                                            {masterByCode[norm(o.masterCode)]?.alias || o.productName}
-                                          </td>
-                                          <td className="px-2 py-1 text-right">{won(o.boxCount)}</td>
-                                          <td className="px-2 py-1 text-right">{won(o.totalUnits)}</td>
-                                          <td className="px-2 py-1 text-gray-600">
-                                            {o.expiry || <span className="text-amber-600">미입력</span>}
-                                          </td>
-                                        </tr>
-                                      )
-                                    })}
-                                  </tbody>
-                                </table>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
-                최종 입고지 기준 분리 · 실측 박스 치수로 바닥 자리를 계산해 한 장을 넘으면 자동 분할 (PLT당 최대{' '}
-                {MAX_SKU_PER_PLT} SKU)
-              </p>
+          {/* 팔레트 요약 + 운송비 — 입고예정일마다 배차가 달라 각각 계산한다 */}
+          {sections.map((sec) => (
+            <PalletCostSection
+              key={sec.dueDate}
+              sec={sec}
+              masterByCode={masterByCode}
+              showHeader={multiDue}
+              openDests={openDests}
+              setOpenDests={setOpenDests}
+            />
+          ))}
+          {multiDue && (
+            <div className="rounded-lg border border-gray-300 bg-gray-50 px-4 py-3 flex flex-wrap items-baseline justify-between gap-2">
+              <span className="text-sm font-semibold">전체 합계 ({sections.length}개 입고일)</span>
+              <span className="text-sm">
+                총 {totalPlt} PLT · 운송비{' '}
+                <span className="font-semibold">{won(totalCost)}원</span>
+              </span>
             </div>
-
-            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200">
-                <h2 className="text-sm font-semibold">운송비 (부가포함)</h2>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-gray-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium">항목</th>
-                      <th className="px-3 py-2 text-right font-medium">단가</th>
-                      <th className="px-3 py-2 text-right font-medium">수량</th>
-                      <th className="px-3 py-2 text-right font-medium">금액</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {costLines.map((l, i) => (
-                      <tr key={i} className="border-t border-gray-100">
-                        <td className="px-3 py-2">
-                          {costLabel(l.label)}
-                          {l.note && <div className="text-[11px] text-gray-400">{l.note}</div>}
-                        </td>
-                        <td className="px-3 py-2 text-right">{won(l.unit)}</td>
-                        <td className="px-3 py-2 text-right">{l.qty}</td>
-                        <td className="px-3 py-2 text-right">{won(l.amount)}</td>
-                      </tr>
-                    ))}
-                    <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
-                      <td className="px-3 py-2" colSpan={3}>
-                        합계
-                      </td>
-                      <td className="px-3 py-2 text-right">{won(cost.total)}원</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* 발주 목록 */}
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
@@ -491,7 +377,7 @@ export default function B2BPage() {
               <h2 className="text-sm font-semibold">발주 목록</h2>
               <div className="flex flex-wrap items-center gap-3">
                 <span className="text-xs text-gray-500">
-                  파렛트수 = 포털 입력값 (같은 입고지 첫 행만 1)
+                  파렛트수 = 포털 입력값 (입고예정일별로 같은 입고지 첫 행에만 기입)
                 </span>
                 {labelPlan.skipped.map((s) => (
                   <span key={s.masterCode} className="text-xs text-amber-700">
@@ -559,39 +445,282 @@ export default function B2BPage() {
             </div>
           </div>
 
-          {/* 팔레트 적재 구성도 */}
-          {planSvg && (
-            <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold">팔레트 적재 구성도</h2>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={copyNotice}
-                    className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
-                  >
-                    {copied ? '✅ 복사됨' : '위킵 안내문 복사'}
-                  </button>
-                  <button
-                    onClick={saveJpg}
-                    disabled={jpgBusy}
-                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
-                  >
-                    {jpgBusy ? '변환 중…' : 'JPG 다운로드'}
-                  </button>
-                </div>
-              </div>
-              <div className="p-4 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
-                <PalletPlanView svg={planSvg} />
-                <div className="text-xs text-gray-600 space-y-2 xl:border-l xl:border-gray-100 xl:pl-4">
-                  <p>① 3PLT 이상 → 2.5톤 이상 배차</p>
-                  <p>② 포털 파렛트수: 같은 입고지 첫 발주만 1, 나머지 0</p>
-                  <p>③ 배차 마감 입고 전일 18:00 / 변경 불가 전일 17:00 / 배차 문자 전일 21:30경</p>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* 팔레트 적재 구성도 — 입고예정일별 */}
+          {sections.map((sec) => (
+            <PlanSection
+              key={sec.dueDate}
+              sec={sec}
+              showHeader={multiDue}
+              onError={setFileError}
+            />
+          ))}
         </>
       )}
     </div>
+  )
+}
+
+/** 입고예정일 한 건 = 배차 한 번. 섹션 데이터 (page 에서 계산한 결과를 소비만 한다) */
+type DueSection = {
+  dueDate: string
+  rowIndexes: number[]
+  orders: KurlyOrderRow[]
+  pallets: PalletGroup[]
+  units: PalletUnit[]
+  cost: TransportCost
+  plan: PalletPlan
+  svg: string
+  inputs: number[]
+}
+
+/** '2026-08-06' → '8/6 입고' */
+const dueLabel = (d: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d)
+  return m ? `${Number(m[2])}/${Number(m[3])} 입고` : d
+}
+
+function SectionHeader({ dueDate, note }: { dueDate: string; note: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-2 pt-2">
+      <h2 className="text-base font-semibold">{dueLabel(dueDate)}</h2>
+      <span className="text-xs text-gray-500">
+        {dueDate} · {note}
+      </span>
+    </div>
+  )
+}
+
+/** 입고일 한 건의 팔레트 요약 + 운송비 */
+function PalletCostSection({
+  sec,
+  masterByCode,
+  showHeader,
+  openDests,
+  setOpenDests,
+}: {
+  sec: DueSection
+  masterByCode: Record<string, ProductMaster>
+  showHeader: boolean
+  openDests: string[]
+  setOpenDests: React.Dispatch<React.SetStateAction<string[]>>
+}) {
+  const costLines = [sec.cost.vehicle, sec.cost.via, sec.cost.moveKimpo, sec.cost.moveChangwon]
+  return (
+    <>
+      {showHeader && (
+        <SectionHeader
+          dueDate={sec.dueDate}
+          note={`총 ${sec.cost.totalPlt} PLT · 운송비 ${won(sec.cost.total)}원`}
+        />
+      )}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold">팔레트 요약</h2>
+            <span className="text-xs text-gray-500">
+              총 {sec.cost.totalPlt} PLT · 입고지 {sec.pallets.length}곳
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">입고지</th>
+                  <th className="px-3 py-2 text-left font-medium">권역</th>
+                  <th className="px-3 py-2 text-right font-medium">PLT</th>
+                  <th className="px-3 py-2 text-right font-medium">SKU</th>
+                  <th className="px-3 py-2 text-right font-medium">박스</th>
+                  <th className="px-3 py-2 text-right font-medium">낱개</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sec.pallets.map((g) => {
+                  const key = `${sec.dueDate}|${g.dest}`
+                  const open = openDests.includes(key)
+                  return (
+                    <React.Fragment key={key}>
+                      <tr
+                        onClick={() =>
+                          setOpenDests((prev) =>
+                            prev.includes(key) ? prev.filter((d) => d !== key) : [...prev, key],
+                          )
+                        }
+                        aria-expanded={open}
+                        className={
+                          'border-t border-gray-100 cursor-pointer hover:bg-gray-50 ' +
+                          (g.overSku ? 'bg-red-50' : '')
+                        }
+                      >
+                        <td className="px-3 py-2">
+                          <span className="inline-block w-4 text-gray-400">{open ? '▾' : '▸'}</span>
+                          {g.dest}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">{g.region}</td>
+                        <td className="px-3 py-2 text-right">{g.plt}</td>
+                        <td className={'px-3 py-2 text-right ' + (g.overSku ? 'text-red-600 font-semibold' : '')}>
+                          {g.skuCodes.length}
+                          {g.overSku && <span className="ml-1 text-xs">⚠️ 3초과</span>}
+                        </td>
+                        <td className="px-3 py-2 text-right">{won(g.totalBoxes)}</td>
+                        <td className="px-3 py-2 text-right">{won(g.totalUnits)}</td>
+                      </tr>
+                      {open && (
+                        <tr className="border-t border-gray-100">
+                          <td colSpan={6} className="px-3 py-3 bg-gray-50">
+                            <table className="w-full text-xs">
+                              <thead className="text-gray-500">
+                                <tr>
+                                  <th className="px-2 py-1 text-left font-medium">발주상품코드</th>
+                                  <th className="px-2 py-1 text-left font-medium">상품명</th>
+                                  <th className="px-2 py-1 text-right font-medium">박스</th>
+                                  <th className="px-2 py-1 text-right font-medium">낱개</th>
+                                  <th className="px-2 py-1 text-left font-medium">소비기한</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {g.rowIndexes.map((ri) => {
+                                  // g.rowIndexes 는 이 입고일 슬라이스(sec.orders) 기준 인덱스
+                                  const o = sec.orders[ri]
+                                  return (
+                                    <tr key={`${o.productCode}-${ri}`} className="border-t border-gray-200">
+                                      <td className="px-2 py-1 text-gray-600">{o.productCode}</td>
+                                      <td className="px-2 py-1">
+                                        {masterByCode[norm(o.masterCode)]?.alias || o.productName}
+                                      </td>
+                                      <td className="px-2 py-1 text-right">{won(o.boxCount)}</td>
+                                      <td className="px-2 py-1 text-right">{won(o.totalUnits)}</td>
+                                      <td className="px-2 py-1 text-gray-600">
+                                        {o.expiry || <span className="text-amber-600">미입력</span>}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
+            최종 입고지 기준 분리 · 실측 박스 치수로 바닥 자리를 계산해 한 장을 넘으면 자동 분할 (PLT당 최대{' '}
+            {MAX_SKU_PER_PLT} SKU)
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-200">
+            <h2 className="text-sm font-semibold">운송비 (부가포함)</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">항목</th>
+                  <th className="px-3 py-2 text-right font-medium">단가</th>
+                  <th className="px-3 py-2 text-right font-medium">수량</th>
+                  <th className="px-3 py-2 text-right font-medium">금액</th>
+                </tr>
+              </thead>
+              <tbody>
+                {costLines.map((l, i) => (
+                  <tr key={i} className="border-t border-gray-100">
+                    <td className="px-3 py-2">
+                      {costLabel(l.label)}
+                      {l.note && <div className="text-[11px] text-gray-400">{l.note}</div>}
+                    </td>
+                    <td className="px-3 py-2 text-right">{won(l.unit)}</td>
+                    <td className="px-3 py-2 text-right">{l.qty}</td>
+                    <td className="px-3 py-2 text-right">{won(l.amount)}</td>
+                  </tr>
+                ))}
+                <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                  <td className="px-3 py-2" colSpan={3}>
+                    합계
+                  </td>
+                  <td className="px-3 py-2 text-right">{won(sec.cost.total)}원</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** 입고일 한 건의 적재 구성도 + 위킵 안내문 */
+function PlanSection({
+  sec,
+  showHeader,
+  onError,
+}: {
+  sec: DueSection
+  showHeader: boolean
+  onError: (msg: string) => void
+}) {
+  const [jpgBusy, setJpgBusy] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const saveJpg = useCallback(async () => {
+    setJpgBusy(true)
+    try {
+      await downloadPalletPlanJpg(sec.svg, sec.plan.dueDate)
+    } catch (e: unknown) {
+      onError('JPG 저장 실패: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setJpgBusy(false)
+    }
+  }, [sec.svg, sec.plan.dueDate, onError])
+
+  const copyNotice = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(buildWikeepNotice(sec.plan))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      onError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
+    }
+  }, [sec.plan, onError])
+
+  if (!sec.svg) return null
+  return (
+    <>
+      {showHeader && (
+        <SectionHeader dueDate={sec.dueDate} note={`적재 구성도 ${sec.plan.panels.length}PLT`} />
+      )}
+      <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold">팔레트 적재 구성도</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={copyNotice}
+              className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
+            >
+              {copied ? '✅ 복사됨' : '위킵 안내문 복사'}
+            </button>
+            <button
+              onClick={saveJpg}
+              disabled={jpgBusy}
+              className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+            >
+              {jpgBusy ? '변환 중…' : 'JPG 다운로드'}
+            </button>
+          </div>
+        </div>
+        <div className="p-4 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
+          <PalletPlanView svg={sec.svg} />
+          <div className="text-xs text-gray-600 space-y-2 xl:border-l xl:border-gray-100 xl:pl-4">
+            <p>① 3PLT 이상 → 2.5톤 이상 배차</p>
+            <p>② 포털 파렛트수: 입고일별 같은 입고지 첫 발주만 기입, 나머지 0</p>
+            <p>③ 배차 마감 입고 전일 18:00 / 변경 불가 전일 17:00 / 배차 문자 전일 21:30경</p>
+          </div>
+        </div>
+      </div>
+    </>
   )
 }
