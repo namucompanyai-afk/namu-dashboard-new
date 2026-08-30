@@ -9,6 +9,7 @@ import {
   rocketFileName,
   routeItems,
   splitRocketRows,
+  summarizeCoupangFiles,
   ROCKET_SHEETS,
   summarizeCoupang,
   todayKst,
@@ -128,6 +129,9 @@ export default function CoupangB2BPage() {
   const jindo = useMemo(() => routed.filter((r) => r.shipFrom === '진도팜'), [routed])
   const wikeep = useMemo(() => routed.filter((r) => r.shipFrom === '위킵'), [routed])
   const unknown = useMemo(() => routed.filter((r) => r.shipFrom === '미분류'), [routed])
+  // 납품가능 미확정 — 확정 전/구버전 발주서 업로드 방어 (있으면 이력 저장 차단)
+  const unconfirmed = useMemo(() => routed.filter((r) => r.qtyUnconfirmed), [routed])
+  const fileStats = useMemo(() => summarizeCoupangFiles(items), [items])
 
   const rocket = useMemo(
     () => buildRocketRows(jindo, centers, madeDate),
@@ -344,13 +348,32 @@ export default function CoupangB2BPage() {
               <p className="text-xs text-gray-700 mt-3">
                 📄 {fileNames.length}개 파일 · {routed.length}행 · 납품가능 {num(totalQty)}
               </p>
+              <ul className="mt-1 space-y-0.5 text-[11px] text-gray-500">
+                {fileStats.map((f) => (
+                  <li key={f.fileName} className={f.unconfirmed > 0 ? 'text-amber-700' : ''}>
+                    {f.fileName} · {f.rows}행 · 발주 {num(f.orderQty)} / 납품가능 {num(f.confirmQty)}
+                    {f.unconfirmed > 0 && <> · 미확정 {f.unconfirmed}행</>}
+                  </li>
+                ))}
+              </ul>
               <button
                 onClick={saveHistory}
-                disabled={historySaving || routed.length === 0 || products.length === 0}
+                disabled={
+                  historySaving ||
+                  routed.length === 0 ||
+                  products.length === 0 ||
+                  unconfirmed.length > 0
+                }
                 className="mt-2 px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
               >
                 {historySaving ? '저장 중…' : historySaved ? '✅ 저장됨 (다시 저장)' : '세일즈 히스토리 저장'}
               </button>
+              {unconfirmed.length > 0 && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  납품가능 미확정 {unconfirmed.length}행이라 이력을 저장할 수 없습니다 — 확정 발주서로 다시 받아
+                  업로드해 주세요.
+                </p>
+              )}
             </>
           )}
           {historyMsg && (
@@ -378,6 +401,13 @@ export default function CoupangB2BPage() {
         <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
           ⚠️ 출고지 미분류 {unknown.length}건 — 상품마스터 출고지 확인 필요:{' '}
           {[...new Set(unknown.map((u) => `${u.productName}(${u.barcode || '바코드 없음'})`))].join(', ')}
+        </div>
+      )}
+      {unconfirmed.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-800 p-3 text-sm">
+          ⚠️ 납품가능 미확정 {unconfirmed.length}건 — 발주수량 기준으로 표시하며 매출·박스·PLT·양식은 납품가능수량(0)
+          그대로입니다. 세일즈 히스토리 저장은 막아 두었습니다:{' '}
+          {[...new Set(unconfirmed.map((u) => `${u.center} ${u.productName}(발주 ${num(u.orderQty)})`))].join(', ')}
         </div>
       )}
       {missingCenters.length > 0 && (
@@ -534,7 +564,17 @@ export default function CoupangB2BPage() {
                                   {g.items.map((it, i) => (
                                     <tr key={`${it.barcode}-${i}`} className="border-t border-gray-200">
                                       <td className="px-2 py-1">{it.productName}</td>
-                                      <td className="px-2 py-1 text-right">{num(it.confirmQty)}</td>
+                                      <td
+                                        className={
+                                          'px-2 py-1 text-right ' +
+                                          (it.qtyUnconfirmed ? 'text-amber-700' : '')
+                                        }
+                                      >
+                                        {num(it.displayQty)}
+                                        {it.qtyUnconfirmed && (
+                                          <span className="ml-1 text-[10px]">미확정</span>
+                                        )}
+                                      </td>
                                       <td className="px-2 py-1 text-right">
                                         {it.boxes === null ? (
                                           <span className="text-amber-600">미등록</span>
@@ -854,7 +894,14 @@ export default function CoupangB2BPage() {
                         <td className="px-3 py-2 max-w-[24rem] truncate" title={r.productName}>
                           {r.productName}
                         </td>
-                        <td className="px-3 py-2 text-right">{num(r.confirmQty)}</td>
+                        <td
+                          className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}
+                        >
+                          {num(r.displayQty)}
+                          {r.qtyUnconfirmed && (
+                            <span className="ml-1 text-[11px]">미확정 — 발주수량 기준</span>
+                          )}
+                        </td>
                         <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
                           {r.boxes ?? '—'}
                         </td>
@@ -926,7 +973,16 @@ function RocketTable({
                   <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
                     {r.itemName}
                   </td>
-                  <td className="px-3 py-2 text-right">{num(r.itemQty)}</td>
+                  <td
+                    className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}
+                  >
+                    {num(r.itemQty)}
+                    {r.qtyUnconfirmed && (
+                      <span className="ml-1 text-[11px]">
+                        납품가능 미확정 — 발주수량 {num(r.orderQty)}
+                      </span>
+                    )}
+                  </td>
                   <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
                     {r.boxes ?? '—'}
                   </td>

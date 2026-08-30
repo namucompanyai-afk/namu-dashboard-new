@@ -22,8 +22,10 @@ export type CoupangOrderItem = {
   center: string // 센터명
   dueDate: string // 입고예정일 YYYY-MM-DD
   productName: string // 상품명 (발주서 표기 그대로)
-  orderQty: number // 발주수량
-  confirmQty: number // 납품가능수량 ← 실제 출고 기준
+  orderQty: number // 발주수량 (G열) — 참고 필드
+  confirmQty: number // 납품가능수량 (H열) ← 실제 출고·매출·박스·PLT·이력 기준 (불변)
+  qtyUnconfirmed: boolean // H가 0·빈값인데 G>0 → 납품가능 미확정(구버전 발주서 의심)
+  displayQty: number // 화면 표시용 — 미확정이면 G, 아니면 H
   barcode: string // 상품마스터 매칭 키
   centerAddress: string // 발주서 '주소' 셀 (택배수령담당자 괄호부 제거)
   centerPhone: string // 주소 괄호부에서 분리한 택배수령담당자 번호
@@ -88,13 +90,19 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
     if (a === '' || norm(a) === '합계' || a.startsWith('4.')) break
     const productName = textAt(rows, r, 2)
     if (!productName) break
+    const orderQty = toNum(cellAt(rows, r, 6))
+    const confirmQty = toNum(cellAt(rows, r, 7))
+    // 확정 전 발주서(또는 구버전 양식)는 H가 비어 내려온다 — 계산은 H 그대로 두고 표시만 G로 대체
+    const qtyUnconfirmed = confirmQty <= 0 && orderQty > 0
     items.push({
       poNumber,
       center,
       dueDate,
       productName,
-      orderQty: toNum(cellAt(rows, r, 6)),
-      confirmQty: toNum(cellAt(rows, r, 7)),
+      orderQty,
+      confirmQty,
+      qtyUnconfirmed,
+      displayQty: qtyUnconfirmed ? orderQty : confirmQty,
       barcode: textAt(rows, r + 1, 2),
       centerAddress,
       centerPhone,
@@ -102,6 +110,32 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
     })
   }
   return items
+}
+
+/** 업로드 파일별 수량 합 — 구버전/미확정 발주서를 눈으로 잡기 위한 보조 정보 */
+export type CoupangFileStat = {
+  fileName: string
+  rows: number
+  orderQty: number // 발주수량 합 (G)
+  confirmQty: number // 납품가능수량 합 (H)
+  unconfirmed: number // 미확정 행 수
+}
+
+export function summarizeCoupangFiles(items: CoupangOrderItem[]): CoupangFileStat[] {
+  const map = new Map<string, CoupangFileStat>()
+  for (const it of items) {
+    const fileName = it.sourceFile || '(파일명 없음)'
+    let f = map.get(fileName)
+    if (!f) {
+      f = { fileName, rows: 0, orderQty: 0, confirmQty: 0, unconfirmed: 0 }
+      map.set(fileName, f)
+    }
+    f.rows += 1
+    f.orderQty += it.orderQty
+    f.confirmQty += it.confirmQty
+    if (it.qtyUnconfirmed) f.unconfirmed += 1
+  }
+  return [...map.values()]
 }
 
 // ── 쿠팡 센터 주소록 ─────────────────────────────────────────────
@@ -255,6 +289,8 @@ export type RocketRow = {
   invoice: string // 송장 (공란)
   centerKnown: boolean // 주소를 못 구하면 false → 행 강조
   masterKnown: boolean // 상품마스터 미등록이면 false → 박스 수 공란
+  qtyUnconfirmed: boolean // 납품가능 미확정 → 표에 경고 (양식 값은 H 그대로)
+  orderQty: number // 미확정 행 경고에 함께 띄우는 발주수량
   poNumber: string
   dueDate: string
 }
@@ -306,6 +342,8 @@ export function buildRocketRows(
       invoice: '',
       centerKnown: !!address,
       masterKnown: !!it.master,
+      qtyUnconfirmed: it.qtyUnconfirmed,
+      orderQty: it.orderQty,
       poNumber: it.poNumber,
       dueDate: it.dueDate,
     }
