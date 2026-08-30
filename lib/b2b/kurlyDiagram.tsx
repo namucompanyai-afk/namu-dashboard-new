@@ -11,11 +11,12 @@ import type { KurlyOrderRow, PalletGroup, ProductMaster } from './kurly'
 import { norm } from './kurly'
 import { PREPRINTED_MASTER_CODES } from './kurlyLabel'
 
-// ── 적재 가정 (치수 데이터 없음 → 도면에 가정값 명시) ─────────────
-export const BOX_MM = 400 // 박스 높이 가정
+// ── 적재 기준 (상품마스터 실측 박스 치수 사용) ───────────────────
+export const DEFAULT_BOX_MM = 400 // 치수 미등록 상품 가정값
 export const PALLET_MM = 150 // 팔레트 자체 높이
 export const LIMIT_MM = 1700 // 컬리 적재 한도
-export const MAX_TIER = 2 // 기둥당 최대 단수
+export const PALLET_W_MM = 1100 // 팔레트 바닥 가로
+export const PALLET_D_MM = 1100 // 팔레트 바닥 세로
 export const SAFE_MM = 50 // 이 미만 여유면 회송 위험
 
 // ── 색 ───────────────────────────────────────────────────────────
@@ -30,6 +31,9 @@ const AUTO_COLORS = [
 ]
 
 // ── 도면 모델 ────────────────────────────────────────────────────
+/** 박스 실측 치수(mm). 마스터 미등록이면 가정값 + unknown 플래그 */
+export type BoxDims = { w: number; d: number; h: number; unknown: boolean }
+
 export type PlanItem = {
   masterCode: string
   sku: string // 축약 표시명 (강황 · 고춧 …)
@@ -38,7 +42,9 @@ export type PlanItem = {
   boxes: number
   units: number // 낱개 수 (부제 병기용)
   codeTails: string[] // 발주코드 끝 6자리
-  columns: number[] // 기둥별 단수 (예: 4박스 → [2,2])
+  dims: BoxDims // 상품마스터 박스가로/세로/높이 (회전 없음 — 시트 표기 그대로)
+  tiersPerSlot: number // 한도 1,700mm 안에서 이 박스가 쌓이는 최대 단수
+  columns: number[] // 자리별 단수 (예: 74박스 · 12단 → [12,12,12,12,12,12,2])
 }
 
 export type PlanPanel = {
@@ -47,6 +53,14 @@ export type PlanPanel = {
   viaLabel: string // '직납·경유안함' | '경유: 평택1'
   items: PlanItem[]
   boxes: number
+  cols: number // 바닥 격자 열 수
+  rows: number // 바닥 격자 행 수
+  slotCount: number // cols × rows
+  slots: (PlanItem | null)[] // 자리 배정 (한 자리에 한 SKU만), length = slotCount
+  slotTiers: number[] // 자리별 단수 (slots 와 같은 인덱스)
+  overflow: number // 팔레트 한 장에 못 앉는 자리 수 (0 이면 여유)
+  gridDims: BoxDims // 자리 크기를 정한 박스 치수
+  unknownDims: boolean // 치수 미등록 SKU 포함
   maxTier: number
   heightMm: number
   slackMm: number
@@ -76,12 +90,34 @@ export function shortSkuName(raw: string): string {
   return core.length > 8 ? core.slice(0, 8) : core
 }
 
-/** 박스 n개 → 기둥별 단수. 기둥당 최대 MAX_TIER, 앞 기둥부터 채운다. */
-export function packColumns(boxes: number, maxTier = MAX_TIER): number[] {
+/** 상품마스터 실측 치수 — 가로/세로/높이 중 하나라도 비면 가정값으로 폴백 */
+export const dimsOf = (m: ProductMaster | undefined): BoxDims => {
+  const w = m?.boxW ?? 0
+  const d = m?.boxD ?? 0
+  const h = m?.boxH ?? 0
+  return w > 0 && d > 0 && h > 0
+    ? { w, d, h, unknown: false }
+    : { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true }
+}
+
+/** 1,100×1,100 바닥 격자 — 이 박스로 팔레트를 채웠을 때 자리 수 */
+export function floorGrid(dims: BoxDims): { cols: number; rows: number; slots: number } {
+  const cols = Math.max(1, Math.floor(PALLET_W_MM / dims.w))
+  const rows = Math.max(1, Math.floor(PALLET_D_MM / dims.d))
+  return { cols, rows, slots: cols * rows }
+}
+
+/** 한도 1,700mm(팔레트 150mm 포함) 안에서 쌓을 수 있는 최대 단수 */
+export const maxTiersOf = (dims: BoxDims): number =>
+  Math.max(1, Math.floor((LIMIT_MM - PALLET_MM) / dims.h))
+
+/** 박스 n개 → 자리별 단수. 자리당 최대 maxTier, 앞 자리부터 채운다. */
+export function packColumns(boxes: number, maxTier: number): number[] {
+  const cap = Math.max(1, Math.floor(maxTier))
   const out: number[] = []
   let left = Math.max(0, Math.floor(boxes))
   while (left > 0) {
-    const t = Math.min(maxTier, left)
+    const t = Math.min(cap, left)
     out.push(t)
     left -= t
   }
@@ -133,6 +169,8 @@ export function buildPalletPlan(
           boxes: 0,
           units: 0,
           codeTails: [],
+          dims: dimsOf(masterByCode[key]),
+          tiersPerSlot: 1,
           columns: [],
         }
         byCode.set(key, it)
@@ -143,10 +181,42 @@ export function buildPalletPlan(
       if (tail && !it.codeTails.includes(tail)) it.codeTails.push(tail)
     }
     const items = [...byCode.values()]
-    for (const it of items) it.columns = packColumns(it.boxes)
+    // 자리 크기는 팔레트에 올라가는 박스들 중 자리가 가장 적게 나오는 박스 기준
+    // (한 자리에 한 SKU 만 올리므로, 가장 빡빡한 박스에 자리를 맞춘다)
+    const grid = items
+      .map((it) => ({ it, ...floorGrid(it.dims) }))
+      .reduce((a, b) => (b.slots < a.slots ? b : a), {
+        it: items[0],
+        ...floorGrid(items[0]?.dims ?? { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true }),
+      })
+    for (const it of items) {
+      it.tiersPerSlot = maxTiersOf(it.dims)
+      it.columns = packColumns(it.boxes, it.tiersPerSlot)
+    }
+
+    // 자리 배정 — SKU 등장 순서대로 앞자리부터
+    const slots: (PlanItem | null)[] = []
+    const slotTiers: number[] = []
+    for (const it of items) {
+      for (const t of it.columns) {
+        slots.push(it)
+        slotTiers.push(t)
+      }
+    }
+    const overflow = Math.max(0, slots.length - grid.slots)
+    const padded: (PlanItem | null)[] = Array.from(
+      { length: grid.slots },
+      (_, i) => slots[i] ?? null,
+    )
+    const paddedTiers = Array.from({ length: grid.slots }, (_, i) => slotTiers[i] ?? 0)
 
     const maxTier = items.reduce((m, it) => Math.max(m, ...it.columns, 0), 0)
-    const heightMm = PALLET_MM + maxTier * BOX_MM
+    // 높이는 SKU 별 (단수 × 실측 박스 높이) 중 가장 높은 기둥
+    const stackMm = items.reduce(
+      (m, it) => Math.max(m, Math.max(0, ...it.columns) * it.dims.h),
+      0,
+    )
+    const heightMm = PALLET_MM + stackMm
     const slackMm = LIMIT_MM - heightMm
     return {
       plt: gi + 1,
@@ -154,6 +224,14 @@ export function buildPalletPlan(
       viaLabel: viaLabelOf(g.viaCenters),
       items,
       boxes: g.totalBoxes,
+      cols: grid.cols,
+      rows: grid.rows,
+      slotCount: grid.slots,
+      slots: padded,
+      slotTiers: paddedTiers,
+      overflow,
+      gridDims: grid.it?.dims ?? { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true },
+      unknownDims: items.some((it) => it.dims.unknown),
       maxTier,
       heightMm,
       slackMm,
@@ -220,16 +298,11 @@ const rect = (
   (o.rx ? ` rx="${o.rx}"` : '') +
   '/>'
 
-/** 탑뷰 격자 한 변의 칸 수 — 기둥 4개까지는 2×2(표준 배치) */
-const gridSideFor = (cols: number): number => Math.max(2, Math.ceil(Math.sqrt(Math.max(1, cols))))
-
-/** 탑뷰: 팔레트 외곽 + SKU별 전용 구역 + 빈 공간 */
+/** 탑뷰: 1,100×1,100 팔레트 + 실측 박스 크기대로 자리 배치 (한 자리에 한 SKU) */
 function topView(p: PlanPanel, ox: number, oy: number): string {
-  const slots: (PlanItem | null)[] = []
-  for (const it of p.items) for (let k = 0; k < it.columns.length; k++) slots.push(it)
-  const g = gridSideFor(slots.length)
-  const pad = 10
-  const cell = (PAL - pad * (g + 1)) / g
+  const scale = PAL / PALLET_W_MM // mm → px
+  const cellW = p.gridDims.w * scale
+  const cellD = p.gridDims.d * scale
 
   let out = rect(ox, oy, PAL, PAL, { fill: '#D7B899', stroke: '#8D6E63', sw: 2, rx: 4 })
   // 팔레트 데크 결 (나무 판자 느낌)
@@ -238,24 +311,31 @@ function topView(p: PlanPanel, ox: number, oy: number): string {
     out += `<line x1="${n(ox + 4)}" y1="${n(y)}" x2="${n(ox + PAL - 4)}" y2="${n(y)}" stroke="#C0A183" stroke-width="1"/>`
   }
 
-  for (let i = 0; i < g * g; i++) {
-    const r = Math.floor(i / g)
-    const c = i % g
-    const x = ox + pad + c * (cell + pad)
-    const y = oy + pad + r * (cell + pad)
-    const it = slots[i]
+  for (let i = 0; i < p.slotCount; i++) {
+    const r = Math.floor(i / p.cols)
+    const c = i % p.cols
+    const x = ox + c * cellW
+    const y = oy + r * cellD
+    const it = p.slots[i]
     if (!it) {
-      out += rect(x, y, cell, cell, { stroke: '#9CA3AF', sw: 1.2, dash: '5 4', rx: 3 })
-      out += text({ x: x + cell / 2, y: y + cell / 2 + 4, s: '빈 공간', size: 10, fill: '#9CA3AF', anchor: 'middle' })
+      out += rect(x + 2, y + 2, cellW - 4, cellD - 4, { stroke: '#9CA3AF', sw: 1.2, dash: '5 4', rx: 3 })
+      if (cellW > 46 && cellD > 24) {
+        out += text({ x: x + cellW / 2, y: y + cellD / 2 + 4, s: '빈 공간', size: 9.5, fill: '#9CA3AF', anchor: 'middle' })
+      }
       continue
     }
-    // 이 칸이 해당 SKU 의 몇 번째 기둥인지 → 단수 표기
-    const nth = slots.slice(0, i + 1).filter((s) => s === it).length
-    const tiers = it.columns[nth - 1] ?? 1
-    out += rect(x, y, cell, cell, { fill: it.color, stroke: '#111827', sw: 1.5, rx: 3 })
-    out += text({ x: x + cell / 2, y: y + cell / 2 - 8, s: it.sku, size: 11, bold: true, anchor: 'middle' })
-    out += text({ x: x + cell / 2, y: y + cell / 2 + 6, s: `${tiers}박스`, size: 9.5, fill: '#1F2937', anchor: 'middle' })
-    out += text({ x: x + cell / 2, y: y + cell / 2 + 20, s: '세움 ↑', size: 9.5, fill: '#1F2937', anchor: 'middle' })
+    // 자리 안에 실제 박스 바닥(가로×세로)을 그대로 그린다 — 회전 없음
+    const bw = Math.min(it.dims.w * scale, cellW) - 3
+    const bd = Math.min(it.dims.d * scale, cellD) - 3
+    out += rect(x + 1.5, y + 1.5, bw, bd, { fill: it.color, stroke: '#111827', sw: 1.5, rx: 3 })
+    const cx = x + 1.5 + bw / 2
+    const cy = y + 1.5 + bd / 2
+    if (bd > 30) {
+      out += text({ x: cx, y: cy - 3, s: it.sku, size: 10.5, bold: true, anchor: 'middle' })
+      out += text({ x: cx, y: cy + 11, s: `${p.slotTiers[i]}단`, size: 9.5, fill: '#1F2937', anchor: 'middle' })
+    } else {
+      out += text({ x: cx, y: cy + 3.5, s: `${it.sku} ${p.slotTiers[i]}단`, size: 9, bold: true, anchor: 'middle' })
+    }
   }
   return out
 }
@@ -265,7 +345,6 @@ function sideView(p: PlanPanel, ox: number, oy: number): string {
   const base = oy + SIDE_H // 바닥
   const scale = (SIDE_H - 26) / LIMIT_MM
   const palH = PALLET_MM * scale
-  const boxH = BOX_MM * scale
   const palTop = base - palH
 
   let out = `<line x1="${n(ox - 6)}" y1="${n(base)}" x2="${n(ox + ART_W + 6)}" y2="${n(base)}" stroke="#6B7280" stroke-width="1.5"/>`
@@ -279,7 +358,7 @@ function sideView(p: PlanPanel, ox: number, oy: number): string {
   out += rect(ox, palTop, ART_W, palH, { fill: '#B08968', stroke: '#7A5C48', sw: 1.2 })
   out += text({ x: ox + 4, y: palTop + palH / 2 + 3.5, s: `팔레트 ${PALLET_MM}mm`, size: 8.5, fill: '#3E2723' })
 
-  // 기둥 배치 (SKU 순서대로 좌→우)
+  // 기둥 배치 (SKU 순서대로 좌→우) — 단 높이는 SKU 별 실측 박스 높이
   const cols: { it: PlanItem; tiers: number }[] = []
   for (const it of p.items) for (const t of it.columns) cols.push({ it, tiers: t })
   const avail = ART_W - 12
@@ -288,6 +367,7 @@ function sideView(p: PlanPanel, ox: number, oy: number): string {
 
   cols.forEach((c, i) => {
     const x = ox + 6 + i * slot + (slot - colW) / 2
+    const boxH = c.it.dims.h * scale
     for (let t = 0; t < c.tiers; t++) {
       const y = palTop - (t + 1) * boxH
       out += rect(x, y, colW, boxH, { fill: c.it.color, stroke: '#111827', sw: 1.2 })
@@ -324,14 +404,20 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
     out += text({
       x: ox + 14,
       y: oy + 64 + i * ITEM_LH,
-      s: `${it.sku} ${it.boxes}박스(${cm(it.units)}개)${tail}`,
+      s:
+        `${it.sku} ${it.boxes}박스(${cm(it.units)}개) ` +
+        `${it.dims.w}×${it.dims.d}×${it.dims.h}mm${it.dims.unknown ? '(치수 미등록)' : ''}${tail}`,
       size: 10,
       fill: '#374151',
     })
     out += rect(ox + PANEL_W - 24, oy + 64 + i * ITEM_LH - 8, 10, 10, { fill: it.color, stroke: '#111827', sw: 1 })
   })
 
-  out += text({ x: ox + 14, y: oy + topLabelY, s: '탑뷰 (위에서 본 배치)', size: 10.5, bold: true, fill: '#374151' })
+  out += text({
+    x: ox + 14, y: oy + topLabelY,
+    s: `탑뷰 — ${p.cols}×${p.rows} = ${p.slotCount}자리 (자리 ${p.gridDims.w}×${p.gridDims.d}mm)`,
+    size: 10.5, bold: true, fill: '#374151',
+  })
   out += topView(p, ox + ART_X, oy + topY)
 
   out += text({ x: ox + 14, y: oy + sideLabelY, s: '사이드뷰 (옆에서 본 적재)', size: 10.5, bold: true, fill: '#374151' })
@@ -341,16 +427,28 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
   out += text({
     x: ox + 14,
     y: oy + heightY,
-    s: `총 높이 ${PALLET_MM} + ${BOX_MM}×${p.maxTier}단 = ${cm(p.heightMm)}mm · 여유 ${cm(p.slackMm)}mm`,
+    s: `총 높이 팔레트 ${PALLET_MM} + 최고 기둥 ${cm(p.heightMm - PALLET_MM)} = ${cm(p.heightMm)}mm · 여유 ${cm(p.slackMm)}mm`,
     size: 10,
     bold: true,
     fill: ok ? '#15803D' : '#DC2626',
   })
-  if (!ok) {
+  if (p.overflow > 0) {
+    out += text({
+      x: ox + 14, y: oy + capY,
+      s: `⚠ 자리 부족 ${p.overflow}자리 — 팔레트 1장에 안 들어감(추가 팔레트 필요)`,
+      size: 10, bold: true, fill: '#DC2626',
+    })
+  } else if (!ok) {
     out += text({
       x: ox + 14, y: oy + capY,
       s: `⚠ 여유 ${SAFE_MM}mm 미만 — 회송 위험. 단수 조정 필요`,
       size: 10, bold: true, fill: '#DC2626',
+    })
+  } else if (p.unknownDims) {
+    out += text({
+      x: ox + 14, y: oy + capY,
+      s: `※ 치수 미등록 SKU 포함 — ${DEFAULT_BOX_MM}mm 정육면체 가정`,
+      size: 10, bold: true, fill: '#B45309',
     })
   } else if (p.singleBox) {
     out += text({ x: ox + 14, y: oy + capY, s: '※ 1박스 단독 — 랩핑·결박 필수', size: 10, bold: true, fill: '#B45309' })
@@ -389,7 +487,7 @@ export function renderPalletPlanSvg(plan: PalletPlan): string {
   s += text({ x: M, y: M + 24, s: title, size: 16, bold: true })
   s += text({
     x: M, y: M + 46,
-    s: `박스 높이 ${BOX_MM}mm 가정 · 팔레트 ${PALLET_MM}mm · 기둥당 최대 ${MAX_TIER}단 · 적재 한도 ${cm(LIMIT_MM)}mm`,
+    s: `상품마스터 실측 박스 치수 기준 · 팔레트 ${cm(PALLET_W_MM)}×${cm(PALLET_D_MM)}mm(높이 ${PALLET_MM}mm) · 적재 한도 ${cm(LIMIT_MM)}mm`,
     size: 10.5, fill: '#6B7280',
   })
 
@@ -409,7 +507,10 @@ export function renderPalletPlanSvg(plan: PalletPlan): string {
   s += text({ x: M, y: footY1, s: '각 상품 바닥부터 자기 기둥만 사용(세로 구분) — 다른 상품을 위에 얹는 가로 층 없음', size: 11, fill: '#374151' })
   s += text({
     x: M, y: footY2,
-    s: `높이 계산: 팔레트 ${PALLET_MM}mm + 박스 ${BOX_MM}mm × 최대 단수 (치수 미제공으로 박스 ${BOX_MM}mm 가정) · 한도 ${cm(LIMIT_MM)}mm`,
+    s:
+      `높이 계산: 팔레트 ${PALLET_MM}mm + 실측 박스높이 × 단수 (단수 = ⌊(${cm(LIMIT_MM)} − ${PALLET_MM}) ÷ 박스높이⌋) · ` +
+      `바닥 자리 = ⌊${cm(PALLET_W_MM)} ÷ 박스가로⌋ × ⌊${cm(PALLET_D_MM)} ÷ 박스세로⌋ · 회전 없이 시트 표기 그대로` +
+      (plan.panels.some((p) => p.unknownDims) ? ` · 치수 미등록 SKU 는 ${DEFAULT_BOX_MM}mm 가정` : ''),
     size: 11, fill: '#374151',
   })
 
