@@ -13,9 +13,15 @@ export type SalesChannel = '쿠팡' | '컬리'
 export type ChannelFilter = '전체' | SalesChannel
 
 export const CHANNELS: SalesChannel[] = ['쿠팡', '컬리']
+// 채널 아이덴티티 색 — 쿠팡 빨강, 컬리 보라 (차트·범례·비중바·카드 공통)
 export const CHANNEL_COLORS: Record<SalesChannel, string> = {
-  쿠팡: '#3b82f6',
-  컬리: '#a855f7',
+  쿠팡: '#E5432E',
+  컬리: '#5F0080',
+}
+/** 카드 상단 보더 등 옅게 쓰는 보조 색 */
+export const CHANNEL_COLORS_SOFT: Record<SalesChannel, string> = {
+  쿠팡: '#FBE9E6',
+  컬리: '#F0E6F5',
 }
 
 export type SalesRecord = {
@@ -139,6 +145,46 @@ export function buildKpi(
         ? null
         : Math.round(((revenue - prevRevenue) / prevRevenue) * 1000) / 10,
   }
+}
+
+export type ChannelStat = {
+  channel: SalesChannel
+  revenue: number
+  poCount: number
+  sharePct: number // 선택 월 총매출 대비 비중
+  prevRevenue: number | null
+  momPct: number | null
+}
+
+/**
+ * 채널별 KPI 카드용 집계 — scoped(채널·월 필터 적용) 기준이라
+ * 채널 카드 매출의 합은 항상 총매출 카드와 일치한다.
+ * 전월 대비는 같은 채널의 직전 달과 비교한다.
+ */
+export function channelStats(
+  scoped: SalesRecord[],
+  channeled: SalesRecord[],
+  month: string,
+): ChannelStat[] {
+  const total = sum(scoped, (r) => r.revenue)
+  const prevRows = month ? byMonth(channeled, prevMonth(month)) : []
+  return CHANNELS.map((c) => {
+    const cur = scoped.filter((r) => r.channel === c)
+    const prev = prevRows.filter((r) => r.channel === c)
+    const revenue = sum(cur, (r) => r.revenue)
+    const prevRevenue = prev.length ? sum(prev, (r) => r.revenue) : null
+    return {
+      channel: c,
+      revenue,
+      poCount: poCount(cur),
+      sharePct: total > 0 ? Math.round((revenue / total) * 1000) / 10 : 0,
+      prevRevenue,
+      momPct:
+        prevRevenue === null || prevRevenue === 0
+          ? null
+          : Math.round(((revenue - prevRevenue) / prevRevenue) * 1000) / 10,
+    }
+  })
 }
 
 /** 선택 월을 끝으로 하는 최근 n개월 라벨 (데이터가 없는 달도 0으로 채운다) */

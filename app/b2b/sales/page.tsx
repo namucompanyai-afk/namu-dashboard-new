@@ -6,7 +6,8 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  Legend,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,9 +16,11 @@ import {
 import {
   CHANNELS,
   CHANNEL_COLORS,
+  CHANNEL_COLORS_SOFT,
   buildKpi,
   byChannel,
   byMonth,
+  channelStats,
   listMonths,
   monthLabel,
   monthlyTrend,
@@ -27,7 +30,10 @@ import {
   shortMonth,
   sortForTable,
   type ChannelFilter,
+  type ChannelStat,
+  type SalesChannel,
   type SalesRecord,
+  type TrendPoint,
 } from '@/lib/b2b/salesHistory'
 
 /**
@@ -60,6 +66,11 @@ function ChartBox({ children, height = 260 }: { children: ReactElement; height?:
 }
 
 const CHANNEL_FILTERS: ChannelFilter[] = ['전체', '쿠팡', '컬리']
+type TopScope = 'month' | 'all'
+const TOP_SCOPES: { key: TopScope; label: string }[] = [
+  { key: 'month', label: '이번 달' },
+  { key: 'all', label: '누적' },
+]
 const PAGE_SIZE = 50
 
 export default function B2BSalesPage() {
@@ -70,6 +81,7 @@ export default function B2BSalesPage() {
   const [channel, setChannel] = useState<ChannelFilter>('전체')
   const [month, setMonth] = useState('')
   const [limit, setLimit] = useState(PAGE_SIZE)
+  const [topScope, setTopScope] = useState<TopScope>('month')
 
   const load = useCallback(async () => {
     setState('loading')
@@ -99,9 +111,14 @@ export default function B2BSalesPage() {
   const channeled = useMemo(() => byChannel(records, channel), [records, channel])
   const scoped = useMemo(() => byMonth(channeled, month), [channeled, month])
   const kpi = useMemo(() => buildKpi(scoped, channeled, month), [scoped, channeled, month])
+  const chStats = useMemo(() => channelStats(scoped, channeled, month), [scoped, channeled, month])
 
   const trend = useMemo(() => monthlyTrend(records, recentMonths(month, 6)), [records, month])
-  const topProducts = useMemo(() => rankBy(scoped, (r) => r.product, 5), [scoped])
+  // 이번 달 = 선택된 입고예정월, 누적 = 전체 이력(채널 필터는 그대로 적용)
+  const topProducts = useMemo(
+    () => rankBy(topScope === 'month' ? scoped : channeled, (r) => r.product, 5),
+    [scoped, channeled, topScope],
+  )
   const topCenters = useMemo(() => rankBy(scoped, (r) => r.center, 8), [scoped])
   const tableRows = useMemo(() => sortForTable(scoped), [scoped])
 
@@ -182,66 +199,77 @@ export default function B2BSalesPage() {
             </span>
           </div>
 
-          {/* KPI */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <KpiCard
-              label={`${monthLabel(month)} 매출`}
-              value={won(kpi.revenue)}
-              sub={
-                kpi.momPct === null ? (
+          {/* KPI — 총매출 + 채널별 2장 (채널 카드 합 = 총매출) */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
+              <p className="text-xs text-gray-500">{monthLabel(month)} 총매출</p>
+              <p className="text-2xl font-semibold mt-1">{won(kpi.revenue)}</p>
+              <p className="text-[11px] mt-1">
+                {kpi.momPct === null ? (
                   <span className="text-gray-400">전월 데이터 없음</span>
                 ) : (
                   <span className={kpi.momPct >= 0 ? 'text-emerald-600' : 'text-red-600'}>
                     전월 대비 {kpi.momPct >= 0 ? '+' : ''}
                     {kpi.momPct}%
                   </span>
-                )
-              }
-            />
-            <KpiCard
-              label="발주 건수"
-              value={`${num(kpi.poCount)}건`}
-              sub={
-                kpi.poByChannel.length ? (
-                  <span className="text-gray-500">
-                    {kpi.poByChannel.map((c) => `${c.channel} ${num(c.count)}`).join(' · ')}
-                  </span>
-                ) : (
-                  <span className="text-gray-400">—</span>
-                )
-              }
-            />
-            <KpiCard
-              label="출고 물량"
-              value={`${num(kpi.boxes)}박스`}
-              sub={<span className="text-gray-500">낱개 {num(kpi.units)}</span>}
-            />
-            <KpiCard
-              label="건당 평균 매출"
-              value={won(kpi.avgPerPo)}
-              sub={<span className="text-gray-500">매출 ÷ 발주 건수</span>}
-            />
+                )}
+              </p>
+            </div>
+            {chStats.map((c) => (
+              <ChannelCard key={c.channel} stat={c} />
+            ))}
           </div>
 
-          {/* 월별 매출 추이 */}
+          {/* 월별 매출 추이 — 채널별로 분리(각자 y축 스케일), 채널 필터와 무관 */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {CHANNELS.map((c) => (
+              <TrendChart key={c} channel={c} data={trend} />
+            ))}
+          </div>
+
+          {/* 월별 채널 비중 */}
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
-              <h2 className="text-sm font-semibold">월별 매출 추이 (최근 6개월)</h2>
-              <span className="text-xs text-gray-500">채널 필터와 무관하게 양채널 표시</span>
+              <h2 className="text-sm font-semibold">월별 채널 비중 (최근 6개월)</h2>
+              <span className="text-xs text-gray-500">
+                {CHANNELS.map((c) => (
+                  <span key={c} className="ml-3 inline-flex items-center gap-1">
+                    <span
+                      className="inline-block w-2.5 h-2.5 rounded-sm"
+                      style={{ background: CHANNEL_COLORS[c] }}
+                    />
+                    {c}
+                  </span>
+                ))}
+              </span>
             </div>
-            <div className="p-4">
-              <ChartBox height={280}>
-                <BarChart data={trend} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                  <XAxis dataKey="month" tickFormatter={shortMonth} tick={{ fontSize: 12 }} />
-                  <YAxis tickFormatter={numTick} tick={{ fontSize: 11 }} width={80} />
-                  <Tooltip formatter={wonTip} labelFormatter={monthTip} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {CHANNELS.map((c) => (
-                    <Bar key={c} dataKey={c} stackId="revenue" fill={CHANNEL_COLORS[c]} />
-                  ))}
-                </BarChart>
-              </ChartBox>
+            <div className="p-4 space-y-3">
+              {trend.map((t) => {
+                const total = t.쿠팡 + t.컬리
+                return (
+                  <div key={t.month} className="flex items-center gap-3">
+                    <span className="w-14 shrink-0 text-xs text-gray-500">{shortMonth(t.month)}</span>
+                    <div className="flex-1 h-4 rounded-sm bg-gray-100 overflow-hidden flex">
+                      {total > 0 &&
+                        CHANNELS.map((c) => (
+                          <div
+                            key={c}
+                            title={`${c} ${won(t[c])}`}
+                            style={{
+                              width: `${(t[c] / total) * 100}%`,
+                              background: CHANNEL_COLORS[c],
+                            }}
+                          />
+                        ))}
+                    </div>
+                    <span className="w-32 shrink-0 text-right text-[11px] text-gray-500 tabular-nums">
+                      {total > 0
+                        ? CHANNELS.map((c) => `${Math.round((t[c] / total) * 100)}%`).join(' · ')
+                        : '데이터 없음'}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
@@ -250,8 +278,26 @@ export default function B2BSalesPage() {
             <RankChart
               title="상품별 매출 Top 5"
               rows={topProducts}
-              color="#3b82f6"
+              color="#0f766e"
               emptyText="선택한 조건에 해당하는 이력이 없습니다."
+              toolbar={
+                <div className="flex items-center gap-1">
+                  {TOP_SCOPES.map((o) => (
+                    <button
+                      key={o.key}
+                      onClick={() => setTopScope(o.key)}
+                      className={
+                        'px-2.5 py-1 rounded-md text-[11px] transition-colors ' +
+                        (topScope === o.key
+                          ? 'bg-gray-900 text-white'
+                          : 'border border-gray-300 text-gray-600 hover:bg-gray-50')
+                      }
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              }
             />
             <RankChart
               title="센터·입고지별 매출"
@@ -332,20 +378,64 @@ export default function B2BSalesPage() {
   )
 }
 
-function KpiCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string
-  value: string
-  sub: ReactElement
-}) {
+function ChannelCard({ stat }: { stat: ChannelStat }) {
+  const color = CHANNEL_COLORS[stat.channel]
   return (
-    <div className="rounded-lg border border-gray-200 bg-white px-4 py-3">
-      <p className="text-xs text-gray-500">{label}</p>
-      <p className="text-xl font-semibold mt-1">{value}</p>
-      <p className="text-[11px] mt-1">{sub}</p>
+    <div
+      className="rounded-lg border border-gray-200 bg-white px-4 py-3 border-t-4"
+      style={{ borderTopColor: color, background: CHANNEL_COLORS_SOFT[stat.channel] + '33' }}
+    >
+      <p className="text-xs font-medium" style={{ color }}>
+        {stat.channel}
+      </p>
+      <p className="text-2xl font-semibold mt-1">{won(stat.revenue)}</p>
+      <p className="text-[11px] mt-1 text-gray-500">
+        발주 {num(stat.poCount)}건 · 비중 {stat.sharePct}%
+      </p>
+      <p className="text-[11px] mt-0.5">
+        {stat.momPct === null ? (
+          <span className="text-gray-400">전월 데이터 없음</span>
+        ) : (
+          <span className={stat.momPct >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+            전월 대비 {stat.momPct >= 0 ? '+' : ''}
+            {stat.momPct}%
+          </span>
+        )}
+      </p>
+    </div>
+  )
+}
+
+/** 채널 1개짜리 꺾은선 — 채널마다 독립 y축이라 저액 채널이 눌리지 않는다 */
+function TrendChart({ channel, data }: { channel: SalesChannel; data: TrendPoint[] }) {
+  const color = CHANNEL_COLORS[channel]
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
+        <h2 className="text-sm font-semibold" style={{ color }}>
+          {channel} 매출 추이
+        </h2>
+        <span className="text-xs text-gray-500">최근 6개월 · 채널 필터 무관</span>
+      </div>
+      <div className="p-4">
+        <ChartBox height={260}>
+          <LineChart data={data} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis dataKey="month" tickFormatter={shortMonth} tick={{ fontSize: 12 }} />
+            <YAxis tickFormatter={numTick} tick={{ fontSize: 11 }} width={80} />
+            <Tooltip formatter={wonTip} labelFormatter={monthTip} />
+            <Line
+              type="monotone"
+              dataKey={channel}
+              name={channel}
+              stroke={color}
+              strokeWidth={2}
+              dot={{ r: 3, fill: color }}
+              activeDot={{ r: 5 }}
+            />
+          </LineChart>
+        </ChartBox>
+      </div>
     </div>
   )
 }
@@ -355,16 +445,19 @@ function RankChart({
   rows,
   color,
   emptyText,
+  toolbar,
 }: {
   title: string
   rows: { name: string; revenue: number }[]
   color: string
   emptyText: string
+  toolbar?: ReactElement
 }) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-200">
+      <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold">{title}</h2>
+        {toolbar}
       </div>
       {rows.length === 0 ? (
         <p className="px-4 py-10 text-sm text-gray-400 text-center">{emptyText}</p>
