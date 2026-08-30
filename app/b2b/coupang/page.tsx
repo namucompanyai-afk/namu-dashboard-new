@@ -136,6 +136,8 @@ export default function CoupangB2BPage() {
   const unknown = useMemo(() => routed.filter((r) => r.shipFrom === '미분류'), [routed])
   // 납품가능 미확정 — 확정 전/구버전 발주서 업로드 방어 (있으면 이력 저장 차단)
   const unconfirmed = useMemo(() => routed.filter((r) => r.qtyUnconfirmed), [routed])
+  // 발주서 매입가 미확인 — 잘못된 매출을 이력에 남기지 않도록 저장 차단
+  const noPrice = useMemo(() => routed.filter((r) => r.unitPrice <= 0), [routed])
   const fileStats = useMemo(() => summarizeCoupangFiles(items), [items])
 
   const rocket = useMemo(
@@ -388,7 +390,8 @@ export default function CoupangB2BPage() {
                   historySaving ||
                   routed.length === 0 ||
                   products.length === 0 ||
-                  unconfirmed.length > 0
+                  unconfirmed.length > 0 ||
+                  noPrice.length > 0
                 }
                 className="mt-2 px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
               >
@@ -398,6 +401,12 @@ export default function CoupangB2BPage() {
                 <p className="text-[11px] text-amber-700 mt-1">
                   납품가능 미확정 {unconfirmed.length}행이라 이력을 저장할 수 없습니다 — 확정 발주서로 다시 받아
                   업로드해 주세요.
+                </p>
+              )}
+              {noPrice.length > 0 && (
+                <p className="text-[11px] text-red-600 mt-1">
+                  발주서 매입가 미확인 {noPrice.length}행이라 이력을 저장할 수 없습니다 — 매출이 0으로 기록되는
+                  것을 막기 위한 차단입니다.
                 </p>
               )}
             </>
@@ -435,6 +444,13 @@ export default function CoupangB2BPage() {
           컬럼을 추가하고 진도팜 행 <b>전남진도_2</b> · 위킵 행 <b>화성시_1</b> · 곰표 행 <b>시흥시_1</b> 을 채워 주세요.
         </div>
       )}
+      {noPrice.length > 0 && (
+        <div className="rounded-lg border border-red-300 bg-red-50 text-red-700 p-3 text-sm">
+          ⚠️ 단가 미확인 {noPrice.length}건 — 발주서 매입가(공급가 &gt; 매입가)를 읽지 못했습니다. 매출·세일즈
+          히스토리 저장을 막아 두었습니다:{' '}
+          {[...new Set(noPrice.map((u) => `${u.poNumber} ${u.productName}`))].join(', ')}
+        </div>
+      )}
       {unconfirmed.length > 0 && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-800 p-3 text-sm">
           ⚠️ 납품가능 미확정 {unconfirmed.length}건 — 발주수량 기준으로 표시하며 매출·박스·PLT·양식은 납품가능수량(0)
@@ -461,7 +477,7 @@ export default function CoupangB2BPage() {
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">이번 발주 매출 요약</h2>
               <span className="text-xs text-gray-500">
-                부가포함 매출 (과세 상품 ×1.1, 시트 쿠팡 공급가 기준)
+                부가포함 매출 (과세 ×1.1, 발주서 매입가 기준)
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -490,7 +506,16 @@ export default function CoupangB2BPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right">{num(r.qty)}</td>
-                      <td className="px-3 py-2 text-right">{num(r.unitPriceIncl)}</td>
+                      <td className="px-3 py-2 text-right">
+                        {r.unitPricesIncl.length > 0 ? (
+                          r.unitPricesIncl.map((p) => num(p)).join(' / ')
+                        ) : (
+                          <span className="text-red-600">—</span>
+                        )}
+                        {!r.priceKnown && (
+                          <span className="block text-[11px] text-red-600">단가 미확인</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right">{num(r.totalIncl)}</td>
                     </tr>
                   ))}

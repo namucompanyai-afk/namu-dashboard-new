@@ -93,7 +93,8 @@ export function buildKurlyHistory(
 
 /**
  * 쿠팡 — 발주번호 × 상품 단위 1행.
- * 쿠팡 발주서에는 금액이 없으므로 시트 쿠팡 공급가 × 납품가능수량, 과세면 ×1.1.
+ * 매출은 **발주서 매입가** × 납품가능수량, 과세면 ×1.1 (화면 매출 요약과 같은 소스).
+ * 시트 쿠팡 공급가는 쓰지 않는다 — 발주서마다 단가가 바뀌기 때문.
  */
 export function buildCoupangHistory(items: RoutedItem[]): HistoryRow[] {
   return items.map((it) => ({
@@ -105,7 +106,7 @@ export function buildCoupangHistory(items: RoutedItem[]): HistoryRow[] {
     shipFrom: it.master?.shipFrom || UNCLASSIFIED,
     boxes: it.boxes,
     units: it.confirmQty,
-    revenue: withVat(it.confirmQty * (it.master?.coupangSupply ?? 0), taxableOf(it.master)),
+    revenue: withVat(it.confirmQty * it.unitPrice, taxableOf(it.master)),
   }))
 }
 

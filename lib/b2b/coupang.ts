@@ -1,7 +1,7 @@
 /**
  * B2B 발주 변환 — 쿠팡 도메인 로직 (순수 함수).
  *
- * 발주서리스트_*.xlsx 파싱 → 출고지 분기(진도팜/위킵) → 로켓 양식 행 + 매출 요약.
+ * 발주서리스트_*.xlsx 파싱 → 출고지 분기(진도팜/위킵/곰표) → 로켓 양식 행 + 매출 요약.
  * 시트 파싱 유틸(norm/toNum/fmtDate/resolveCols)과 ProductMaster 는 kurly 모듈을 재사용한다.
  * 컬리 쪽 파싱·팔레트·운송비 로직은 건드리지 않는다.
  */
@@ -24,6 +24,7 @@ export type CoupangOrderItem = {
   productName: string // 상품명 (발주서 표기 그대로)
   orderQty: number // 발주수량 (G열) — 참고 필드
   confirmQty: number // 납품가능수량 (H열) ← 실제 출고·매출·박스·PLT·이력 기준 (불변)
+  unitPrice: number // 매입가 (공급가 블록 첫 컬럼) ← 매출 단가. 빈값·0이면 '단가 미확인'
   qtyUnconfirmed: boolean // H가 0·빈값인데 G>0 → 납품가능 미확정(구버전 발주서 의심)
   displayQty: number // 화면 표시용 — 미확정이면 G, 아니면 H
   barcode: string // 상품마스터 매칭 키
@@ -58,7 +59,23 @@ export function isCoupangRows(rows: unknown[][]): boolean {
  *   A열 '입고예정일시'   → 다음 행 C열 = 센터명, F열 = 입고예정일
  *   A열 '3. 상품정보'    → +4행부터 상품 1개당 2행 (1행 C/G/H, 2행 C=바코드)
  * 상품 블록은 A열이 비거나 '합계' 또는 '4.' 로 시작하면 끝난다.
+ *
+ * 상품 표 헤더는 2단 병합이다 — 윗줄(+2행)에 '공급가/발주금액/입고금액' 그룹,
+ * 아랫줄(+3행)에 그룹마다 '매입가/공급가액/부가세'. '매입가'가 세 번 나오므로
+ * 반드시 '공급가' 그룹 시작 열부터 찾는다(실측 J열).
  */
+/** 상품 표 '공급가 > 매입가' 열 (못 찾으면 실측 위치 J열) */
+export const SUPPLY_PRICE_COL = 9
+
+export function supplyPriceCol(rows: unknown[][], prodIdx: number): number {
+  const group = rows[prodIdx + 2] || []
+  const sub = rows[prodIdx + 3] || []
+  const start = group.findIndex((v) => norm(v) === '공급가')
+  if (start < 0) return SUPPLY_PRICE_COL
+  for (let c = start; c < sub.length; c++) if (norm(sub[c]) === '매입가') return c
+  return SUPPLY_PRICE_COL
+}
+
 export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrderItem[] {
   const A = (i: number) => textAt(rows, i, 0)
   const findRow = (pred: (s: string) => boolean) => rows.findIndex((_, i) => pred(A(i)))
@@ -83,6 +100,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
 
   const prodIdx = findRow((s) => norm(s).startsWith('3.상품정보'))
   if (prodIdx < 0) return []
+  const priceCol = supplyPriceCol(rows, prodIdx)
 
   const items: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {
@@ -101,6 +119,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       productName,
       orderQty,
       confirmQty,
+      unitPrice: toNum(cellAt(rows, r, priceCol)),
       qtyUnconfirmed,
       displayQty: qtyUnconfirmed ? orderQty : confirmQty,
       barcode: textAt(rows, r + 1, 2),
@@ -412,14 +431,15 @@ export type CoupangSummaryRow = {
   barcode: string
   name: string // 상품마스터 별칭(없으면 발주서 상품명)
   qty: number // 납품가능수량 합
-  unitPrice: number // 시트 쿠팡 공급가 (VAT 별도)
-  unitPriceIncl: number
+  unitPrices: number[] // 발주서 매입가 — 발주마다 다르면 여러 개 (VAT 별도)
+  unitPricesIncl: number[] // 부가포함 단가 (과세면 ×1.1)
   total: number // VAT 별도
   totalIncl: number // 부가포함
   taxType: string
   taxable: boolean
   taxKnown: boolean
   masterKnown: boolean
+  priceKnown: boolean // 매입가가 빈값·0인 행이 있으면 false → '단가 미확인'
 }
 
 export type CoupangSummary = {
@@ -430,7 +450,9 @@ export type CoupangSummary = {
 }
 
 /**
- * 상품별 매출 요약. 단가는 **시트의 쿠팡 공급가**를 쓴다(쿠팡 발주서에는 금액이 없음).
+ * 상품별 매출 요약. 단가는 **발주서 매입가**를 쓴다 — 같은 상품이라도 발주서마다
+ * 단가가 다를 수 있으므로 행별로 그 발주서 값을 곱해 합산한다(시트 쿠팡 공급가는
+ * 매출 경로에서 쓰지 않는다). 과세 구분만 시트 상품마스터에서 가져온다.
  * 부가세는 상품별 합계에 한 번만 적용해 행별 반올림 누적 오차를 피한다.
  */
 export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
@@ -444,25 +466,32 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
         barcode: it.barcode,
         name: it.master?.alias || it.productName,
         qty: 0,
-        unitPrice: it.master?.coupangSupply ?? 0,
-        unitPriceIncl: 0,
+        unitPrices: [],
+        unitPricesIncl: [],
         total: 0,
         totalIncl: 0,
         taxType,
         taxable: taxType.includes('과세'),
         taxKnown: taxType !== '',
         masterKnown: !!it.master,
+        priceKnown: true,
       }
       byKey.set(key, r)
     }
     r.qty += it.confirmQty
+    r.total += it.confirmQty * it.unitPrice
+    if (it.unitPrice > 0) {
+      if (!r.unitPrices.includes(it.unitPrice)) r.unitPrices.push(it.unitPrice)
+    } else {
+      r.priceKnown = false
+    }
   }
 
   const rows = [...byKey.values()]
   for (const r of rows) {
-    r.total = r.qty * r.unitPrice
+    r.unitPrices.sort((a, b) => a - b)
     r.totalIncl = withVat(r.total, r.taxable)
-    r.unitPriceIncl = withVat(r.unitPrice, r.taxable)
+    r.unitPricesIncl = r.unitPrices.map((p) => withVat(p, r.taxable))
   }
   return {
     rows,
