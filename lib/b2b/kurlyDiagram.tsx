@@ -7,20 +7,16 @@
  * buildPalletPlan()  : 발주행 + 팔레트그룹 → 도면 모델
  * renderPalletPlanSvg(): 도면 모델 → 단일 SVG 문자열 (페이지 인라인 렌더 · 다운로드 겸용)
  */
-import type { BoxDims, KurlyOrderRow, PalletGroup, ProductMaster, SkuStack } from './kurly'
+import type { BoxDims, KurlyOrderRow, PalletUnit, ProductMaster } from './kurly'
 import {
   DEFAULT_BOX_MM,
   LIMIT_MM,
-  MAX_SKU_PER_PLT,
   PALLET_D_MM,
   PALLET_MM,
   PALLET_W_MM,
-  UNKNOWN_DIMS,
-  dimsOf,
+  buildPalletUnits,
+  maxTiersOf,
   norm,
-  packPallets,
-  palletGridOf,
-  stacksOf,
 } from './kurly'
 import { PREPRINTED_MASTER_CODES } from './kurlyLabel'
 
@@ -42,6 +38,7 @@ const AUTO_COLORS = [
 
 // ── 도면 모델 ────────────────────────────────────────────────────
 export type PlanItem = {
+  dest: string // 이 물량의 입고지 (혼적 팔레트에서 구분용)
   masterCode: string
   sku: string // 축약 표시명 (강황 · 고춧 …)
   fullName: string // 범례/툴팁용 원래 이름
@@ -56,7 +53,9 @@ export type PlanItem = {
 
 export type PlanPanel = {
   plt: number // PLT 번호 (1-based, 도면 전체 통번호)
-  dest: string
+  dest: string // 표시용 입고지명 (혼적이면 '김포상온+창원상온')
+  dests: string[] // 이 장에 실린 입고지
+  mixed: boolean // 경유 혼적 팔레트
   part: number // 같은 입고지가 나뉜 경우 몇 번째 장인지 (1-based)
   partCount: number // 그 입고지의 총 팔레트 장수
   viaLabel: string // '직납·경유안함' | '경유: 평택1'
@@ -88,12 +87,17 @@ export type PalletPlan = {
 // ── 표시명 축약 ──────────────────────────────────────────────────
 // '[보배마을] 농부가 만든 무농약 고춧가루 100g' → '고춧'
 // '[보배마을] 현미 귀리 즉석밥 180g * 6' → '즉석밥 *6' (묶음 수가 곧 품목 구분)
+// '[보배마을] 오트현미한끼 잡곡밥 180g*6입' → '잡곡밥 *6'
 export function shortSkuName(raw: string): string {
   let s = String(raw || '').trim()
   s = s.replace(/\[[^\]]*\]/g, ' ') // [보배마을] 등 브랜드 대괄호 제거
-  // 즉석밥은 6입/24입이 별개 품목이라 묶음 수를 떼지 않고 붙여 쓴다
-  const pack = /즉석밥/.test(s) ? (s.match(/[*x×]\s*(\d+)/i)?.[1] ?? '') : ''
-  if (/즉석밥/.test(s)) return pack ? `즉석밥 *${pack}` : '즉석밥'
+  // 밥 계열은 6입/24입이 별개 품목이라 묶음 수를 떼지 않고 붙여 쓴다
+  // (용량 토큰 정규식의 \b 는 한글 뒤에서 안 걸려 '*6입' 이 남으므로 여기서 먼저 처리)
+  const rice = /즉석밥|잡곡밥/.exec(s)?.[0]
+  if (rice) {
+    const pack = s.match(/[*x×]\s*(\d+)/i)?.[1] ?? ''
+    return pack ? `${rice} *${pack}` : rice
+  }
   s = s.replace(/\b\d+(\.\d+)?\s*(kg|g|ml|l|개|입|팩|봉|포)\b/gi, ' ') // 용량·수량 토큰
   s = s.replace(/\s+/g, ' ').trim()
   const last = s.split(' ').filter(Boolean).pop() || s // 수식어 떼고 핵심 명사
@@ -110,14 +114,17 @@ function viaLabelOf(viaCenters: string[]): string {
 }
 
 /**
- * 팔레트 목록 → 도면 모델.
- * pallets 는 buildPallets() 결과 그대로(입고지 등장 순서 = PLT 번호).
+ * 발주행 → 도면 모델.
+ * units 는 buildPalletUnits() 가 낸 **실제 팔레트 장수**(경유 혼적 반영).
+ * 안 넘기면 여기서 같은 함수로 계산한다 — 팔레트 장수의 단일 소스는 kurly.ts 다.
  */
 export function buildPalletPlan(
   orders: KurlyOrderRow[],
-  pallets: PalletGroup[],
+  units: PalletUnit[] | null,
   masterByCode: Record<string, ProductMaster>,
 ): PalletPlan {
+  const list = units ?? buildPalletUnits(orders, masterByCode)
+
   // 전체 SKU 색 배정 (도면 전체에서 구분되게 — 범례와 같은 색)
   const colorOf = new Map<string, string>()
   const nameOf = new Map<string, string>()
@@ -131,105 +138,112 @@ export function buildPalletPlan(
     colorOf.set(key, fixed ? fixed.color : AUTO_COLORS[autoIdx++ % AUTO_COLORS.length])
   }
 
-  // 입고지별 발주코드 꼬리표 (SKU 단위)
-  const tailsOf = (g: PalletGroup): Map<string, string[]> => {
-    const m = new Map<string, string[]>()
-    for (const idx of g.rowIndexes) {
-      const o = orders[idx]
-      const key = norm(o.masterCode)
-      const tail = String(o.productCode || '').slice(-6)
-      if (!tail) continue
-      const cur = m.get(key) ?? []
-      if (!cur.includes(tail)) cur.push(tail)
-      m.set(key, cur)
-    }
-    return m
+  // 입고지별 경유센터 · 발주코드 꼬리표 · 박스당 낱개
+  const viaByDest = new Map<string, string[]>()
+  const tailsByKey = new Map<string, string[]>()
+  const perBox = new Map<string, { boxes: number; units: number }>()
+  for (const o of orders) {
+    const dest = o.dest || '(입고지 없음)'
+    const via = viaByDest.get(dest) ?? []
+    if (o.viaCenter && !via.includes(o.viaCenter)) via.push(o.viaCenter)
+    viaByDest.set(dest, via)
+
+    const k = `${dest}|${norm(o.masterCode)}`
+    const tail = String(o.productCode || '').slice(-6)
+    const tails = tailsByKey.get(k) ?? []
+    if (tail && !tails.includes(tail)) tails.push(tail)
+    tailsByKey.set(k, tails)
+
+    const pb = perBox.get(k) ?? { boxes: 0, units: 0 }
+    pb.boxes += o.boxCount
+    pb.units += o.totalUnits
+    perBox.set(k, pb)
   }
 
-  /** SkuStack + 이 팔레트가 실제로 실은 단수 → 도면 아이템 */
-  const itemOf = (st: SkuStack, tiers: number[], tails: Map<string, string[]>): PlanItem => {
-    const key = norm(st.code)
-    const full = nameOf.get(key) || st.code
-    const boxes = tiers.reduce((a, t) => a + t, 0)
-    return {
-      masterCode: st.code,
-      sku: shortSkuName(full),
-      fullName: full,
-      color: colorOf.get(key) || AUTO_COLORS[0],
-      boxes,
-      // 낱개는 박스당입수 비례로 이 팔레트 몫만
-      units: st.boxes > 0 ? Math.round((st.units / st.boxes) * boxes) : 0,
-      codeTails: tails.get(key) ?? [],
-      dims: st.dims,
-      tiersPerSlot: st.tiersPerSlot,
-      columns: tiers,
-    }
-  }
+  // 입고지별 총 장수 (n/N 표기용) — 혼적 장도 그 입고지 몫으로 센다
+  const partTotal = new Map<string, number>()
+  for (const u of list) for (const d of u.dests) partTotal.set(d, (partTotal.get(d) ?? 0) + 1)
+  const partSeen = new Map<string, number>()
 
-  // 입고지 하나가 자리·SKU 한도를 넘기면 팔레트를 나눠 각각 렌더한다
-  // (분할 규칙은 lib/b2b/kurly.ts 의 packPallets — 팔레트 장수 계산과 같은 식)
-  const panels: PlanPanel[] = []
-  let pltNo = 0
-  for (const g of pallets) {
-    const stacks = stacksOf(orders, g.rowIndexes, masterByCode)
-    const grid = palletGridOf(stacks)
-    const packs = packPallets(stacks, grid.slots, MAX_SKU_PER_PLT)
-    const tails = tailsOf(g)
-
-    packs.forEach((pack, pi) => {
-      pltNo += 1
-      // 이 팔레트가 실은 SKU별 단수 (등장 순서 유지)
-      const tiersByStack = new Map<number, number[]>()
-      for (const slot of pack) {
-        const cur = tiersByStack.get(slot.stack) ?? []
-        cur.push(slot.tiers)
-        tiersByStack.set(slot.stack, cur)
+  const panels: PlanPanel[] = list.map((u, ui) => {
+    // 자리 → (입고지 + SKU) 단위로 묶어 도면 아이템 구성 (등장 순서 유지)
+    const byKey = new Map<string, PlanItem>()
+    const slotKeys: string[] = []
+    for (const sl of u.slots) {
+      const k = `${sl.dest}|${norm(sl.code)}`
+      slotKeys.push(k)
+      let it = byKey.get(k)
+      if (!it) {
+        const nk = norm(sl.code)
+        const full = nameOf.get(nk) || sl.code
+        it = {
+          dest: sl.dest,
+          masterCode: sl.code,
+          sku: shortSkuName(full),
+          fullName: full,
+          color: colorOf.get(nk) || AUTO_COLORS[0],
+          boxes: 0,
+          units: 0,
+          codeTails: tailsByKey.get(k) ?? [],
+          dims: sl.dims,
+          tiersPerSlot: maxTiersOf(sl.dims),
+          columns: [],
+        }
+        byKey.set(k, it)
       }
-      const items = [...tiersByStack.entries()].map(([si, tiers]) =>
-        itemOf(stacks[si], tiers, tails),
-      )
-      const itemByStack = new Map<number, PlanItem>()
-      ;[...tiersByStack.keys()].forEach((si, i) => itemByStack.set(si, items[i]))
+      it.boxes += sl.tiers
+      it.columns.push(sl.tiers)
+    }
+    const items = [...byKey.values()]
+    for (const it of items) {
+      const pb = perBox.get(`${it.dest}|${norm(it.masterCode)}`)
+      it.units = pb && pb.boxes > 0 ? Math.round((pb.units / pb.boxes) * it.boxes) : 0
+    }
 
-      const slots: (PlanItem | null)[] = Array.from(
-        { length: grid.slots },
-        (_, i) => (pack[i] ? itemByStack.get(pack[i].stack) ?? null : null),
-      )
-      const slotTiers = Array.from({ length: grid.slots }, (_, i) => pack[i]?.tiers ?? 0)
+    const slots: (PlanItem | null)[] = Array.from(
+      { length: u.slotCount },
+      (_, i) => (i < slotKeys.length ? byKey.get(slotKeys[i]) ?? null : null),
+    )
+    const slotTiers = Array.from({ length: u.slotCount }, (_, i) => u.slots[i]?.tiers ?? 0)
 
-      const maxTier = items.reduce((m, it) => Math.max(m, ...it.columns, 0), 0)
-      // 높이는 SKU 별 (단수 × 실측 박스 높이) 중 가장 높은 기둥
-      const stackMm = items.reduce(
-        (m, it) => Math.max(m, Math.max(0, ...it.columns) * it.dims.h),
-        0,
-      )
-      const heightMm = PALLET_MM + stackMm
-      const slackMm = LIMIT_MM - heightMm
-      const boxes = items.reduce((a, it) => a + it.boxes, 0)
-      panels.push({
-        plt: pltNo,
-        dest: g.dest,
-        part: pi + 1,
-        partCount: packs.length,
-        viaLabel: viaLabelOf(g.viaCenters),
-        items,
-        boxes,
-        cols: grid.cols,
-        rows: grid.rows,
-        slotCount: grid.slots,
-        slots,
-        slotTiers,
-        overflow: Math.max(0, pack.length - grid.slots),
-        gridDims: grid.dims,
-        unknownDims: items.some((it) => it.dims.unknown),
-        maxTier,
-        heightMm,
-        slackMm,
-        risky: slackMm < SAFE_MM,
-        singleBox: boxes === 1,
-      })
-    })
-  }
+    const maxTier = items.reduce((m, it) => Math.max(m, ...it.columns, 0), 0)
+    // 높이는 SKU 별 (단수 × 실측 박스 높이) 중 가장 높은 기둥
+    const stackMm = u.slots.reduce((m, sl) => Math.max(m, sl.tiers * sl.dims.h), 0)
+    const heightMm = PALLET_MM + stackMm
+    const slackMm = LIMIT_MM - heightMm
+    const boxes = u.slots.reduce((a, sl) => a + sl.tiers, 0)
+
+    const primary = u.dests[0]
+    const part = (partSeen.get(primary) ?? 0) + 1
+    partSeen.set(primary, part)
+    for (const d of u.dests.slice(1)) partSeen.set(d, (partSeen.get(d) ?? 0) + 1)
+
+    const via = [...new Set(u.dests.flatMap((d) => viaByDest.get(d) ?? []))]
+    return {
+      plt: ui + 1,
+      dest: u.dests.join('+'),
+      dests: u.dests,
+      mixed: u.mixed,
+      part,
+      partCount: partTotal.get(primary) ?? 1,
+      viaLabel: viaLabelOf(via),
+      items,
+      boxes,
+      cols: u.cols,
+      rows: u.rows,
+      slotCount: u.slotCount,
+      slots,
+      slotTiers,
+      overflow: Math.max(0, u.slots.length - u.slotCount),
+      gridDims: u.gridDims,
+      unknownDims: items.some((it) => it.dims.unknown),
+      maxTier,
+      heightMm,
+      slackMm,
+      risky: slackMm < SAFE_MM,
+      singleBox: boxes === 1,
+    }
+  })
 
   // 범례: 도면에 실제 등장하는 SKU 만
   const seen = new Set<string>()
@@ -387,7 +401,7 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
   const capY = heightY + 16
 
   let out = rect(ox, oy, PANEL_W, panelH, { fill: '#FFFFFF', stroke: '#D1D5DB', sw: 1, rx: 6 })
-  const partLabel = p.partCount > 1 ? ` (${p.part}/${p.partCount})` : ''
+  const partLabel = p.mixed ? ' (경유 혼적)' : p.partCount > 1 ? ` (${p.part}/${p.partCount})` : ''
   out += text({ x: ox + 14, y: oy + 26, s: `PLT ${p.plt} — ${p.dest}${partLabel}`, size: 14, bold: true })
   out += text({ x: ox + 14, y: oy + 44, s: p.viaLabel, size: 10.5, fill: '#4B5563' })
 
@@ -397,7 +411,7 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
       x: ox + 14,
       y: oy + 64 + i * ITEM_LH,
       s:
-        `${it.sku} ${it.boxes}박스(${cm(it.units)}개) ` +
+        `${p.mixed ? `[${it.dest}] ` : ''}${it.sku} ${it.boxes}박스(${cm(it.units)}개) ` +
         `${it.dims.w}×${it.dims.d}×${it.dims.h}mm${it.dims.unknown ? '(치수 미등록)' : ''}${tail}`,
       size: 10,
       fill: '#374151',
@@ -592,10 +606,11 @@ export function buildWikeepNotice(plan: PalletPlan): string {
   for (const p of plan.panels) {
     const via = p.viaLabel.startsWith('경유:') ? p.viaLabel : '직납'
     lines.push('')
-    const part = p.partCount > 1 ? ` ${p.part}/${p.partCount}장` : ''
+    const part = p.mixed ? ' · 경유 혼적' : p.partCount > 1 ? ` ${p.part}/${p.partCount}장` : ''
     lines.push(`PLT ${p.plt} — ${p.dest}${part} (${via})`)
     for (const it of p.items) {
-      lines.push(`- ${it.fullName} ${cm(it.boxes)}박스 (${cm(it.units)}개)`)
+      const where = p.mixed ? `[${it.dest}] ` : ''
+      lines.push(`- ${where}${it.fullName} ${cm(it.boxes)}박스 (${cm(it.units)}개)`)
     }
   }
 

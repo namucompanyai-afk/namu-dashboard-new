@@ -5,6 +5,7 @@ import {
   ORDER_SHEET_NAME,
   MAX_SKU_PER_PLT,
   buildPallets,
+  buildPalletUnits,
   calcTransportCost,
   indexByMasterCode,
   norm,
@@ -93,8 +94,13 @@ export default function B2BPage() {
   const masterByCode = useMemo(() => indexByMasterCode(products), [products])
   // 팔레트 장수는 실측 박스 치수로 계산한다 — 상품마스터가 로드된 뒤 확정된다
   const pallets = useMemo(() => buildPallets(orders, masterByCode), [orders, masterByCode])
+  // 실제로 싣는 팔레트 장수 (김포·창원 자투리 경유 혼적 반영) — 차량비 구간 기준
+  const palletUnits = useMemo(() => buildPalletUnits(orders, masterByCode), [orders, masterByCode])
   const pltInputs = useMemo(() => palletInputValues(orders, pallets), [orders, pallets])
-  const cost = useMemo(() => calcTransportCost(pallets, prices), [pallets, prices])
+  const cost = useMemo(
+    () => calcTransportCost(pallets, prices, palletUnits.length),
+    [pallets, prices, palletUnits],
+  )
 
   // 상품마스터에 없는 마스터코드 (매칭 키는 컬리 마스터 코드 — 상품명 매칭 안 함)
   const unmatched = useMemo(
@@ -144,8 +150,8 @@ export default function B2BPage() {
 
   // 적재 구성도 — 위 팔레트 산정 결과를 소비만 한다(계산 로직 재구현 없음)
   const plan = useMemo(
-    () => buildPalletPlan(orders, pallets, masterByCode),
-    [orders, pallets, masterByCode],
+    () => buildPalletPlan(orders, palletUnits, masterByCode),
+    [orders, palletUnits, masterByCode],
   )
   const planSvg = useMemo(() => (plan.panels.length ? renderPalletPlanSvg(plan) : ''), [plan])
 

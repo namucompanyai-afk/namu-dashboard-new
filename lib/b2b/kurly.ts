@@ -466,12 +466,139 @@ export type PalletGroup = {
   overSku: boolean // SKU 3 초과 → 경고
 }
 
+// ── 물리 팔레트 (혼적 포함) ──────────────────────────────────────
+/** 팔레트 한 자리 — 어느 입고지의 어떤 SKU 가 몇 단 올라갔는지 */
+export type UnitSlot = {
+  dest: string
+  code: string // 마스터코드
+  tiers: number
+  dims: BoxDims
+}
+
+/** 실제로 준비하는 팔레트 1장 */
+export type PalletUnit = {
+  dests: string[] // 이 장에 실린 입고지 (혼적이면 2곳)
+  regions: Region[]
+  slots: UnitSlot[]
+  cols: number
+  rows: number
+  slotCount: number
+  gridDims: BoxDims
+  mixed: boolean // 경유 혼적 여부
+}
+
+/** 경유 혼적이 가능한 권역 — 둘 다 입고대행센터(평택1) 경유. 평택 직납은 제외 */
+const MIXABLE: Region[] = ['김포', '창원']
+
+const unitOf = (dest: string, region: Region, slots: UnitSlot[]): PalletUnit => {
+  const dims = slots.map((s) => s.dims)
+  const grid = dims.length
+    ? dims.map((d) => ({ ...floorGrid(d), dims: d })).reduce((a, b) => (b.slots < a.slots ? b : a))
+    : { ...floorGrid(UNKNOWN_DIMS), dims: UNKNOWN_DIMS }
+  return {
+    dests: [dest],
+    regions: [region],
+    slots,
+    cols: grid.cols,
+    rows: grid.rows,
+    slotCount: grid.slots,
+    gridDims: grid.dims,
+    mixed: false,
+  }
+}
+
+/** 두 팔레트를 한 장으로 합칠 수 있으면 합친 결과, 아니면 null */
+export function mergeUnits(a: PalletUnit, b: PalletUnit, maxSku = MAX_SKU_PER_PLT): PalletUnit | null {
+  const slots = [...a.slots, ...b.slots]
+  const skus = new Set(slots.map((s) => norm(s.code)))
+  if (skus.size > maxSku) return null
+  const grid = slots
+    .map((s) => ({ ...floorGrid(s.dims), dims: s.dims }))
+    .reduce((x, y) => (y.slots < x.slots ? y : x))
+  if (slots.length > grid.slots) return null
+  return {
+    dests: [...a.dests, ...b.dests],
+    regions: [...a.regions, ...b.regions],
+    slots,
+    cols: grid.cols,
+    rows: grid.rows,
+    slotCount: grid.slots,
+    gridDims: grid.dims,
+    mixed: true,
+  }
+}
+
+/**
+ * 발주 행 → 실제로 준비하는 팔레트 장수.
+ *
+ * 입고지별로 실측 자리·SKU 한도에 맞춰 나눈 뒤, 같은 경유센터를 타는
+ * 김포·창원의 **마지막 자투리 장끼리** 한 장에 들어가면 혼적한다.
+ * 평택은 직납이라 혼적하지 않는다.
+ */
+export function buildPalletUnits(
+  orders: KurlyOrderRow[],
+  masterByCode: Record<string, ProductMaster> = {},
+): PalletUnit[] {
+  const byDest = new Map<string, { region: Region; rowIndexes: number[] }>()
+  orders.forEach((o, i) => {
+    const key = o.dest || '(입고지 없음)'
+    let e = byDest.get(key)
+    if (!e) {
+      e = { region: regionOf(o.dest, o.viaCenter), rowIndexes: [] }
+      byDest.set(key, e)
+    }
+    e.rowIndexes.push(i)
+  })
+
+  const units: PalletUnit[] = []
+  for (const [dest, e] of byDest) {
+    const stacks = stacksOf(orders, e.rowIndexes, masterByCode)
+    const grid = palletGridOf(stacks)
+    for (const pack of packPallets(stacks, grid.slots)) {
+      units.push(
+        unitOf(
+          dest,
+          e.region,
+          pack.map((sl) => ({
+            dest,
+            code: stacks[sl.stack].code,
+            tiers: sl.tiers,
+            dims: stacks[sl.stack].dims,
+          })),
+        ),
+      )
+    }
+  }
+
+  // 혼적 — 김포·창원의 마지막 장끼리 한 장에 들어가면 합친다
+  const lastOf = (r: Region): number => {
+    for (let i = units.length - 1; i >= 0; i--) {
+      if (!units[i].mixed && units[i].regions[0] === r) return i
+    }
+    return -1
+  }
+  const ai = lastOf(MIXABLE[0])
+  const bi = lastOf(MIXABLE[1])
+  if (ai >= 0 && bi >= 0) {
+    const merged = mergeUnits(units[ai], units[bi])
+    if (merged) {
+      const [lo, hi] = ai < bi ? [ai, bi] : [bi, ai]
+      units.splice(hi, 1)
+      units.splice(lo, 1)
+      units.push(merged)
+    }
+  }
+  return units
+}
+
 /**
  * 최종 입고지(입고지 컬럼) 기준 팔레트 분리.
  * 경유센터가 같아도 최종 입고지가 다르면 별도 PLT.
  *
  * 한 입고지의 팔레트 장수는 실측 박스 치수로 계산한다 —
  * 바닥 자리(1,100×1,100 격자) 와 PLT당 SKU 한도를 둘 다 넘기면 자동 분할한다.
+ * 김포·창원 자투리 장이 혼적되면 그 장은 **두 입고지 모두**에 1장으로 잡힌다
+ * (포털 파렛트수 신고·이고비는 입고지별 물량 기준이므로).
  * masterByCode 를 안 넘기면 치수 미등록으로 보고 가정값(400mm)으로 계산한다.
  */
 export function buildPallets(
@@ -503,10 +630,10 @@ export function buildPallets(
     if (o.viaCenter && !g.viaCenters.includes(o.viaCenter)) g.viaCenters.push(o.viaCenter)
   })
   const list = [...map.values()]
+  const units = buildPalletUnits(orders, masterByCode)
   for (const g of list) {
-    const stacks = stacksOf(orders, g.rowIndexes, masterByCode)
-    g.plt = packPallets(stacks, palletGridOf(stacks).slots).length
-    // 분할 후에는 PLT당 SKU 한도를 지키므로, 경고는 한 장에 다 안 들어간 경우만
+    // 혼적 장은 실린 입고지 **각각**에 1장으로 잡는다 (포털 신고·이고비 기준)
+    g.plt = units.filter((u) => u.dests.includes(g.dest)).length
     g.overSku = g.skuCodes.length > MAX_SKU_PER_PLT
   }
   return list
@@ -540,13 +667,19 @@ export type TransportCost = {
 /**
  * 운송비 = 차량비 + 경유비×경유곳수 + 이고비_김포×김포PLT + 이고비_창원×창원PLT.
  * 전부 '부가포함 단가' 사용. 경유 곳 수는 김포/창원 중 물량 있는 곳만(평택 제외).
+ *
+ * 차량비 구간에 넣는 총 PLT 는 **실제로 싣는 팔레트 장수**다 — 혼적으로 한 장이
+ * 줄면 그만큼 줄어든다. 이고비는 입고지별 물량 기준이라 혼적 장을 양쪽에 각각
+ * 계상한다(pallets[].plt 가 이미 그렇게 계산돼 있다).
+ * 단가·구간 lookup 자체는 건드리지 않는다.
  */
 export function calcTransportCost(
   pallets: PalletGroup[],
   prices: MilkrunPrice[],
+  physicalPlt?: number,
 ): TransportCost {
   const warnings: string[] = []
-  const totalPlt = pallets.reduce((s, g) => s + g.plt, 0)
+  const totalPlt = physicalPlt ?? pallets.reduce((s, g) => s + g.plt, 0)
   const pltIn = (r: Region) => pallets.filter((g) => g.region === r).reduce((s, g) => s + g.plt, 0)
 
   const kimpoPlt = pltIn('김포')
