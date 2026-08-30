@@ -22,10 +22,12 @@ import {
   byMonth,
   byProductKey,
   channelStats,
+  groupByMonth,
   listMonths,
   listProductOptions,
   monthLabel,
   monthlyTrend,
+  orderPattern,
   parseSalesHistory,
   productTrend,
   rankBy,
@@ -34,6 +36,8 @@ import {
   sortForTable,
   type ChannelFilter,
   type ChannelStat,
+  type MonthGroup,
+  type OrderPattern,
   type ProductOption,
   type ProductPoint,
   type RankRow,
@@ -90,7 +94,6 @@ export default function B2BSalesPage() {
   const [topScope, setTopScope] = useState<TopScope>('month')
   // 상품별 트렌드 — 월·채널 필터와 독립 (빈 문자열 = 전체 상품 합계, 아니면 채널×상품 키)
   const [product, setProduct] = useState('')
-  const [productLimit, setProductLimit] = useState(PAGE_SIZE)
 
   const load = useCallback(async () => {
     setState('loading')
@@ -146,10 +149,6 @@ export default function B2BSalesPage() {
   useEffect(() => {
     setLimit(PAGE_SIZE)
   }, [channel, month])
-
-  useEffect(() => {
-    setProductLimit(PAGE_SIZE)
-  }, [product])
 
   const empty = state === 'loaded' && records.length === 0
 
@@ -333,8 +332,6 @@ export default function B2BSalesPage() {
             onProduct={setProduct}
             series={productSeries}
             rows={productRows}
-            limit={productLimit}
-            onMore={() => setProductLimit((n) => n + PAGE_SIZE)}
             months={trendMonths}
           />
 
@@ -602,8 +599,6 @@ function ProductTrendSection({
   onProduct,
   series,
   rows,
-  limit,
-  onMore,
   months,
 }: {
   products: ProductOption[]
@@ -611,12 +606,12 @@ function ProductTrendSection({
   onProduct: (p: string) => void
   series: ProductPoint[]
   rows: SalesRecord[]
-  limit: number
-  onMore: () => void
   months: string[]
 }) {
   const selected = products.find((p) => p.key === product)
   const label = selected?.label || '전체 상품 합계'
+  const pattern = orderPattern(rows)
+  const groups = groupByMonth(rows)
   const range =
     months.length > 0 ? `${monthLabel(months[0])} ~ ${monthLabel(months[months.length - 1])}` : ''
   const total = rows.reduce(
@@ -652,6 +647,7 @@ function ProductTrendSection({
           {label}
           {range && <span className="text-gray-400"> · {range}</span>}
         </p>
+        {selected && <OrderPatternCards pattern={pattern} />}
         <ChartBox height={260}>
           <LineChart data={series} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
@@ -685,9 +681,9 @@ function ProductTrendSection({
           </p>
         ) : (
           <>
-            <div className="overflow-x-auto">
+            <div className="overflow-auto max-h-[28rem]">
               <table className="w-full text-sm whitespace-nowrap">
-                <thead className="bg-gray-50 text-gray-600">
+                <thead className="bg-gray-50 text-gray-600 sticky top-0 z-10 shadow-[inset_0_-1px_0_#e5e7eb]">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">채널</th>
                     <th className="px-3 py-2 text-left font-medium">센터·입고지</th>
@@ -697,17 +693,8 @@ function ProductTrendSection({
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.slice(0, limit).map((r, i) => (
-                    <tr
-                      key={`${r.channel}-${r.poNumber}-${r.product}-${i}`}
-                      className="border-t border-gray-100"
-                    >
-                      <td className="px-3 py-2">{r.channel}</td>
-                      <td className="px-3 py-2">{r.center}</td>
-                      <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
-                      <td className="px-3 py-2 text-right">{num(r.units)}</td>
-                      <td className="px-3 py-2 text-right font-medium">{num(r.revenue)}</td>
-                    </tr>
+                  {groups.map((g) => (
+                    <MonthRows key={g.month} group={g} />
                   ))}
                   <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                     <td className="px-3 py-2" colSpan={3}>
@@ -719,20 +706,118 @@ function ProductTrendSection({
                 </tbody>
               </table>
             </div>
-            {rows.length > limit && (
-              <div className="px-4 py-3 border-t border-gray-100 text-center">
-                <button
-                  onClick={onMore}
-                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
-                >
-                  더보기 ({num(rows.length - limit)}행 남음)
-                </button>
-              </div>
-            )}
           </>
         )}
       </div>
       )}
+    </div>
+  )
+}
+
+/** 월 구분 행(소계) + 해당 월 내역 — 월 안의 정렬은 입고예정일 내림차순 그대로 */
+function MonthRows({ group }: { group: MonthGroup }) {
+  return (
+    <>
+      <tr className="bg-gray-100 border-t border-gray-200">
+        <td className="px-3 py-1.5 text-[11px] font-semibold text-gray-700" colSpan={5}>
+          {monthLabel(group.month)}
+          <span className="ml-2 font-normal text-gray-500 tabular-nums">
+            소계 {won(group.revenue)} · {num(group.units)}개
+          </span>
+        </td>
+      </tr>
+      {group.rows.map((r, i) => (
+        <tr
+          key={`${r.channel}-${r.poNumber}-${r.dueDate}-${i}`}
+          className="border-t border-gray-100"
+        >
+          <td className="px-3 py-2">{r.channel}</td>
+          <td className="px-3 py-2">{r.center}</td>
+          <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
+          <td className="px-3 py-2 text-right">{num(r.units)}</td>
+          <td className="px-3 py-2 text-right font-medium">{num(r.revenue)}</td>
+        </tr>
+      ))}
+    </>
+  )
+}
+
+function PatternCard({
+  title,
+  value,
+  sub,
+  tone,
+}: {
+  title: string
+  value: string
+  sub: string
+  tone?: 'up' | 'down'
+}) {
+  return (
+    <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+      <p className="text-[11px] text-gray-500">{title}</p>
+      <p
+        className={
+          'text-lg font-semibold mt-0.5 tabular-nums ' +
+          (tone === 'up' ? 'text-emerald-600' : tone === 'down' ? 'text-red-600' : '')
+        }
+      >
+        {value}
+      </p>
+      <p className="text-[11px] text-gray-400 mt-0.5 tabular-nums">{sub}</p>
+    </div>
+  )
+}
+
+/**
+ * 발주 패턴 — 같은 입고예정일의 여러 행(센터 분산)은 발주 1회.
+ * 발주 2회 이하는 간격·평균을 낼 수 없어 '데이터 부족'을 띄운다.
+ */
+function OrderPatternCards({ pattern }: { pattern: OrderPattern }) {
+  if (pattern.orders <= 2) {
+    return (
+      <div className="mb-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-500">
+        데이터 부족 — 최근 6개월 발주 {num(pattern.orders)}회 (간격·평균은 3회 이상부터)
+      </div>
+    )
+  }
+  const { lastGap, prevGap, recentAvgQty, priorAvgQty } = pattern
+  // 간격은 짧아질수록, 수량은 늘어날수록 좋다
+  const gapTone =
+    lastGap === null || prevGap === null ? undefined : lastGap <= prevGap ? 'up' : 'down'
+  const qtyTone =
+    recentAvgQty === null || priorAvgQty === null
+      ? undefined
+      : recentAvgQty >= priorAvgQty
+        ? 'up'
+        : 'down'
+  return (
+    <div className="mb-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <PatternCard
+        title="최근 발주 간격"
+        value={lastGap === null ? '—' : `${num(lastGap)}일`}
+        sub={`마지막 발주 ${pattern.lastDate}`}
+        tone={gapTone}
+      />
+      <PatternCard
+        title="직전 발주 간격"
+        value={prevGap === null ? '—' : `${num(prevGap)}일`}
+        sub={
+          lastGap === null || prevGap === null
+            ? '비교 데이터 없음'
+            : `최근 ${num(lastGap)}일 (직전 ${num(prevGap)}일)`
+        }
+      />
+      <PatternCard
+        title="발주당 평균 수량"
+        value={recentAvgQty === null ? '—' : num(recentAvgQty)}
+        sub={
+          priorAvgQty === null
+            ? `최근 ${num(pattern.orders)}회 기준 · 직전 3회 데이터 없음`
+            : `최근 3회 평균 · 직전 3회 ${num(priorAvgQty)}`
+        }
+        tone={qtyTone}
+      />
     </div>
   )
 }

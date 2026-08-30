@@ -302,6 +302,63 @@ export function productTrend(
   })
 }
 
+export type MonthGroup = { month: string; rows: SalesRecord[]; revenue: number; units: number }
+
+/** 표를 월(입고예정월) 단위로 묶는다 — 월 내림차순, 월 안의 정렬은 입력 순서 유지 */
+export function groupByMonth(rows: SalesRecord[]): MonthGroup[] {
+  const map = new Map<string, MonthGroup>()
+  for (const r of rows) {
+    let g = map.get(r.month)
+    if (!g) {
+      g = { month: r.month, rows: [], revenue: 0, units: 0 }
+      map.set(r.month, g)
+    }
+    g.rows.push(r)
+    g.revenue += r.revenue
+    g.units += r.units
+  }
+  return [...map.values()].sort((a, b) => b.month.localeCompare(a.month))
+}
+
+export type OrderPattern = {
+  orders: number // 발주 횟수 = 입고예정일 distinct
+  lastGap: number | null // 마지막 ↔ 직전 발주 간격(일)
+  prevGap: number | null // 그 이전 구간(일)
+  recentAvgQty: number | null // 최근 3회 발주당 평균 수량
+  priorAvgQty: number | null // 그 이전 3회 평균
+  lastDate: string
+}
+
+const dayDiff = (a: string, b: string): number =>
+  Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86400000)
+
+/**
+ * 발주 패턴 — 같은 입고예정일의 여러 행(센터 분산)은 발주 1회로 묶는다.
+ * 발주가 2회 이하면 간격·평균이 나오지 않아 null 을 돌려준다(화면에서 '데이터 부족').
+ */
+export function orderPattern(recs: SalesRecord[]): OrderPattern {
+  const byDate = new Map<string, number>()
+  for (const r of recs) {
+    if (!r.dueDate) continue
+    byDate.set(r.dueDate, (byDate.get(r.dueDate) ?? 0) + r.units)
+  }
+  // 최신 발주가 앞
+  const dates = [...byDate.keys()].sort((a, b) => b.localeCompare(a))
+  const avg = (from: number, n: number): number | null => {
+    const slice = dates.slice(from, from + n)
+    if (slice.length < n) return null
+    return Math.round(slice.reduce((a, d) => a + (byDate.get(d) ?? 0), 0) / n)
+  }
+  return {
+    orders: dates.length,
+    lastGap: dates.length >= 2 ? dayDiff(dates[0], dates[1]) : null,
+    prevGap: dates.length >= 3 ? dayDiff(dates[1], dates[2]) : null,
+    recentAvgQty: avg(0, 3),
+    priorAvgQty: avg(3, 3),
+    lastDate: dates[0] ?? '',
+  }
+}
+
 /** 표 정렬 — 입고예정일 내림차순, 같으면 발주번호 */
 export const sortForTable = (recs: SalesRecord[]): SalesRecord[] =>
   [...recs].sort((a, b) =>
