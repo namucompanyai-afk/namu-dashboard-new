@@ -310,6 +310,140 @@ export function parseKurlyOrderRows(rows: unknown[][]): KurlyOrderRow[] {
 // ── 팔레트 산정 ──────────────────────────────────────────────────
 export const MAX_SKU_PER_PLT = 3
 
+// ── 적재 기하 (도면과 팔레트 장수 계산이 같은 식을 쓰도록 여기에 둔다) ──
+export const DEFAULT_BOX_MM = 400 // 치수 미등록 상품 가정값
+export const PALLET_MM = 150 // 팔레트 자체 높이
+export const LIMIT_MM = 1700 // 컬리 적재 한도
+export const PALLET_W_MM = 1100 // 팔레트 바닥 가로
+export const PALLET_D_MM = 1100 // 팔레트 바닥 세로
+
+/** 박스 실측 치수(mm). 마스터 미등록이면 가정값 + unknown 플래그 */
+export type BoxDims = { w: number; d: number; h: number; unknown: boolean }
+
+export const UNKNOWN_DIMS: BoxDims = {
+  w: DEFAULT_BOX_MM,
+  d: DEFAULT_BOX_MM,
+  h: DEFAULT_BOX_MM,
+  unknown: true,
+}
+
+/** 상품마스터 실측 치수 — 가로/세로/높이 중 하나라도 비면 가정값으로 폴백 */
+export const dimsOf = (m: ProductMaster | undefined): BoxDims => {
+  const w = m?.boxW ?? 0
+  const d = m?.boxD ?? 0
+  const h = m?.boxH ?? 0
+  return w > 0 && d > 0 && h > 0 ? { w, d, h, unknown: false } : UNKNOWN_DIMS
+}
+
+/** 1,100×1,100 바닥 격자 — 이 박스로 팔레트를 채웠을 때 자리 수 */
+export function floorGrid(dims: BoxDims): { cols: number; rows: number; slots: number } {
+  const cols = Math.max(1, Math.floor(PALLET_W_MM / dims.w))
+  const rows = Math.max(1, Math.floor(PALLET_D_MM / dims.d))
+  return { cols, rows, slots: cols * rows }
+}
+
+/** 한도 1,700mm(팔레트 150mm 포함) 안에서 쌓을 수 있는 최대 단수 */
+export const maxTiersOf = (dims: BoxDims): number =>
+  Math.max(1, Math.floor((LIMIT_MM - PALLET_MM) / dims.h))
+
+/** 박스 n개 → 자리별 단수. 자리당 최대 maxTier, 앞 자리부터 채운다. */
+export function packColumns(boxes: number, maxTier: number): number[] {
+  const cap = Math.max(1, Math.floor(maxTier))
+  const out: number[] = []
+  let left = Math.max(0, Math.floor(boxes))
+  while (left > 0) {
+    const t = Math.min(cap, left)
+    out.push(t)
+    left -= t
+  }
+  return out
+}
+
+/** 한 입고지에 올라가는 SKU 별 적재 단위 (등장 순서 유지) */
+export type SkuStack = {
+  code: string // 마스터코드 (발주 파일 표기 그대로)
+  dims: BoxDims
+  boxes: number
+  units: number
+  tiersPerSlot: number // 한도 안에서 이 박스가 쌓이는 최대 단수
+  columns: number[] // 자리별 단수
+}
+
+/** 발주 행 묶음 → SKU 별 적재 단위 */
+export function stacksOf(
+  orders: KurlyOrderRow[],
+  rowIndexes: number[],
+  masterByCode: Record<string, ProductMaster>,
+): SkuStack[] {
+  const map = new Map<string, SkuStack>()
+  for (const i of rowIndexes) {
+    const o = orders[i]
+    if (!o) continue
+    const key = norm(o.masterCode)
+    let st = map.get(key)
+    if (!st) {
+      const dims = dimsOf(masterByCode[key])
+      st = { code: o.masterCode, dims, boxes: 0, units: 0, tiersPerSlot: maxTiersOf(dims), columns: [] }
+      map.set(key, st)
+    }
+    st.boxes += o.boxCount
+    st.units += o.totalUnits
+  }
+  const list = [...map.values()]
+  for (const st of list) st.columns = packColumns(st.boxes, st.tiersPerSlot)
+  return list
+}
+
+/**
+ * 자리 크기를 정하는 격자 — 이 팔레트에 올라가는 박스 중 **자리가 가장 적게
+ * 나오는(=가장 빡빡한) 박스** 기준. 한 자리에 한 SKU 만 올리므로 여기에 맞춘다.
+ */
+export function palletGridOf(stacks: SkuStack[]): {
+  cols: number
+  rows: number
+  slots: number
+  dims: BoxDims
+} {
+  if (!stacks.length) return { ...floorGrid(UNKNOWN_DIMS), dims: UNKNOWN_DIMS }
+  return stacks
+    .map((st) => ({ ...floorGrid(st.dims), dims: st.dims }))
+    .reduce((a, b) => (b.slots < a.slots ? b : a))
+}
+
+/** 팔레트 한 장에 담긴 자리 — stack 인덱스 + 그 자리의 단수 */
+export type PalletSlot = { stack: number; tiers: number }
+
+/**
+ * SKU 별 자리들을 팔레트에 담는다 — **자리 수 한도와 PLT당 SKU 한도를 둘 다** 지킨다.
+ * 앞 팔레트부터 채우고, 둘 중 하나라도 넘치면 다음 팔레트를 연다.
+ */
+export function packPallets(
+  stacks: SkuStack[],
+  slotsPerPallet: number,
+  maxSku = MAX_SKU_PER_PLT,
+): PalletSlot[][] {
+  const cap = Math.max(1, slotsPerPallet)
+  const skuCap = Math.max(1, maxSku)
+  const out: PalletSlot[][] = []
+  let cur: PalletSlot[] | null = null
+  let curSkus = new Set<number>()
+  stacks.forEach((st, si) => {
+    for (const tiers of st.columns) {
+      const needNew =
+        !cur || cur.length >= cap || (!curSkus.has(si) && curSkus.size >= skuCap)
+      if (needNew) {
+        cur = []
+        curSkus = new Set<number>()
+        out.push(cur)
+      }
+      // needNew 분기에서 항상 새 배열이 들어가므로 여기서 cur 는 비어 있지 않다
+      ;(cur as PalletSlot[]).push({ stack: si, tiers })
+      curSkus.add(si)
+    }
+  })
+  return out.length ? out : [[]]
+}
+
 export type Region = '평택' | '김포' | '창원' | '기타'
 const REGIONS: Exclude<Region, '기타'>[] = ['김포', '창원', '평택']
 
@@ -326,7 +460,7 @@ export type PalletGroup = {
   viaCenters: string[] // 참고 표시용
   skuCodes: string[] // 이 입고지의 distinct 마스터코드
   rowIndexes: number[] // orders 배열 인덱스 (등장 순서)
-  plt: number // 입고지당 1 PLT
+  plt: number // 실측 자리 수 + PLT당 SKU 한도로 계산한 팔레트 장수
   totalBoxes: number
   totalUnits: number
   overSku: boolean // SKU 3 초과 → 경고
@@ -335,8 +469,15 @@ export type PalletGroup = {
 /**
  * 최종 입고지(입고지 컬럼) 기준 팔레트 분리.
  * 경유센터가 같아도 최종 입고지가 다르면 별도 PLT.
+ *
+ * 한 입고지의 팔레트 장수는 실측 박스 치수로 계산한다 —
+ * 바닥 자리(1,100×1,100 격자) 와 PLT당 SKU 한도를 둘 다 넘기면 자동 분할한다.
+ * masterByCode 를 안 넘기면 치수 미등록으로 보고 가정값(400mm)으로 계산한다.
  */
-export function buildPallets(orders: KurlyOrderRow[]): PalletGroup[] {
+export function buildPallets(
+  orders: KurlyOrderRow[],
+  masterByCode: Record<string, ProductMaster> = {},
+): PalletGroup[] {
   const map = new Map<string, PalletGroup>()
   orders.forEach((o, i) => {
     const key = o.dest || '(입고지 없음)'
@@ -362,13 +503,18 @@ export function buildPallets(orders: KurlyOrderRow[]): PalletGroup[] {
     if (o.viaCenter && !g.viaCenters.includes(o.viaCenter)) g.viaCenters.push(o.viaCenter)
   })
   const list = [...map.values()]
-  for (const g of list) g.overSku = g.skuCodes.length > MAX_SKU_PER_PLT
+  for (const g of list) {
+    const stacks = stacksOf(orders, g.rowIndexes, masterByCode)
+    g.plt = packPallets(stacks, palletGridOf(stacks).slots).length
+    // 분할 후에는 PLT당 SKU 한도를 지키므로, 경고는 한 장에 다 안 들어간 경우만
+    g.overSku = g.skuCodes.length > MAX_SKU_PER_PLT
+  }
   return list
 }
 
 /**
- * 포털 파렛트수 입력값 — 같은 입고지 내 첫 발주 행만 1, 나머지 0.
- * 반환값은 orders 와 같은 길이/순서.
+ * 포털 파렛트수 입력값 — 같은 입고지 내 첫 발주 행에 그 입고지의 팔레트 장수,
+ * 나머지 행은 0. 반환값은 orders 와 같은 길이/순서.
  */
 export function palletInputValues(orders: KurlyOrderRow[], pallets: PalletGroup[]): number[] {
   const out = new Array(orders.length).fill(0)

@@ -91,7 +91,8 @@ export default function B2BPage() {
   }, [])
 
   const masterByCode = useMemo(() => indexByMasterCode(products), [products])
-  const pallets = useMemo(() => buildPallets(orders), [orders])
+  // 팔레트 장수는 실측 박스 치수로 계산한다 — 상품마스터가 로드된 뒤 확정된다
+  const pallets = useMemo(() => buildPallets(orders, masterByCode), [orders, masterByCode])
   const pltInputs = useMemo(() => palletInputValues(orders, pallets), [orders, pallets])
   const cost = useMemo(() => calcTransportCost(pallets, prices), [pallets, prices])
 
@@ -435,7 +436,8 @@ export default function B2BPage() {
                 </table>
               </div>
               <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
-                최종 입고지 기준 분리 · PLT당 최대 {MAX_SKU_PER_PLT} SKU
+                최종 입고지 기준 분리 · 실측 박스 치수로 바닥 자리를 계산해 한 장을 넘으면 자동 분할 (PLT당 최대{' '}
+                {MAX_SKU_PER_PLT} SKU)
               </p>
             </div>
 

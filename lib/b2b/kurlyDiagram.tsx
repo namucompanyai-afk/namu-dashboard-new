@@ -7,16 +7,26 @@
  * buildPalletPlan()  : 발주행 + 팔레트그룹 → 도면 모델
  * renderPalletPlanSvg(): 도면 모델 → 단일 SVG 문자열 (페이지 인라인 렌더 · 다운로드 겸용)
  */
-import type { KurlyOrderRow, PalletGroup, ProductMaster } from './kurly'
-import { norm } from './kurly'
+import type { BoxDims, KurlyOrderRow, PalletGroup, ProductMaster, SkuStack } from './kurly'
+import {
+  DEFAULT_BOX_MM,
+  LIMIT_MM,
+  MAX_SKU_PER_PLT,
+  PALLET_D_MM,
+  PALLET_MM,
+  PALLET_W_MM,
+  UNKNOWN_DIMS,
+  dimsOf,
+  norm,
+  packPallets,
+  palletGridOf,
+  stacksOf,
+} from './kurly'
 import { PREPRINTED_MASTER_CODES } from './kurlyLabel'
 
-// ── 적재 기준 (상품마스터 실측 박스 치수 사용) ───────────────────
-export const DEFAULT_BOX_MM = 400 // 치수 미등록 상품 가정값
-export const PALLET_MM = 150 // 팔레트 자체 높이
-export const LIMIT_MM = 1700 // 컬리 적재 한도
-export const PALLET_W_MM = 1100 // 팔레트 바닥 가로
-export const PALLET_D_MM = 1100 // 팔레트 바닥 세로
+// ── 적재 기준 (상품마스터 실측 박스 치수 — 단일 소스: lib/b2b/kurly.ts) ──
+export { DEFAULT_BOX_MM, LIMIT_MM, PALLET_MM, PALLET_W_MM, PALLET_D_MM, dimsOf, floorGrid, maxTiersOf, packColumns } from './kurly'
+export type { BoxDims } from './kurly'
 export const SAFE_MM = 50 // 이 미만 여유면 회송 위험
 
 // ── 색 ───────────────────────────────────────────────────────────
@@ -31,9 +41,6 @@ const AUTO_COLORS = [
 ]
 
 // ── 도면 모델 ────────────────────────────────────────────────────
-/** 박스 실측 치수(mm). 마스터 미등록이면 가정값 + unknown 플래그 */
-export type BoxDims = { w: number; d: number; h: number; unknown: boolean }
-
 export type PlanItem = {
   masterCode: string
   sku: string // 축약 표시명 (강황 · 고춧 …)
@@ -48,8 +55,10 @@ export type PlanItem = {
 }
 
 export type PlanPanel = {
-  plt: number // PLT 번호 (1-based)
+  plt: number // PLT 번호 (1-based, 도면 전체 통번호)
   dest: string
+  part: number // 같은 입고지가 나뉜 경우 몇 번째 장인지 (1-based)
+  partCount: number // 그 입고지의 총 팔레트 장수
   viaLabel: string // '직납·경유안함' | '경유: 평택1'
   items: PlanItem[]
   boxes: number
@@ -78,9 +87,13 @@ export type PalletPlan = {
 
 // ── 표시명 축약 ──────────────────────────────────────────────────
 // '[보배마을] 농부가 만든 무농약 고춧가루 100g' → '고춧'
+// '[보배마을] 현미 귀리 즉석밥 180g * 6' → '즉석밥 *6' (묶음 수가 곧 품목 구분)
 export function shortSkuName(raw: string): string {
   let s = String(raw || '').trim()
   s = s.replace(/\[[^\]]*\]/g, ' ') // [보배마을] 등 브랜드 대괄호 제거
+  // 즉석밥은 6입/24입이 별개 품목이라 묶음 수를 떼지 않고 붙여 쓴다
+  const pack = /즉석밥/.test(s) ? (s.match(/[*x×]\s*(\d+)/i)?.[1] ?? '') : ''
+  if (/즉석밥/.test(s)) return pack ? `즉석밥 *${pack}` : '즉석밥'
   s = s.replace(/\b\d+(\.\d+)?\s*(kg|g|ml|l|개|입|팩|봉|포)\b/gi, ' ') // 용량·수량 토큰
   s = s.replace(/\s+/g, ' ').trim()
   const last = s.split(' ').filter(Boolean).pop() || s // 수식어 떼고 핵심 명사
@@ -88,40 +101,6 @@ export function shortSkuName(raw: string): string {
   if (core.length > 3 && (core.endsWith('가루') || core.endsWith('분말'))) core = core.slice(0, -2)
   if (!core) core = String(raw || '').trim()
   return core.length > 8 ? core.slice(0, 8) : core
-}
-
-/** 상품마스터 실측 치수 — 가로/세로/높이 중 하나라도 비면 가정값으로 폴백 */
-export const dimsOf = (m: ProductMaster | undefined): BoxDims => {
-  const w = m?.boxW ?? 0
-  const d = m?.boxD ?? 0
-  const h = m?.boxH ?? 0
-  return w > 0 && d > 0 && h > 0
-    ? { w, d, h, unknown: false }
-    : { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true }
-}
-
-/** 1,100×1,100 바닥 격자 — 이 박스로 팔레트를 채웠을 때 자리 수 */
-export function floorGrid(dims: BoxDims): { cols: number; rows: number; slots: number } {
-  const cols = Math.max(1, Math.floor(PALLET_W_MM / dims.w))
-  const rows = Math.max(1, Math.floor(PALLET_D_MM / dims.d))
-  return { cols, rows, slots: cols * rows }
-}
-
-/** 한도 1,700mm(팔레트 150mm 포함) 안에서 쌓을 수 있는 최대 단수 */
-export const maxTiersOf = (dims: BoxDims): number =>
-  Math.max(1, Math.floor((LIMIT_MM - PALLET_MM) / dims.h))
-
-/** 박스 n개 → 자리별 단수. 자리당 최대 maxTier, 앞 자리부터 채운다. */
-export function packColumns(boxes: number, maxTier: number): number[] {
-  const cap = Math.max(1, Math.floor(maxTier))
-  const out: number[] = []
-  let left = Math.max(0, Math.floor(boxes))
-  while (left > 0) {
-    const t = Math.min(cap, left)
-    out.push(t)
-    left -= t
-  }
-  return out
 }
 
 /** 경유센터 표기 — '경유안함'이면 직납으로 읽는다 */
@@ -152,93 +131,105 @@ export function buildPalletPlan(
     colorOf.set(key, fixed ? fixed.color : AUTO_COLORS[autoIdx++ % AUTO_COLORS.length])
   }
 
-  const panels: PlanPanel[] = pallets.map((g, gi) => {
-    // 같은 팔레트 안에서 마스터코드 단위로 합산 (등장 순서 유지)
-    const byCode = new Map<string, PlanItem>()
+  // 입고지별 발주코드 꼬리표 (SKU 단위)
+  const tailsOf = (g: PalletGroup): Map<string, string[]> => {
+    const m = new Map<string, string[]>()
     for (const idx of g.rowIndexes) {
       const o = orders[idx]
       const key = norm(o.masterCode)
-      let it = byCode.get(key)
-      if (!it) {
-        const full = nameOf.get(key) || o.productName || o.masterCode
-        it = {
-          masterCode: o.masterCode,
-          sku: shortSkuName(full),
-          fullName: full,
-          color: colorOf.get(key) || AUTO_COLORS[0],
-          boxes: 0,
-          units: 0,
-          codeTails: [],
-          dims: dimsOf(masterByCode[key]),
-          tiersPerSlot: 1,
-          columns: [],
-        }
-        byCode.set(key, it)
-      }
-      it.boxes += o.boxCount
-      it.units += o.totalUnits
       const tail = String(o.productCode || '').slice(-6)
-      if (tail && !it.codeTails.includes(tail)) it.codeTails.push(tail)
+      if (!tail) continue
+      const cur = m.get(key) ?? []
+      if (!cur.includes(tail)) cur.push(tail)
+      m.set(key, cur)
     }
-    const items = [...byCode.values()]
-    // 자리 크기는 팔레트에 올라가는 박스들 중 자리가 가장 적게 나오는 박스 기준
-    // (한 자리에 한 SKU 만 올리므로, 가장 빡빡한 박스에 자리를 맞춘다)
-    const grid = items
-      .map((it) => ({ it, ...floorGrid(it.dims) }))
-      .reduce((a, b) => (b.slots < a.slots ? b : a), {
-        it: items[0],
-        ...floorGrid(items[0]?.dims ?? { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true }),
-      })
-    for (const it of items) {
-      it.tiersPerSlot = maxTiersOf(it.dims)
-      it.columns = packColumns(it.boxes, it.tiersPerSlot)
-    }
+    return m
+  }
 
-    // 자리 배정 — SKU 등장 순서대로 앞자리부터
-    const slots: (PlanItem | null)[] = []
-    const slotTiers: number[] = []
-    for (const it of items) {
-      for (const t of it.columns) {
-        slots.push(it)
-        slotTiers.push(t)
-      }
-    }
-    const overflow = Math.max(0, slots.length - grid.slots)
-    const padded: (PlanItem | null)[] = Array.from(
-      { length: grid.slots },
-      (_, i) => slots[i] ?? null,
-    )
-    const paddedTiers = Array.from({ length: grid.slots }, (_, i) => slotTiers[i] ?? 0)
-
-    const maxTier = items.reduce((m, it) => Math.max(m, ...it.columns, 0), 0)
-    // 높이는 SKU 별 (단수 × 실측 박스 높이) 중 가장 높은 기둥
-    const stackMm = items.reduce(
-      (m, it) => Math.max(m, Math.max(0, ...it.columns) * it.dims.h),
-      0,
-    )
-    const heightMm = PALLET_MM + stackMm
-    const slackMm = LIMIT_MM - heightMm
+  /** SkuStack + 이 팔레트가 실제로 실은 단수 → 도면 아이템 */
+  const itemOf = (st: SkuStack, tiers: number[], tails: Map<string, string[]>): PlanItem => {
+    const key = norm(st.code)
+    const full = nameOf.get(key) || st.code
+    const boxes = tiers.reduce((a, t) => a + t, 0)
     return {
-      plt: gi + 1,
-      dest: g.dest,
-      viaLabel: viaLabelOf(g.viaCenters),
-      items,
-      boxes: g.totalBoxes,
-      cols: grid.cols,
-      rows: grid.rows,
-      slotCount: grid.slots,
-      slots: padded,
-      slotTiers: paddedTiers,
-      overflow,
-      gridDims: grid.it?.dims ?? { w: DEFAULT_BOX_MM, d: DEFAULT_BOX_MM, h: DEFAULT_BOX_MM, unknown: true },
-      unknownDims: items.some((it) => it.dims.unknown),
-      maxTier,
-      heightMm,
-      slackMm,
-      risky: slackMm < SAFE_MM,
-      singleBox: g.totalBoxes === 1,
+      masterCode: st.code,
+      sku: shortSkuName(full),
+      fullName: full,
+      color: colorOf.get(key) || AUTO_COLORS[0],
+      boxes,
+      // 낱개는 박스당입수 비례로 이 팔레트 몫만
+      units: st.boxes > 0 ? Math.round((st.units / st.boxes) * boxes) : 0,
+      codeTails: tails.get(key) ?? [],
+      dims: st.dims,
+      tiersPerSlot: st.tiersPerSlot,
+      columns: tiers,
     }
-  })
+  }
+
+  // 입고지 하나가 자리·SKU 한도를 넘기면 팔레트를 나눠 각각 렌더한다
+  // (분할 규칙은 lib/b2b/kurly.ts 의 packPallets — 팔레트 장수 계산과 같은 식)
+  const panels: PlanPanel[] = []
+  let pltNo = 0
+  for (const g of pallets) {
+    const stacks = stacksOf(orders, g.rowIndexes, masterByCode)
+    const grid = palletGridOf(stacks)
+    const packs = packPallets(stacks, grid.slots, MAX_SKU_PER_PLT)
+    const tails = tailsOf(g)
+
+    packs.forEach((pack, pi) => {
+      pltNo += 1
+      // 이 팔레트가 실은 SKU별 단수 (등장 순서 유지)
+      const tiersByStack = new Map<number, number[]>()
+      for (const slot of pack) {
+        const cur = tiersByStack.get(slot.stack) ?? []
+        cur.push(slot.tiers)
+        tiersByStack.set(slot.stack, cur)
+      }
+      const items = [...tiersByStack.entries()].map(([si, tiers]) =>
+        itemOf(stacks[si], tiers, tails),
+      )
+      const itemByStack = new Map<number, PlanItem>()
+      ;[...tiersByStack.keys()].forEach((si, i) => itemByStack.set(si, items[i]))
+
+      const slots: (PlanItem | null)[] = Array.from(
+        { length: grid.slots },
+        (_, i) => (pack[i] ? itemByStack.get(pack[i].stack) ?? null : null),
+      )
+      const slotTiers = Array.from({ length: grid.slots }, (_, i) => pack[i]?.tiers ?? 0)
+
+      const maxTier = items.reduce((m, it) => Math.max(m, ...it.columns, 0), 0)
+      // 높이는 SKU 별 (단수 × 실측 박스 높이) 중 가장 높은 기둥
+      const stackMm = items.reduce(
+        (m, it) => Math.max(m, Math.max(0, ...it.columns) * it.dims.h),
+        0,
+      )
+      const heightMm = PALLET_MM + stackMm
+      const slackMm = LIMIT_MM - heightMm
+      const boxes = items.reduce((a, it) => a + it.boxes, 0)
+      panels.push({
+        plt: pltNo,
+        dest: g.dest,
+        part: pi + 1,
+        partCount: packs.length,
+        viaLabel: viaLabelOf(g.viaCenters),
+        items,
+        boxes,
+        cols: grid.cols,
+        rows: grid.rows,
+        slotCount: grid.slots,
+        slots,
+        slotTiers,
+        overflow: Math.max(0, pack.length - grid.slots),
+        gridDims: grid.dims,
+        unknownDims: items.some((it) => it.dims.unknown),
+        maxTier,
+        heightMm,
+        slackMm,
+        risky: slackMm < SAFE_MM,
+        singleBox: boxes === 1,
+      })
+    })
+  }
 
   // 범례: 도면에 실제 등장하는 SKU 만
   const seen = new Set<string>()
@@ -396,7 +387,8 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, maxItems: number, panelH
   const capY = heightY + 16
 
   let out = rect(ox, oy, PANEL_W, panelH, { fill: '#FFFFFF', stroke: '#D1D5DB', sw: 1, rx: 6 })
-  out += text({ x: ox + 14, y: oy + 26, s: `PLT ${p.plt} — ${p.dest}`, size: 14, bold: true })
+  const partLabel = p.partCount > 1 ? ` (${p.part}/${p.partCount})` : ''
+  out += text({ x: ox + 14, y: oy + 26, s: `PLT ${p.plt} — ${p.dest}${partLabel}`, size: 14, bold: true })
   out += text({ x: ox + 14, y: oy + 44, s: p.viaLabel, size: 10.5, fill: '#4B5563' })
 
   p.items.forEach((it, i) => {
@@ -600,7 +592,8 @@ export function buildWikeepNotice(plan: PalletPlan): string {
   for (const p of plan.panels) {
     const via = p.viaLabel.startsWith('경유:') ? p.viaLabel : '직납'
     lines.push('')
-    lines.push(`PLT ${p.plt} — ${p.dest} (${via})`)
+    const part = p.partCount > 1 ? ` ${p.part}/${p.partCount}장` : ''
+    lines.push(`PLT ${p.plt} — ${p.dest}${part} (${via})`)
     for (const it of p.items) {
       lines.push(`- ${it.fullName} ${cm(it.boxes)}박스 (${cm(it.units)}개)`)
     }
