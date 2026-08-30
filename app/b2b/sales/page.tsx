@@ -386,7 +386,8 @@ function RankChart({
                 interval={0}
               />
               <Tooltip formatter={wonTip} />
-              <Bar dataKey="revenue" fill={color} radius={[0, 4, 4, 0]}>
+              {/* name 을 주지 않으면 툴팁 계열명이 dataKey('revenue') 그대로 나온다 */}
+              <Bar dataKey="revenue" name="매출" fill={color} radius={[0, 4, 4, 0]}>
                 {rows.map((r) => (
                   <Cell key={r.name} fill={color} />
                 ))}
