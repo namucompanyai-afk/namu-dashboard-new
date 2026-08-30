@@ -20,17 +20,22 @@ import {
   buildKpi,
   byChannel,
   byMonth,
+  byProduct,
   channelStats,
   listMonths,
+  listProducts,
   monthLabel,
   monthlyTrend,
   parseSalesHistory,
+  productTrend,
   rankBy,
   recentMonths,
   shortMonth,
   sortForTable,
   type ChannelFilter,
   type ChannelStat,
+  type ProductPoint,
+  type RankRow,
   type SalesChannel,
   type SalesRecord,
   type TrendPoint,
@@ -82,6 +87,9 @@ export default function B2BSalesPage() {
   const [month, setMonth] = useState('')
   const [limit, setLimit] = useState(PAGE_SIZE)
   const [topScope, setTopScope] = useState<TopScope>('month')
+  // 상품별 트렌드 — 월·채널 필터와 독립 (빈 문자열 = 전체 상품 합계)
+  const [product, setProduct] = useState('')
+  const [productLimit, setProductLimit] = useState(PAGE_SIZE)
 
   const load = useCallback(async () => {
     setState('loading')
@@ -122,9 +130,25 @@ export default function B2BSalesPage() {
   const topCenters = useMemo(() => rankBy(scoped, (r) => r.center, 8), [scoped])
   const tableRows = useMemo(() => sortForTable(scoped), [scoped])
 
+  // 상품 트렌드는 항상 '데이터가 있는 최신 월' 기준 최근 6개월 (월 필터와 무관)
+  const productList = useMemo(() => listProducts(records), [records])
+  const trendMonths = useMemo(() => recentMonths(months[0] || '', 6), [months])
+  const productSeries = useMemo(
+    () => productTrend(records, trendMonths, product),
+    [records, trendMonths, product],
+  )
+  const productRows = useMemo(
+    () => sortForTable(byProduct(records, product).filter((r) => trendMonths.includes(r.month))),
+    [records, product, trendMonths],
+  )
+
   useEffect(() => {
     setLimit(PAGE_SIZE)
   }, [channel, month])
+
+  useEffect(() => {
+    setProductLimit(PAGE_SIZE)
+  }, [product])
 
   const empty = state === 'loaded' && records.length === 0
 
@@ -227,8 +251,8 @@ export default function B2BSalesPage() {
             ))}
           </div>
 
-          {/* 월별 채널 비중 */}
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+          {/* 월별 채널 비중 — 바에 호버하면 채널별 매출액 (overflow-hidden 을 빼야 툴팁이 안 잘린다) */}
+          <div className="rounded-lg border border-gray-200 bg-white">
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">월별 채널 비중 (최근 6개월)</h2>
               <span className="text-xs text-gray-500">
@@ -249,18 +273,46 @@ export default function B2BSalesPage() {
                 return (
                   <div key={t.month} className="flex items-center gap-3">
                     <span className="w-14 shrink-0 text-xs text-gray-500">{shortMonth(t.month)}</span>
-                    <div className="flex-1 h-4 rounded-sm bg-gray-100 overflow-hidden flex">
-                      {total > 0 &&
-                        CHANNELS.map((c) => (
-                          <div
-                            key={c}
-                            title={`${c} ${won(t[c])}`}
-                            style={{
-                              width: `${(t[c] / total) * 100}%`,
-                              background: CHANNEL_COLORS[c],
-                            }}
-                          />
-                        ))}
+                    <div className="group relative flex-1">
+                      <div className="h-4 rounded-sm bg-gray-100 overflow-hidden flex">
+                        {total > 0 &&
+                          CHANNELS.map((c) => (
+                            <div
+                              key={c}
+                              style={{
+                                width: `${(t[c] / total) * 100}%`,
+                                background: CHANNEL_COLORS[c],
+                              }}
+                            />
+                          ))}
+                      </div>
+                      <div className="pointer-events-none absolute left-1/2 bottom-full z-20 hidden -translate-x-1/2 -translate-y-1 whitespace-nowrap rounded-md border border-gray-200 bg-white px-3 py-2 shadow-lg group-hover:block">
+                        <p className="text-[11px] font-medium text-gray-900">
+                          {monthLabel(t.month)}
+                        </p>
+                        {total > 0 ? (
+                          <>
+                            {CHANNELS.map((c) => (
+                              <p
+                                key={c}
+                                className="mt-0.5 text-[11px] tabular-nums flex items-center gap-1.5"
+                              >
+                                <span
+                                  className="inline-block w-2 h-2 rounded-sm shrink-0"
+                                  style={{ background: CHANNEL_COLORS[c] }}
+                                />
+                                <span className="text-gray-500">{c}</span>
+                                <span className="text-gray-900">{won(t[c])}</span>
+                              </p>
+                            ))}
+                            <p className="mt-1 pt-1 border-t border-gray-100 text-[11px] tabular-nums text-gray-600">
+                              합계 {won(total)}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="mt-0.5 text-[11px] text-gray-400">데이터 없음</p>
+                        )}
+                      </div>
                     </div>
                     <span className="w-32 shrink-0 text-right text-[11px] text-gray-500 tabular-nums">
                       {total > 0
@@ -272,6 +324,18 @@ export default function B2BSalesPage() {
               })}
             </div>
           </div>
+
+          {/* 상품별 매출 트렌드 — 월·채널 필터와 독립, 항상 최근 6개월 */}
+          <ProductTrendSection
+            products={productList}
+            product={product}
+            onProduct={setProduct}
+            series={productSeries}
+            rows={productRows}
+            limit={productLimit}
+            onMore={() => setProductLimit((n) => n + PAGE_SIZE)}
+            months={trendMonths}
+          />
 
           {/* 상품 Top 5 · 센터별 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -478,7 +542,7 @@ function RankChart({
                 tick={{ fontSize: 11 }}
                 interval={0}
               />
-              <Tooltip formatter={wonTip} />
+              <Tooltip content={rankTooltip} cursor={{ fill: '#f8fafc' }} />
               {/* name 을 주지 않으면 툴팁 계열명이 dataKey('revenue') 그대로 나온다 */}
               <Bar dataKey="revenue" name="매출" fill={color} radius={[0, 4, 4, 0]}>
                 {rows.map((r) => (
@@ -489,6 +553,201 @@ function RankChart({
           </ChartBox>
         </div>
       )}
+    </div>
+  )
+}
+
+/** 수량 병기 '40박스 720낱개' — 박스가 0이면 낱개만 */
+const qtyText = (boxes: number, units: number): string =>
+  [boxes > 0 ? `${num(boxes)}박스` : '', units > 0 ? `${num(units)}낱개` : '']
+    .filter(Boolean)
+    .join(' ')
+
+/** 순위 차트 툴팁 — 매출에 박스·낱개 수량을 병기 */
+function rankTooltip(props: { active?: boolean; payload?: unknown }) {
+  if (!props.active || !Array.isArray(props.payload) || props.payload.length === 0) return null
+  const row = (props.payload[0] as { payload?: RankRow }).payload
+  if (!row) return null
+  const qty = qtyText(row.boxes, row.units)
+  return (
+    <div className="rounded-md border border-gray-200 bg-white px-3 py-2 shadow-lg">
+      <p className="text-[11px] font-medium text-gray-900">{row.name}</p>
+      <p className="mt-0.5 text-[11px] tabular-nums text-gray-600">
+        매출 {won(row.revenue)}
+        {qty && ` · ${qty}`}
+      </p>
+    </div>
+  )
+}
+
+/** 상품 트렌드 툴팁 — 매출 + 수량 */
+function productTooltip(props: { active?: boolean; payload?: unknown; label?: unknown }) {
+  if (!props.active || !Array.isArray(props.payload) || props.payload.length === 0) return null
+  const pt = (props.payload[0] as { payload?: ProductPoint }).payload
+  if (!pt) return null
+  const qty = qtyText(pt.boxes, pt.units)
+  return (
+    <div className="rounded-md border border-gray-200 bg-white px-3 py-2 shadow-lg">
+      <p className="text-[11px] font-medium text-gray-900">{monthLabel(pt.month)}</p>
+      <p className="mt-0.5 text-[11px] tabular-nums text-gray-600">
+        매출 {won(pt.revenue)}
+        {qty && ` · ${qty}`}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * 상품별 매출 트렌드 — 상단 꺾은선(최근 6개월), 하단 해당 상품의 발주 이력.
+ * 화면 상단의 채널·입고예정월 필터와 무관하게 전체 이력에서 집계한다.
+ */
+function ProductTrendSection({
+  products,
+  product,
+  onProduct,
+  series,
+  rows,
+  limit,
+  onMore,
+  months,
+}: {
+  products: string[]
+  product: string
+  onProduct: (p: string) => void
+  series: ProductPoint[]
+  rows: SalesRecord[]
+  limit: number
+  onMore: () => void
+  months: string[]
+}) {
+  const label = product || '전체 상품 합계'
+  const range =
+    months.length > 0 ? `${monthLabel(months[0])} ~ ${monthLabel(months[months.length - 1])}` : ''
+  const total = rows.reduce(
+    (a, r) => ({
+      boxes: a.boxes + r.boxes,
+      units: a.units + r.units,
+      revenue: a.revenue + r.revenue,
+    }),
+    { boxes: 0, units: 0, revenue: 0 },
+  )
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">상품별 매출 트렌드</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="text-xs text-gray-600 flex items-center gap-2">
+            상품
+            <select
+              value={product}
+              onChange={(e) => onProduct(e.target.value)}
+              className="px-2 py-1.5 border border-gray-300 rounded text-xs max-w-[16rem]"
+            >
+              <option value="">전체 상품 합계</option>
+              {products.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span className="text-xs text-gray-500">최근 6개월 · 채널·월 필터 무관</span>
+        </div>
+      </div>
+
+      <div className="p-4">
+        <p className="text-xs text-gray-500 mb-2">
+          {label}
+          {range && <span className="text-gray-400"> · {range}</span>}
+        </p>
+        <ChartBox height={260}>
+          <LineChart data={series} margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
+            <XAxis dataKey="month" tickFormatter={shortMonth} tick={{ fontSize: 12 }} />
+            <YAxis tickFormatter={numTick} tick={{ fontSize: 11 }} width={80} />
+            <Tooltip content={productTooltip} />
+            <Line
+              type="monotone"
+              dataKey="revenue"
+              name="매출"
+              stroke="#0f766e"
+              strokeWidth={2}
+              dot={{ r: 3, fill: '#0f766e' }}
+              activeDot={{ r: 5 }}
+            />
+          </LineChart>
+        </ChartBox>
+      </div>
+
+      <div className="border-t border-gray-200">
+        <div className="px-4 py-3 flex items-baseline justify-between">
+          <h3 className="text-xs font-semibold text-gray-700">
+            매출 내역 ({num(rows.length)}행)
+          </h3>
+          <span className="text-xs text-gray-500">입고예정일 내림차순</span>
+        </div>
+        {rows.length === 0 ? (
+          <p className="px-4 py-10 text-sm text-gray-400 text-center">
+            최근 6개월 내 {label} 이력이 없습니다.
+          </p>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm whitespace-nowrap">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">채널</th>
+                    <th className="px-3 py-2 text-left font-medium">센터·입고지</th>
+                    <th className="px-3 py-2 text-left font-medium">입고예정일</th>
+                    {!product && <th className="px-3 py-2 text-left font-medium">상품</th>}
+                    <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-right font-medium">낱개</th>
+                    <th className="px-3 py-2 text-right font-medium">매출</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, limit).map((r, i) => (
+                    <tr
+                      key={`${r.channel}-${r.poNumber}-${r.product}-${i}`}
+                      className="border-t border-gray-100"
+                    >
+                      <td className="px-3 py-2">{r.channel}</td>
+                      <td className="px-3 py-2">{r.center}</td>
+                      <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
+                      {!product && (
+                        <td className="px-3 py-2 max-w-[22rem] truncate" title={r.product}>
+                          {r.product}
+                        </td>
+                      )}
+                      <td className="px-3 py-2 text-right">{r.boxes ? num(r.boxes) : '—'}</td>
+                      <td className="px-3 py-2 text-right">{num(r.units)}</td>
+                      <td className="px-3 py-2 text-right font-medium">{num(r.revenue)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                    <td className="px-3 py-2" colSpan={product ? 3 : 4}>
+                      합계
+                    </td>
+                    <td className="px-3 py-2 text-right">{num(total.boxes)}</td>
+                    <td className="px-3 py-2 text-right">{num(total.units)}</td>
+                    <td className="px-3 py-2 text-right">{won(total.revenue)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            {rows.length > limit && (
+              <div className="px-4 py-3 border-t border-gray-100 text-center">
+                <button
+                  onClick={onMore}
+                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
+                >
+                  더보기 ({num(rows.length - limit)}행 남음)
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }

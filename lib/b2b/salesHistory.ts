@@ -209,7 +209,7 @@ export function monthlyTrend(all: SalesRecord[], months: string[]): TrendPoint[]
   })
 }
 
-export type RankRow = { name: string; revenue: number; units: number }
+export type RankRow = { name: string; revenue: number; boxes: number; units: number }
 
 /** 키별 매출 순위 (내림차순, 상위 n개) */
 export function rankBy(
@@ -222,14 +222,46 @@ export function rankBy(
     const name = pick(r) || '(미지정)'
     let e = map.get(name)
     if (!e) {
-      e = { name, revenue: 0, units: 0 }
+      e = { name, revenue: 0, boxes: 0, units: 0 }
       map.set(name, e)
     }
     e.revenue += r.revenue
+    e.boxes += r.boxes
     e.units += r.units
   }
   return [...map.values()].sort((a, b) => b.revenue - a.revenue).slice(0, n)
 }
+
+/** 발주 이력에 등장한 상품(별칭) 목록 — 가나다순 */
+export const listProducts = (recs: SalesRecord[]): string[] =>
+  [...new Set(recs.map((r) => r.product).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'))
+
+export type ProductPoint = { month: string; revenue: number; boxes: number; units: number }
+
+/**
+ * 상품별 월별 매출 — product 가 비면 전체 상품 합계.
+ * 채널·월 필터와 무관하게 전체 이력에서 집계한다(상품 트렌드 섹션 전용).
+ */
+export function productTrend(
+  all: SalesRecord[],
+  months: string[],
+  product: string,
+): ProductPoint[] {
+  const rows = byProduct(all, product)
+  return months.map((m) => {
+    const mr = rows.filter((r) => r.month === m)
+    return {
+      month: m,
+      revenue: sum(mr, (r) => r.revenue),
+      boxes: sum(mr, (r) => r.boxes),
+      units: sum(mr, (r) => r.units),
+    }
+  })
+}
+
+/** 상품 필터 — 빈 문자열이면 전체 */
+export const byProduct = (recs: SalesRecord[], product: string): SalesRecord[] =>
+  product ? recs.filter((r) => r.product === product) : recs
 
 /** 표 정렬 — 입고예정일 내림차순, 같으면 발주번호 */
 export const sortForTable = (recs: SalesRecord[]): SalesRecord[] =>
