@@ -393,8 +393,7 @@ export default function B2BSalesPage() {
                         <th className="px-3 py-2 text-left font-medium">센터·입고지</th>
                         <th className="px-3 py-2 text-left font-medium">입고예정일</th>
                         <th className="px-3 py-2 text-left font-medium">상품</th>
-                        <th className="px-3 py-2 text-right font-medium">박스</th>
-                        <th className="px-3 py-2 text-right font-medium">낱개</th>
+                        <th className="px-3 py-2 text-right font-medium">수량</th>
                         <th className="px-3 py-2 text-right font-medium">매출</th>
                       </tr>
                     </thead>
@@ -408,7 +407,6 @@ export default function B2BSalesPage() {
                           <td className="px-3 py-2 max-w-[22rem] truncate" title={r.product}>
                             {r.product}
                           </td>
-                          <td className="px-3 py-2 text-right">{r.boxes ? num(r.boxes) : '—'}</td>
                           <td className="px-3 py-2 text-right">{num(r.units)}</td>
                           <td className="px-3 py-2 text-right font-medium">{num(r.revenue)}</td>
                         </tr>
@@ -417,7 +415,6 @@ export default function B2BSalesPage() {
                         <td className="px-3 py-2" colSpan={5}>
                           합계
                         </td>
-                        <td className="px-3 py-2 text-right">{num(kpi.boxes)}</td>
                         <td className="px-3 py-2 text-right">{num(kpi.units)}</td>
                         <td className="px-3 py-2 text-right">{won(kpi.revenue)}</td>
                       </tr>
@@ -558,18 +555,15 @@ function RankChart({
   )
 }
 
-/** 수량 병기 '40박스 720낱개' — 박스가 0이면 낱개만 */
-const qtyText = (boxes: number, units: number): string =>
-  [boxes > 0 ? `${num(boxes)}박스` : '', units > 0 ? `${num(units)}낱개` : '']
-    .filter(Boolean)
-    .join(' ')
+/** 툴팁 수량 병기 '수량 720' — 0이면 표시하지 않는다 (박스는 화면에 노출하지 않음) */
+const qtyText = (units: number): string => (units > 0 ? `수량 ${num(units)}` : '')
 
-/** 순위 차트 툴팁 — 매출에 박스·낱개 수량을 병기 */
+/** 순위 차트 툴팁 — 매출에 수량을 병기 */
 function rankTooltip(props: { active?: boolean; payload?: unknown }) {
   if (!props.active || !Array.isArray(props.payload) || props.payload.length === 0) return null
   const row = (props.payload[0] as { payload?: RankRow }).payload
   if (!row) return null
-  const qty = qtyText(row.boxes, row.units)
+  const qty = qtyText(row.units)
   return (
     <div className="rounded-md border border-gray-200 bg-white px-3 py-2 shadow-lg">
       <p className="text-[11px] font-medium text-gray-900">{row.name}</p>
@@ -586,7 +580,7 @@ function productTooltip(props: { active?: boolean; payload?: unknown; label?: un
   if (!props.active || !Array.isArray(props.payload) || props.payload.length === 0) return null
   const pt = (props.payload[0] as { payload?: ProductPoint }).payload
   if (!pt) return null
-  const qty = qtyText(pt.boxes, pt.units)
+  const qty = qtyText(pt.units)
   return (
     <div className="rounded-md border border-gray-200 bg-white px-3 py-2 shadow-lg">
       <p className="text-[11px] font-medium text-gray-900">{monthLabel(pt.month)}</p>
@@ -626,12 +620,8 @@ function ProductTrendSection({
   const range =
     months.length > 0 ? `${monthLabel(months[0])} ~ ${monthLabel(months[months.length - 1])}` : ''
   const total = rows.reduce(
-    (a, r) => ({
-      boxes: a.boxes + r.boxes,
-      units: a.units + r.units,
-      revenue: a.revenue + r.revenue,
-    }),
-    { boxes: 0, units: 0, revenue: 0 },
+    (a, r) => ({ units: a.units + r.units, revenue: a.revenue + r.revenue }),
+    { units: 0, revenue: 0 },
   )
   return (
     <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
@@ -702,8 +692,7 @@ function ProductTrendSection({
                     <th className="px-3 py-2 text-left font-medium">채널</th>
                     <th className="px-3 py-2 text-left font-medium">센터·입고지</th>
                     <th className="px-3 py-2 text-left font-medium">입고예정일</th>
-                    <th className="px-3 py-2 text-right font-medium">박스</th>
-                    <th className="px-3 py-2 text-right font-medium">낱개</th>
+                    <th className="px-3 py-2 text-right font-medium">수량</th>
                     <th className="px-3 py-2 text-right font-medium">매출</th>
                   </tr>
                 </thead>
@@ -716,7 +705,6 @@ function ProductTrendSection({
                       <td className="px-3 py-2">{r.channel}</td>
                       <td className="px-3 py-2">{r.center}</td>
                       <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
-                      <td className="px-3 py-2 text-right">{r.boxes ? num(r.boxes) : '—'}</td>
                       <td className="px-3 py-2 text-right">{num(r.units)}</td>
                       <td className="px-3 py-2 text-right font-medium">{num(r.revenue)}</td>
                     </tr>
@@ -725,7 +713,6 @@ function ProductTrendSection({
                     <td className="px-3 py-2" colSpan={3}>
                       합계
                     </td>
-                    <td className="px-3 py-2 text-right">{num(total.boxes)}</td>
                     <td className="px-3 py-2 text-right">{num(total.units)}</td>
                     <td className="px-3 py-2 text-right">{won(total.revenue)}</td>
                   </tr>
