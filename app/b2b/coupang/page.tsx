@@ -42,12 +42,14 @@ import {
   buildCoupangPalletPlan,
   buildPalletGroups,
   downloadCoupangPalletPlanJpg,
+  GRAIN_MAX_TIERS,
+  LIMIT_MM,
+  PALLET_MM,
+  pltCountOf,
   renderCoupangPalletPlanSvg,
 } from '@/lib/b2b/coupangDiagram'
 import {
-  BOXES_PER_PLT,
   buildMilkrunShipments,
-  pltOf,
   priceOriginByShipFrom,
   shipmentByPo,
   sumMilkrun,
@@ -146,9 +148,18 @@ export default function CoupangB2BPage() {
   const notDelivered = useMemo(() => routed.filter((r) => r.notDelivered), [routed])
   const fileStats = useMemo(() => summarizeCoupangFiles(items), [items])
 
+  // 팔레트 필요 안내 — 발주번호 × 출고지 박스 합계 기준(운송수단 자동 판정 없음)
+  const palletGroups = useMemo(() => buildPalletGroups(routed), [routed])
+  // PLT 장수는 실측 적재 기준(자리 수 × SKU별 단수) — 로켓 양식 파렛트 수도 같은 값을 쓴다
+  const pltByPo = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const g of palletGroups) m[g.poNumber] = (m[g.poNumber] ?? 0) + pltCountOf(g)
+    return m
+  }, [palletGroups])
+
   const rocket = useMemo(
-    () => buildRocketRows(jindo, centers, madeDate),
-    [jindo, centers, madeDate],
+    () => buildRocketRows(jindo, centers, madeDate, pltByPo),
+    [jindo, centers, madeDate, pltByPo],
   )
   // 9박스 이하 = 택배 발송분 / 초과 = 트럭 발송분(밀크런)
   const { parcel: rocketParcel, truck: rocketTruck } = useMemo(() => splitRocketRows(rocket), [rocket])
@@ -190,8 +201,6 @@ export default function CoupangB2BPage() {
     [rocket],
   )
 
-  // 팔레트 필요 안내 — 발주번호 × 출고지 박스 합계 기준(운송수단 자동 판정 없음)
-  const palletGroups = useMemo(() => buildPalletGroups(routed), [routed])
   const needPallet = useMemo(() => palletGroups.filter((g) => g.needsPallet), [palletGroups])
   const advisories = useMemo(() => buildCenterAdvisories(palletGroups), [palletGroups])
   const [openPos, setOpenPos] = useState<string[]>([]) // 팔레트 안내 펼친 발주(발주번호|출고지)
@@ -596,7 +605,7 @@ export default function CoupangB2BPage() {
                           <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
                           <td className="px-3 py-2">{g.shipFrom}</td>
                           <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
-                          <td className="px-3 py-2 text-right">{pltOf(g.boxes)}</td>
+                          <td className="px-3 py-2 text-right">{pltCountOf(g)}</td>
                           <td className="px-3 py-2 text-gray-600">
                             {ship ? ship.vehicleLabel : <span className="text-gray-400">—</span>}
                           </td>
@@ -697,14 +706,16 @@ export default function CoupangB2BPage() {
                 <p className="text-gray-400">전 발주 {PALLET_BOX_LIMIT}박스 이하 — 택배 발송 가능</p>
               )}
               <p className="text-gray-500">
-                · PLT는 {BOXES_PER_PLT}박스/PLT 올림 · 같은 센터·같은 입고예정일 발주는 PLT 합산 후 차량 배정
-                ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
+                · PLT는 상품마스터 실측 박스 치수 기준 (1,100×1,100 자리 수 × 자리당 단수, 높이
+                한도 {LIMIT_MM.toLocaleString('ko-KR')}mm — 팔레트 {PALLET_MM}mm 포함) · 같은 센터·같은
+                입고예정일 발주는 PLT 합산 후 차량 배정 ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
               </p>
               <p className="text-gray-500">
                 · 운임은 참고용 — 밀크런 트럭 요금표 기준
               </p>
               <p className="text-gray-500">
-                · PLT 수는 {BOXES_PER_PLT}박스 올림 기준 — SKU 구성에 따라 실제 팔레트 수는 적재 구성도 참고
+                · 자리당 단수는 SKU 실측 높이로 계산 — 진도팜(곡물) 출고만 {GRAIN_MAX_TIERS}단으로 묶는다
+                (위킵·곰표 출고는 실측 단수). PLT 수는 적재 구성도와 같은 기준
               </p>
             </div>
           </div>
@@ -762,7 +773,7 @@ export default function CoupangB2BPage() {
             />
             <RocketTable
               title={ROCKET_SHEETS['트럭'].title}
-              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 ${BOXES_PER_PLT}박스/PLT 올림, 발주 첫 행에만 기입`}
+              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 실측 적재 기준(자리 수 × 단수), 발주 첫 행에만 기입`}
               rows={rocketTruck}
               truck
             />

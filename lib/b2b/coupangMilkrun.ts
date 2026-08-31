@@ -9,10 +9,10 @@
  * 팔레트 산정·출고지 분기·로켓 양식 로직은 소비만 하고 건드리지 않는다.
  */
 import { norm, toNum, type ProductMaster } from './kurly'
-import { BOXES_PER_PLT, pltOf, shipFromOf, type ShipFrom } from './coupang'
-import type { PoPalletGroup } from './coupangDiagram'
+import { shipFromOf, type ShipFrom } from './coupang'
+import { pltCountOf, type PoPalletGroup } from './coupangDiagram'
 
-export { BOXES_PER_PLT, pltOf } // 단일 소스: lib/b2b/coupang.ts
+export { pltCountOf } // 단일 소스: lib/b2b/coupangDiagram.tsx (실측 자리 수 × 단수)
 
 /** 톤수 구간 — 최대 PLT 오름차순. 14PLT 초과는 차량 분할로 처리한다. */
 export const TON_TIERS: { maxPlt: number; tons: number }[] = [
@@ -217,7 +217,7 @@ export function buildMilkrunShipments(
       map.set(key, s)
     }
     s.poNumbers.push(g.poNumber)
-    s.plt += pltOf(g.boxes)
+    s.plt += pltCountOf(g)
   }
   const list = [...map.values()]
   for (const s of list) {

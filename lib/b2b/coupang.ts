@@ -273,10 +273,8 @@ export function routeItems(
 
 // ── 팔레트/PLT 기준 (택배·트럭 분기 공통 소스) ──────────────────
 export const PALLET_BOX_LIMIT = 9 // 초과 시 택배 불가 → 트럭(밀크런) 발송
-export const BOXES_PER_PLT = 30 // 팔레트 1장 적재 박스 수
-
-/** 발주 박스 수 → PLT (30박스/PLT 올림) */
-export const pltOf = (boxes: number): number => Math.ceil(boxes / BOXES_PER_PLT)
+// PLT 장수는 고정 상수가 아니라 실측 적재(자리 수 × SKU별 단수)로 센다 —
+// lib/b2b/coupangDiagram.tsx 의 pltCountOf 가 단일 소스다.
 
 // ── 곰표 출고 기준 ───────────────────────────────────────────────
 /** 곰표는 봉 단위로 팔레트를 센다 — 1PLT = 400봉 = 40박스 */
@@ -357,13 +355,14 @@ const boxesByPo = (items: RoutedItem[]): Record<string, number> => {
  *   택배분 — 주소·전화는 기존 센터 주소록 lookup
  *   트럭분 — 주소는 발주서가 자동 출력한 값, 전화는 그 주소 괄호부의 택배수령담당자
  *            (발주서 값이 비면 주소록으로 대체)
- * 파렛트 수는 발주 단위 1회(첫 행)만 기입한다.
+ * 파렛트 수는 발주 단위 1회(첫 행)만 기입한다 — pltByPo(실측 적재 기준 PLT 장수)를 받아 쓴다.
  * 미납품(확정 발주서의 H=0) 행은 실제로 나가지 않으므로 양식에서 뺀다.
  */
 export function buildRocketRows(
   items: RoutedItem[],
   centers: CenterAddress[],
   madeDate: string,
+  pltByPo: Record<string, number>,
 ): RocketRow[] {
   const shipping = items.filter((it) => !it.notDelivered)
   const poBoxes = boxesByPo(shipping)
@@ -376,7 +375,7 @@ export function buildRocketRows(
     let pallet: number | null = null
     if (truck && !palletDone.has(it.poNumber)) {
       palletDone.add(it.poNumber)
-      pallet = pltOf(poBoxes[it.poNumber] ?? 0)
+      pallet = pltByPo[it.poNumber] ?? 0
     }
     return {
       mode: (truck ? '트럭' : '택배') as RocketMode,

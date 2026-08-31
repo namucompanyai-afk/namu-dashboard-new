@@ -7,7 +7,7 @@
  * 파싱·분기·로켓 양식·매출·이력·라벨·운임 로직은 소비만 한다.
  */
 import React from 'react'
-import { norm } from './kurly'
+import { maxTiersOf as tiersByHeight, norm } from './kurly'
 import { PALLET_BOX_LIMIT, type RoutedItem, type ShipFrom } from './coupang'
 import { downloadSvgAsJpg } from './svgExport'
 
@@ -18,7 +18,7 @@ export const PALLET_MM = 150
 export const LIMIT_MM = 1700 // 팔레트 포함 높이 한도 (컬리와 동일)
 export const PALLET_W_MM = 1100 // 팔레트 바닥 가로
 export const PALLET_D_MM = 1100 // 팔레트 바닥 세로
-export const MAX_TIERS_PER_SLOT = 5 // 자리당 최대 단수 (30박스/PLT 운용 기준)
+export const GRAIN_MAX_TIERS = 5 // 진도팜(곡물) 현장 캡 — 6단부터 무너져서 단수를 묶는다
 
 /** 출고지별 안내 — 운송수단은 자동 판정하지 않고 문구만 낸다 */
 export const SHIP_FROM_GUIDE: Record<string, string> = {
@@ -135,12 +135,20 @@ export function floorGrid(dims: BoxDims): { cols: number; rows: number; slots: n
   return { cols, rows, slots: cols * rows }
 }
 
+/**
+ * SKU별 실측 단수 — 한도 1,700mm(팔레트 150mm 포함) 안에 쌓이는 단수.
+ * 높이 계산은 컬리와 같은 식(kurly.maxTiersOf)을 쓰고, 진도팜(곡물) 출고만 5단으로 묶는다.
+ */
+export const maxTiersOf = (dims: BoxDims, shipFrom: string): number =>
+  shipFrom === '진도팜' ? Math.min(GRAIN_MAX_TIERS, tiersByHeight(dims)) : tiersByHeight(dims)
+
 export type PlanSku = {
   sku: string
   fullName: string
   color: string
   boxes: number
   dims: BoxDims
+  tiersPerSlot: number // 이 박스가 이 출고지에서 쌓이는 최대 단수
 }
 
 /** 자리 하나 = SKU 하나(한 자리에 한 SKU만) */
@@ -149,6 +157,7 @@ export type PlanSlot = {
   fullName: string
   color: string
   tiers: number
+  tiersPerSlot: number // 이 SKU 의 실측 한계 단수 (펴서 쌓을 때 상한)
   dims: BoxDims
 }
 
@@ -180,19 +189,115 @@ export type CoupangPalletPlan = {
   dimsUnknown: boolean
 }
 
-/** 박스 많은 순 → 자리 배분(자리당 최대 MAX_TIERS_PER_SLOT단), 같은 SKU 는 인접 자리 연속 */
+/**
+ * 박스 많은 순 → 자리 배분. 자리당 단수는 SKU별 실측 단수(tiersPerSlot)까지,
+ * 같은 SKU 는 인접 자리 연속. 팔레트 장수를 정하는 '용량 기준' 배분이다.
+ */
 export function allocateSlots(skus: PlanSku[]): PlanSlot[] {
   const out: PlanSlot[] = []
   const sorted = [...skus].sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
   for (const s of sorted) {
     let left = s.boxes
     while (left > 0) {
-      const tiers = Math.min(MAX_TIERS_PER_SLOT, left)
-      out.push({ sku: s.sku, fullName: s.fullName, color: s.color, tiers, dims: s.dims })
+      const tiers = Math.min(Math.max(1, s.tiersPerSlot), left)
+      out.push({
+        sku: s.sku,
+        fullName: s.fullName,
+        color: s.color,
+        tiers,
+        tiersPerSlot: s.tiersPerSlot,
+        dims: s.dims,
+      })
       left -= tiers
     }
   }
   return out
+}
+
+/**
+ * 팔레트 한 장 안에서 다시 펴서 쌓기 — 자리가 남으면 높이 쌓지 않고 나눠 깐다.
+ * 팔레트 장수(=이 함수에 들어온 자리 묶음)는 바꾸지 않는다.
+ * 예) 즉석밥 34박스·6자리·12단 → 12·12·10 대신 6·6·6·6·6·4
+ */
+export function spreadSlots(slots: PlanSlot[], capacity: number): PlanSlot[] {
+  const cap = Math.max(1, capacity)
+  type Bin = { s: PlanSlot; boxes: number; slots: number }
+  const bins: Bin[] = []
+  for (const s of slots) {
+    let b = bins.find((x) => x.s.fullName === s.fullName)
+    if (!b) {
+      b = { s, boxes: 0, slots: 0 }
+      bins.push(b)
+    }
+    b.boxes += s.tiers
+  }
+  const tiersCap = (b: Bin) => Math.max(1, b.s.tiersPerSlot)
+  for (const b of bins) b.slots = Math.max(1, Math.ceil(b.boxes / tiersCap(b)))
+  let free = cap - bins.reduce((a, b) => a + b.slots, 0)
+  // 남는 자리는 '지금 가장 높이 쌓인' SKU 부터 — 더 펼 수 있는 것만
+  while (free > 0) {
+    const able = bins.filter((b) => b.boxes > b.slots)
+    if (!able.length) break
+    const top = able.reduce((a, b) =>
+      Math.ceil(b.boxes / b.slots) * b.s.dims.h > Math.ceil(a.boxes / a.slots) * a.s.dims.h ? b : a,
+    )
+    top.slots += 1
+    free -= 1
+  }
+  const out: PlanSlot[] = []
+  for (const b of bins) {
+    const per = Math.min(tiersCap(b), Math.ceil(b.boxes / b.slots))
+    let left = b.boxes
+    while (left > 0) {
+      const tiers = Math.min(per, left)
+      out.push({ ...b.s, tiers })
+      left -= tiers
+    }
+  }
+  return out
+}
+
+/**
+ * 발주 → SKU 별 적재 단위. 색은 도면에서만 쓰므로 colorOf 가 없으면 기본색을 넣는다.
+ * PLT 수 계산과 도면이 반드시 같은 입력을 쓰도록 한 곳에 둔다.
+ */
+export function planSkusOf(g: PoPalletGroup, colorOf?: Map<string, string>): PlanSku[] {
+  const byKey = new Map<string, PlanSku>()
+  for (const it of g.items) {
+    const k = norm(it.barcode) || norm(it.productName)
+    let p = byKey.get(k)
+    if (!p) {
+      const full = it.master?.alias || it.productName
+      const dims = dimsOf(it.master)
+      p = {
+        sku: shortName(full),
+        fullName: full,
+        color: colorOf?.get(k) || COLORS[0],
+        boxes: 0,
+        dims,
+        tiersPerSlot: maxTiersOf(dims, g.shipFrom),
+      }
+      byKey.set(k, p)
+    }
+    p.boxes += it.boxes ?? 0
+  }
+  return [...byKey.values()].filter((s) => s.boxes > 0)
+}
+
+/** 바닥 격자는 가장 큰 박스 기준(자리 수가 제일 적게 나오는 쪽) */
+export const planGridOf = (skus: PlanSku[]) =>
+  skus.map((s) => floorGrid(s.dims)).reduce((a, b) => (b.slots < a.slots ? b : a))
+
+/**
+ * 발주 → 실측 용량 기준 팔레트 장수.
+ * 30박스 같은 고정 상수가 아니라 '바닥 자리 수 × SKU별 단수' 로 계산한다.
+ * (도면의 PLT 장수와 항상 같은 값)
+ */
+export function pltCountOf(g: PoPalletGroup): number {
+  const skus = planSkusOf(g)
+  if (!skus.length) return 0
+  const grid = planGridOf(skus)
+  return Math.max(1, Math.ceil(allocateSlots(skus).length / grid.slots))
 }
 
 /** 팔레트 필요 발주 → PLT 단위 패널 (자리 수를 넘기면 다음 PLT 로 넘긴다) */
@@ -211,36 +316,18 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[]): CoupangPalletPl
   const panels: PlanPanel[] = []
   for (const g of need) {
     // 같은 발주 안에서 상품 단위 합산
-    const byKey = new Map<string, PlanSku>()
-    for (const it of g.items) {
-      const k = norm(it.barcode) || norm(it.productName)
-      let p = byKey.get(k)
-      if (!p) {
-        const full = it.master?.alias || it.productName
-        p = {
-          sku: shortName(full),
-          fullName: full,
-          color: colorOf.get(k) || COLORS[0],
-          boxes: 0,
-          dims: dimsOf(it.master),
-        }
-        byKey.set(k, p)
-      }
-      p.boxes += it.boxes ?? 0
-    }
-    const skus = [...byKey.values()].filter((s) => s.boxes > 0)
+    const skus = planSkusOf(g, colorOf)
     if (!skus.length) continue
 
-    // 바닥 격자는 가장 큰 박스 기준(자리 수가 제일 적게 나오는 쪽)으로 잡는다
-    const grids = skus.map((s) => floorGrid(s.dims))
-    const grid = grids.reduce((a, b) => (b.slots < a.slots ? b : a))
+    const grid = planGridOf(skus)
     const dimsUnknown = skus.some((s) => s.dims.unknown)
 
     const slots = allocateSlots(skus)
     const total = Math.max(1, Math.ceil(slots.length / grid.slots))
 
     for (let i = 0; i < total; i++) {
-      const mine = slots.slice(i * grid.slots, (i + 1) * grid.slots)
+      // 이 팔레트 몫을 자리 수 안에서 다시 펴서 쌓는다 (장수는 그대로)
+      const mine = spreadSlots(slots.slice(i * grid.slots, (i + 1) * grid.slots), grid.slots)
       const padded: (PlanSlot | null)[] = Array.from(
         { length: grid.slots },
         (_, k) => mine[k] ?? null,
@@ -500,7 +587,7 @@ export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
     'SKU별 자리(더미) 분리 — 더미 외부에 품목 스티커 부착',
     '같은 SKU 블록은 현장에서 교차 적재 + 랩핑',
     '부착물: 적재리스트(2면) + 쉽먼트 라벨(앞·옆면), 발주서·거래명세서는 기사 전달',
-    `자리당 최대 ${MAX_TIERS_PER_SLOT}단 · 높이 = 팔레트 ${PALLET_MM}mm + 박스높이 × 단수`,
+    `자리당 단수는 SKU 실측 높이 기준 (진도팜 곡물만 ${GRAIN_MAX_TIERS}단 캡) · 높이 = 팔레트 ${PALLET_MM}mm + 박스높이 × 단수`,
   ]
   if (plan.dimsUnknown) foots.push(`치수 미등록 상품은 ${DEFAULT_BOX_MM}mm 가정 — 마스터에 박스 치수 등록 필요`)
   const footY0 = bodyBottom + 26
@@ -509,7 +596,7 @@ export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
   const totalBoxes = panels.reduce((s, p) => s + p.boxes, 0)
   const poCount = new Set(panels.map((p) => p.poNumber)).size
   const title = `쿠팡 로켓 ${plan.dueDate || ''} 입고 — 팔레트 적재 구성도 (발주 ${poCount}건 · ${panels.length}PLT · 총 ${cm(totalBoxes)}박스)`.replace(/\s+/g, ' ')
-  const subtitle = `실측 치수 기준 — 팔레트 ${cm(PALLET_W_MM)}×${cm(PALLET_D_MM)}mm · 자리당 최대 ${MAX_TIERS_PER_SLOT}단 · 팔레트 ${PALLET_MM}mm · 한도 ${cm(LIMIT_MM)}mm`
+  const subtitle = `실측 치수 기준 — 팔레트 ${cm(PALLET_W_MM)}×${cm(PALLET_D_MM)}mm · 자리당 단수 = 실측 (진도팜 곡물 ${GRAIN_MAX_TIERS}단 캡) · 팔레트 ${PALLET_MM}mm · 한도 ${cm(LIMIT_MM)}mm`
 
   // 패널이 적을 때 제목·캡션이 캔버스 밖으로 잘리지 않도록 폭을 넓혀 준다
   const textW = Math.max(
