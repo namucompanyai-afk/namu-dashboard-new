@@ -50,6 +50,7 @@ import {
 } from '@/lib/b2b/coupangDiagram'
 import {
   buildMilkrunShipments,
+  countByShipFrom,
   priceOriginByShipFrom,
   shipmentByPo,
   sumMilkrun,
@@ -208,9 +209,10 @@ export default function CoupangB2BPage() {
   // 요금표 출고지 매핑 — 상품마스터 '요금표 출고지' 컬럼이 단일 소스(코드 하드코딩 없음)
   const priceOrigin = useMemo(() => priceOriginByShipFrom(products), [products])
   const priceOriginMissing = products.length > 0 && Object.keys(priceOrigin).length === 0
-  // 밀크런 운임(참고) — 진도팜 팔레트 발주만, 센터 × 입고예정일 묶음에 차량 배정
+  // 밀크런 운임(참고) — 진도팜·위킵 팔레트 발주, 출고지 × 센터 × 입고예정일 묶음
+  // (진도팜은 차량 구간 요금, 위킵은 곰표와 같은 BASIC×PLT vs 차량 최저가)
   const shipments = useMemo(
-    () => buildMilkrunShipments(palletGroups, milkrunPrices, priceOrigin['진도팜'] ?? ''),
+    () => buildMilkrunShipments(palletGroups, milkrunPrices, priceOrigin),
     [palletGroups, milkrunPrices, priceOrigin],
   )
   const shipmentOf = useMemo(() => shipmentByPo(shipments), [shipments])
@@ -607,7 +609,7 @@ export default function CoupangB2BPage() {
                           <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
                           <td className="px-3 py-2 text-right">{pltCountOf(g)}</td>
                           <td className="px-3 py-2 text-gray-600">
-                            {ship ? ship.vehicleLabel : <span className="text-gray-400">—</span>}
+                            {ship ? ship.method || ship.vehicleLabel : <span className="text-gray-400">—</span>}
                           </td>
                           <td className="px-3 py-2 text-right">
                             {!ship ? (
@@ -679,7 +681,15 @@ export default function CoupangB2BPage() {
             {shipments.length > 0 && (
               <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
                 <span className="text-gray-600">
-                  진도팜 팔레트분 차량 {shipments.length}건 · 총 {milkrunTotals.totalPlt} PLT
+                  팔레트분{' '}
+                  {[
+                    ...countByShipFrom(shipments).map((c) => `${c.shipFrom} ${c.count}건`),
+                    ...(gompyoShipments.length ? [`곰표 ${gompyoShipments.length}건`] : []),
+                  ].join(' · ')}{' '}
+                  · 총 {milkrunTotals.totalPlt} PLT
+                  {gompyoShipments.length > 0 && (
+                    <span className="text-gray-400"> (곰표 PLT·운임은 아래 곰표 표에서 합산)</span>
+                  )}
                 </span>
                 <span className="font-semibold">
                   운임 합계 {num(milkrunTotals.totalFee)}원

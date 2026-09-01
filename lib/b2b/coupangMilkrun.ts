@@ -1,5 +1,5 @@
 /**
- * 쿠팡 밀크런 운임 참고 계산 (진도팜 출고분).
+ * 쿠팡 밀크런 운임 참고 계산 (진도팜·위킵 출고분).
  *
  * 시트 '쿠팡 밀크런 가격표' 전 행을 그대로 읽는다(출고지·계산단위별).
  * 컬럼은 센터별 요금(부가포함 값 그대로)이고, 헤더가 '고양1(27)' 형식이라
@@ -174,44 +174,114 @@ export function assignVehicles(plt: number): { tons: number; plt: number }[] {
   return out
 }
 
+// ── 운임 최저가 선택 (곰표·위킵 공통) ──────────────────────────
+/**
+ * 가격표의 두 방식을 매번 계산해 싼 쪽을 쓴다 — 고정 경계 없이 시트 값이 바뀌면 선택도 바뀐다.
+ *   ① BASIC(1pt 당) × PLT   ② 해당 PLT 를 커버하는 차량 구간 요금
+ * 진도팜(트럭)은 종전대로 차량 구간만 쓴다.
+ */
+export type FareChoice = {
+  fee: number | null // 최저가. 두 방식 모두 요금이 없으면 null → '요금 미등록'
+  method: string // 적용 방식 표기 ('BASIC×2' / '3.5톤 차량')
+  basicFee: number | null // ① BASIC × PLT
+  vehicleFee: number | null // ② 차량 구간
+  vehicleLabel: string // 배정된 차량 ('3.5톤' / '8톤 + 1톤')
+}
+
+/** PLT → 차량 배정. 가격표 구간을 벗어나면 가장 큰 구간부터 나눠 싣는다 */
+export function assignByTiers(tiers: VehicleTier[], plt: number): VehicleTier[] {
+  if (!tiers.length || plt <= 0) return []
+  const top = tiers[tiers.length - 1]
+  const out: VehicleTier[] = []
+  let left = plt
+  while (left > top.maxPlt) {
+    out.push(top)
+    left -= top.maxPlt
+  }
+  const tier = tiers.find((t) => left <= t.maxPlt)
+  if (tier) out.push(tier)
+  return out
+}
+
+/** 합산 PLT 한 건의 운임 — ①BASIC×PLT 와 ②차량 구간 중 싼 쪽 */
+export function chooseFare(
+  prices: CoupangMilkrunRow[],
+  priceShipFrom: string,
+  center: string,
+  plt: number,
+): FareChoice {
+  const basicUnit = lookupBasicFee(prices, priceShipFrom, center)
+  const basicFee = basicUnit === null || plt <= 0 ? null : basicUnit * plt
+
+  const vehicles = assignByTiers(vehicleTiers(prices, priceShipFrom), plt)
+  const fees = vehicles.map((v) => lookupCoupangFee(prices, priceShipFrom, center, v.tons))
+  const vehicleFee =
+    vehicles.length === 0 || fees.some((f) => f === null)
+      ? null
+      : fees.reduce((a: number, b) => a + (b ?? 0), 0)
+  const vehicleLabel = vehicles.map((v) => `${v.tons}톤`).join(' + ')
+
+  const useBasic =
+    basicFee !== null && (vehicleFee === null || basicFee <= vehicleFee)
+  if (useBasic) {
+    return { fee: basicFee, method: `BASIC×${plt}`, basicFee, vehicleFee, vehicleLabel }
+  }
+  if (vehicleFee !== null) {
+    return { fee: vehicleFee, method: `${vehicleLabel} 차량`, basicFee, vehicleFee, vehicleLabel }
+  }
+  return { fee: null, method: '요금 미등록', basicFee, vehicleFee, vehicleLabel }
+}
+
 /** 센터 × 입고예정일 묶음 = 차량 1건(또는 분할 여러 대) */
 export type MilkrunShipment = {
-  key: string // `${center}|${dueDate}`
+  key: string // `${shipFrom}|${center}|${dueDate}`
+  shipFrom: ShipFrom
   center: string
   dueDate: string
   poNumbers: string[]
   plt: number
   vehicles: { tons: number; plt: number }[]
   vehicleLabel: string // '8톤 + 1톤'
+  method: string // 적용 방식 — 진도팜은 차량 라벨, 위킵은 'BASIC×1' / '1톤'
   fee: number | null // 시트에 조합 요금 없으면 null → '요금 미등록'
 }
+
+/** 운임을 계산하는 출고지 — 곰표는 전용 모듈(coupangGompyo)에서 따로 센다 */
+export const MILKRUN_SHIP_FROMS: ShipFrom[] = ['진도팜', '위킵']
 
 export const vehicleLabelOf = (vs: { tons: number }[]): string =>
   vs.map((v) => `${v.tons}톤`).join(' + ')
 
 /**
- * 진도팜 출고 + 팔레트 필요(9박스 초과) 발주만 모아 센터·입고예정일별 차량/운임 산정.
- * 9박스 이하는 택배라 운임 계산에서 제외한다.
+ * 진도팜·위킵 출고 + 팔레트 필요(9박스 초과) 발주를 출고지 × 센터 × 입고예정일로 묶어 운임 산정.
+ * 9박스 이하는 택배라 운임 계산에서 제외한다. PLT 는 실측 적재 기준(pltCountOf).
+ *
+ * 요금 방식은 출고지마다 다르다 —
+ *   진도팜: 차량 구간 요금 (종전 그대로)
+ *   위킵  : 곰표와 같은 규칙 = min(BASIC 단가 × PLT, 차량 구간 요금)
+ * 가격표 출고지명은 상품마스터 '요금표 출고지'(priceOrigin) 에서만 온다(하드코딩 없음).
  */
 export function buildMilkrunShipments(
   groups: PoPalletGroup[],
   prices: CoupangMilkrunRow[],
-  priceShipFrom: string,
+  priceOrigin: Partial<Record<ShipFrom, string>>,
 ): MilkrunShipment[] {
   const map = new Map<string, MilkrunShipment>()
   for (const g of groups) {
-    if (g.shipFrom !== '진도팜' || !g.needsPallet) continue
-    const key = `${g.center}|${g.dueDate}`
+    if (!MILKRUN_SHIP_FROMS.includes(g.shipFrom) || !g.needsPallet) continue
+    const key = `${g.shipFrom}|${g.center}|${g.dueDate}`
     let s = map.get(key)
     if (!s) {
       s = {
         key,
+        shipFrom: g.shipFrom,
         center: g.center,
         dueDate: g.dueDate,
         poNumbers: [],
         plt: 0,
         vehicles: [],
         vehicleLabel: '',
+        method: '',
         fee: null,
       }
       map.set(key, s)
@@ -221,14 +291,36 @@ export function buildMilkrunShipments(
   }
   const list = [...map.values()]
   for (const s of list) {
-    s.vehicles = assignVehicles(s.plt)
-    s.vehicleLabel = vehicleLabelOf(s.vehicles)
-    const fees = s.vehicles.map((v) => lookupCoupangFee(prices, priceShipFrom, s.center, v.tons))
-    s.fee = fees.some((f) => f === null) ? null : fees.reduce((a: number, b) => a + (b ?? 0), 0)
+    const origin = priceOrigin[s.shipFrom] ?? ''
+    if (s.shipFrom === '진도팜') {
+      s.vehicles = assignVehicles(s.plt)
+      s.vehicleLabel = vehicleLabelOf(s.vehicles)
+      s.method = s.vehicleLabel
+      const fees = s.vehicles.map((v) => lookupCoupangFee(prices, origin, s.center, v.tons))
+      s.fee = fees.some((f) => f === null) ? null : fees.reduce((a: number, b) => a + (b ?? 0), 0)
+      continue
+    }
+    // 위킵 — 곰표와 같은 최저가 선택
+    const fare = chooseFare(prices, origin, s.center, s.plt)
+    s.vehicles = assignByTiers(vehicleTiers(prices, origin), s.plt).map((t) => ({
+      tons: t.tons,
+      plt: Math.min(s.plt, t.maxPlt),
+    }))
+    s.vehicleLabel = fare.vehicleLabel
+    s.method = fare.method
+    s.fee = fare.fee
   }
   return list.sort((a, b) =>
     a.dueDate === b.dueDate ? a.center.localeCompare(b.center) : a.dueDate.localeCompare(b.dueDate),
   )
+}
+
+/** 출고지별 차량 건수 — 하단 합계 문구용 */
+export function countByShipFrom(shipments: MilkrunShipment[]): { shipFrom: ShipFrom; count: number }[] {
+  return MILKRUN_SHIP_FROMS.map((sf) => ({
+    shipFrom: sf,
+    count: shipments.filter((s) => s.shipFrom === sf).length,
+  })).filter((x) => x.count > 0)
 }
 
 /** 발주 → 소속 차량 건 인덱스 */

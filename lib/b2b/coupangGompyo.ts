@@ -14,65 +14,12 @@
  */
 import { GOMPYO_BOXES_PER_PLT, GOMPYO_UNITS_PER_PLT, gompyoPltOf, type RoutedItem } from './coupang'
 import {
-  lookupBasicFee,
-  lookupCoupangFee,
-  vehicleTiers,
+  chooseFare,
   type CoupangMilkrunRow,
-  type VehicleTier,
+  type FareChoice,
 } from './coupangMilkrun'
 
-// ── 운임 최저가 선택 ─────────────────────────────────────────────
-export type FareChoice = {
-  fee: number | null // 최저가. 두 방식 모두 요금이 없으면 null → '요금 미등록'
-  method: string // 적용 방식 표기 ('BASIC×2' / '3.5톤 차량')
-  basicFee: number | null // ① BASIC × PLT
-  vehicleFee: number | null // ② 차량 구간
-  vehicleLabel: string // 배정된 차량 ('3.5톤' / '8톤 + 1톤')
-}
-
-/** PLT → 차량 배정. 가격표 구간을 벗어나면 가장 큰 구간부터 나눠 싣는다 */
-export function assignByTiers(tiers: VehicleTier[], plt: number): VehicleTier[] {
-  if (!tiers.length || plt <= 0) return []
-  const top = tiers[tiers.length - 1]
-  const out: VehicleTier[] = []
-  let left = plt
-  while (left > top.maxPlt) {
-    out.push(top)
-    left -= top.maxPlt
-  }
-  const tier = tiers.find((t) => left <= t.maxPlt)
-  if (tier) out.push(tier)
-  return out
-}
-
-/** 합산 PLT 한 건의 운임 — ①BASIC×PLT 와 ②차량 구간 중 싼 쪽 */
-export function chooseFare(
-  prices: CoupangMilkrunRow[],
-  priceShipFrom: string,
-  center: string,
-  plt: number,
-): FareChoice {
-  const basicUnit = lookupBasicFee(prices, priceShipFrom, center)
-  const basicFee = basicUnit === null || plt <= 0 ? null : basicUnit * plt
-
-  const vehicles = assignByTiers(vehicleTiers(prices, priceShipFrom), plt)
-  const fees = vehicles.map((v) => lookupCoupangFee(prices, priceShipFrom, center, v.tons))
-  const vehicleFee =
-    vehicles.length === 0 || fees.some((f) => f === null)
-      ? null
-      : fees.reduce((a: number, b) => a + (b ?? 0), 0)
-  const vehicleLabel = vehicles.map((v) => `${v.tons}톤`).join(' + ')
-
-  const useBasic =
-    basicFee !== null && (vehicleFee === null || basicFee <= vehicleFee)
-  if (useBasic) {
-    return { fee: basicFee, method: `BASIC×${plt}`, basicFee, vehicleFee, vehicleLabel }
-  }
-  if (vehicleFee !== null) {
-    return { fee: vehicleFee, method: `${vehicleLabel} 차량`, basicFee, vehicleFee, vehicleLabel }
-  }
-  return { fee: null, method: '요금 미등록', basicFee, vehicleFee, vehicleLabel }
-}
+export { chooseFare, type FareChoice } // 단일 소스: lib/b2b/coupangMilkrun.ts
 
 // ── 센터 × 입고예정일 묶음 ───────────────────────────────────────
 export type GompyoShipment = {
