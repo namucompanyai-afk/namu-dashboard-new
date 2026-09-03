@@ -238,6 +238,7 @@ export default function CoupangB2BPage() {
   const [invoiceName, setInvoiceName] = useState('')
   const [invoiceError, setInvoiceError] = useState('')
   const [copiedCenter, setCopiedCenter] = useState('')
+  const [copiedNo, setCopiedNo] = useState('')
 
   const parseInvoices = useCallback(async (file: File) => {
     setInvoiceError('')
@@ -261,6 +262,17 @@ export default function CoupangB2BPage() {
       await navigator.clipboard.writeText(textValue)
       setCopiedCenter(center)
       setTimeout(() => setCopiedCenter(''), 2000)
+    } catch {
+      setInvoiceError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
+    }
+  }, [])
+
+  // 송장번호 1개만 복사 — 쉽먼트 화면에 한 건씩 붙여 넣을 때
+  const copyInvoiceNo = useCallback(async (key: string, invoiceNo: string) => {
+    try {
+      await navigator.clipboard.writeText(invoiceNo)
+      setCopiedNo(key)
+      setTimeout(() => setCopiedNo(''), 1500)
     } catch {
       setInvoiceError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
     }
@@ -923,9 +935,23 @@ export default function CoupangB2BPage() {
                               {p.product} ({p.invoiceNos.length})
                             </div>
                             <div className="text-[11px] text-gray-700 font-mono leading-relaxed">
-                              {p.invoiceNos.map((no) => (
-                                <div key={no}>{no}</div>
-                              ))}
+                              {p.invoiceNos.map((no) => {
+                                const key = b.center + '|' + p.product + '|' + no
+                                return (
+                                  <div key={no} className="flex items-center justify-between gap-2">
+                                    <span>{no}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => copyInvoiceNo(key, no)}
+                                      title="송장번호 복사"
+                                      aria-label={no + ' 복사'}
+                                      className="shrink-0 px-1 text-gray-400 hover:text-gray-700"
+                                    >
+                                      {copiedNo === key ? '✅' : '📋'}
+                                    </button>
+                                  </div>
+                                )
+                              })}
                             </div>
                           </div>
                         ))}
