@@ -238,8 +238,9 @@ export function buildCoupangWikeepNotice(items: RoutedItem[]): string {
     lines.push('※ 즉석밥 24입: 겉박스 바코드 그대로 사용 (가림·부착 불필요)')
   }
   // 9박스 초과 발주는 택배 불가 → 팔레트 안내 (발주 단위)
+  // 밀크런 접수는 나무가 직접 하므로 위킵 전달 사항이 아니다 — 마감 표기는 쿠팡 페이지 팔레트 안내에만
   for (const g of palletPos) {
-    lines.push(`※ ${g.poNumber}: 9박스 초과 — 팔레트(KPP) 적재·랩핑, 밀크런 접수 D-1 16:00`)
+    lines.push(`※ ${g.poNumber}: 9박스 초과 — 팔레트(KPP) 적재·랩핑`)
   }
   lines.push(`※ 입고예정일 ${dateLabel} 도착 기준 발송`)
   return lines.join('\n')
