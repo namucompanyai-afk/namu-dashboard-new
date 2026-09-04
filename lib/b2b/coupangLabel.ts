@@ -197,11 +197,11 @@ export function buildCoupangWikeepNotice(items: RoutedItem[]): string {
   if (palletPos.length === 0) {
     lines.push(`총 ${cm(totalBoxes)}박스 택배 발송 부탁드립니다.`)
   } else if (parcelPos.length === 0) {
-    lines.push(`총 ${cm(totalBoxes)}박스 팔레트(KPP/AJ) 발송 부탁드립니다.`)
+    lines.push(`총 ${cm(totalBoxes)}박스 팔레트(KPP) 발송 부탁드립니다.`)
   } else {
     lines.push(`총 ${cm(totalBoxes)}박스 발송 부탁드립니다. (발주별 발송 방식 상이)`)
     for (const g of poGroups) {
-      lines.push(`- ${g.poNumber} ${cm(g.boxes)}박스: ${g.needsPallet ? '팔레트(KPP/AJ)' : '택배'} 발송`)
+      lines.push(`- ${g.poNumber} ${cm(g.boxes)}박스: ${g.needsPallet ? '팔레트(KPP)' : '택배'} 발송`)
     }
   }
 
@@ -239,7 +239,7 @@ export function buildCoupangWikeepNotice(items: RoutedItem[]): string {
   }
   // 9박스 초과 발주는 택배 불가 → 팔레트 안내 (발주 단위)
   for (const g of palletPos) {
-    lines.push(`※ ${g.poNumber}: 9박스 초과 — 팔레트(KPP/AJ) 적재·랩핑, 밀크런 접수 D-1 16:00`)
+    lines.push(`※ ${g.poNumber}: 9박스 초과 — 팔레트(KPP) 적재·랩핑, 밀크런 접수 D-1 16:00`)
   }
   lines.push(`※ 입고예정일 ${dateLabel} 도착 기준 발송`)
   return lines.join('\n')

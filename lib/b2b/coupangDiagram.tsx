@@ -582,7 +582,7 @@ export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
 
   const bodyBottom = panelsY + panelRows * panelH + (panelRows - 1) * PANEL_GAP
   const foots = [
-    'KPP/AJ 팔레트 사용 (목재·일회용 금지)',
+    'KPP 팔레트 사용 (목재·일회용 금지)',
     '랩핑 필수',
     'SKU별 자리(더미) 분리 — 더미 외부에 품목 스티커 부착',
     '같은 SKU 블록은 현장에서 교차 적재 + 랩핑',
