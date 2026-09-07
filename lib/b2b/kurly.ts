@@ -190,6 +190,30 @@ export function lookupVehicleFee(prices: MilkrunPrice[], totalPlt: number): Milk
   )
 }
 
+/** 1톤 차량에 실을 수 있는 최대 팔레트 장수 */
+export const MAX_PLT_PER_1TON = 2
+
+/** 배차 톤수 — 2PLT 이하 1톤, 3PLT 이상 3.5톤. 0 PLT 면 배차 없음(null) */
+export const vehicleTonOf = (totalPlt: number): '1톤' | '3.5톤' | null =>
+  totalPlt <= 0 ? null : totalPlt <= MAX_PLT_PER_1TON ? '1톤' : '3.5톤'
+
+/**
+ * 톤수로 차량비 행을 찾는다 — 단가는 **요금표 시트 값만** 쓴다.
+ * 같은 톤수 행이 여럿이면 총 PLT 가 구간에 드는 행을 먼저 고르고, 없으면 그 톤수 첫 행.
+ * 못 찾으면 null — 호출부는 0 으로 채우지 않고 '단가 미확인'으로 표시한다.
+ */
+export function lookupVehicleFeeByTon(
+  prices: MilkrunPrice[],
+  ton: string,
+  totalPlt: number,
+): MilkrunPrice | null {
+  const rows = prices.filter((p) => isVehicleFee(p.gubun) && norm(p.vehicle).startsWith(norm(ton)))
+  const inRange = rows.find(
+    (p) => totalPlt >= (p.minPlt ?? 0) && totalPlt <= (p.maxPlt ?? Number.POSITIVE_INFINITY),
+  )
+  return inRange ?? rows[0] ?? null
+}
+
 // ── 컬리 발주 xlsx ───────────────────────────────────────────────
 export type KurlyOrderRow = {
   productCode: string // 발주 내역='발주상품코드'(P···, 행 단위) / 발주서내역='발주코드'(T···)
@@ -472,7 +496,17 @@ export type PalletGroup = {
   viaCenters: string[] // 참고 표시용
   skuCodes: string[] // 이 입고지의 distinct 마스터코드
   rowIndexes: number[] // orders 배열 인덱스 (등장 순서)
-  plt: number // 실측 자리 수 + PLT당 SKU 한도로 계산한 팔레트 장수
+  /**
+   * 표시·포털 신고용 장수 — 혼적 장은 **대표 입고지(김포)에만** 1장으로 잡는다.
+   * 그래서 요약 행 합계 = 헤더 총 PLT = 구성도 장수 = 차량비 기준 PLT 로 항상 일치한다.
+   */
+  plt: number
+  /** 물류대행비(이고비) lookup 용 — 혼적 장을 실린 입고지 **각각** 1장으로 잡는다 */
+  billedPlt: number
+  /** 이 입고지 대표 장에 함께 실린 다른 입고지 (혼적 대표 쪽 표기) */
+  mixedWith: string[]
+  /** 이 입고지 물량이 올라탄 대표 입고지 — 혼적으로 plt 가 0 일 때만 채워진다 */
+  sharedTo: string
   totalBoxes: number
   totalUnits: number
   overSku: boolean // SKU 3 초과 → 경고
@@ -525,6 +559,13 @@ export type PalletUnit = {
 
 /** 경유 혼적이 가능한 권역 — 둘 다 입고대행센터(평택1) 경유. 평택 직납은 제외 */
 const MIXABLE: Region[] = ['김포', '창원']
+
+/**
+ * 경유 혼적 성립 상한 (박스) — 단일 규칙, 모드 토글 없음.
+ * 김포 · 창원이 **둘 다** 이 박스 수 이하일 때만 한 장에 합적한다.
+ * 한쪽이라도 11박스 이상이면 입고지별로 분리한다.
+ */
+export const MIX_MAX_BOXES = 10
 
 const unitOf = (dest: string, region: Region, slots: UnitSlot[]): PalletUnit => {
   const dims = slots.map((s) => s.dims)
@@ -606,7 +647,14 @@ export function buildPalletUnits(
     }
   }
 
-  // 혼적 — 김포·창원의 마지막 장끼리 한 장에 들어가면 합친다
+  // ── 혼적 판정 (단일 규칙) ──────────────────────────────────────
+  // 김포 ≤ MIX_MAX_BOXES 박스 AND 창원 ≤ MIX_MAX_BOXES 박스 → 두 권역의 마지막 장을 한 장으로.
+  // 한쪽이라도 초과하면 입고지별 분리. 평택은 직납이라 애초에 MIXABLE 이 아니다(항상 단독).
+  // 성립하더라도 바닥 자리 수 · PLT당 SKU 한도를 넘으면 mergeUnits 가 null 을 내고 분리된다.
+  const boxesIn = (r: Region): number =>
+    orders.reduce((s, o) => (regionOf(o.dest, o.viaCenter) === r ? s + o.boxCount : s), 0)
+  if (!MIXABLE.every((r) => boxesIn(r) <= MIX_MAX_BOXES)) return units
+
   const lastOf = (r: Region): number => {
     for (let i = units.length - 1; i >= 0; i--) {
       if (!units[i].mixed && units[i].regions[0] === r) return i
@@ -628,18 +676,19 @@ export function buildPalletUnits(
 }
 
 /**
- * 최종 입고지(입고지 컬럼) 기준 팔레트 분리.
+ * 최종 입고지(입고지 컬럼) 기준 팔레트 요약 — **buildPalletUnits 의 결과에서만** 파생한다.
  * 경유센터가 같아도 최종 입고지가 다르면 별도 PLT.
  *
  * 한 입고지의 팔레트 장수는 실측 박스 치수로 계산한다 —
  * 바닥 자리(1,100×1,100 격자) 와 PLT당 SKU 한도를 둘 다 넘기면 자동 분할한다.
- * 김포·창원 자투리 장이 혼적되면 그 장은 **두 입고지 모두**에 1장으로 잡힌다
- * (포털 파렛트수 신고·이고비는 입고지별 물량 기준이므로).
+ * 김포·창원 혼적 장은 **대표 입고지(김포)에만** plt 1 로 잡고 창원은 0 + sharedTo 표기다
+ * (요약 행 합계가 실제 장수와 어긋나지 않게). 물류대행비만 billedPlt 로 양쪽 각각 센다.
  * masterByCode 를 안 넘기면 치수 미등록으로 보고 가정값(400mm)으로 계산한다.
  */
 export function buildPallets(
   orders: KurlyOrderRow[],
   masterByCode: Record<string, ProductMaster> = {},
+  prebuilt?: PalletUnit[],
 ): PalletGroup[] {
   const map = new Map<string, PalletGroup>()
   orders.forEach((o, i) => {
@@ -652,7 +701,10 @@ export function buildPallets(
         viaCenters: [],
         skuCodes: [],
         rowIndexes: [],
-        plt: 1,
+        plt: 0,
+        billedPlt: 0,
+        mixedWith: [],
+        sharedTo: '',
         totalBoxes: 0,
         totalUnits: 0,
         overSku: false,
@@ -666,18 +718,29 @@ export function buildPallets(
     if (o.viaCenter && !g.viaCenters.includes(o.viaCenter)) g.viaCenters.push(o.viaCenter)
   })
   const list = [...map.values()]
-  const units = buildPalletUnits(orders, masterByCode)
+  const units = prebuilt ?? buildPalletUnits(orders, masterByCode)
   for (const g of list) {
-    // 혼적 장은 실린 입고지 **각각**에 1장으로 잡는다 (포털 신고·이고비 기준)
-    g.plt = units.filter((u) => u.dests.includes(g.dest)).length
+    // 표시·포털: 혼적 장은 대표 입고지(dests[0])에만 1장 → 행 합계 = units.length
+    g.plt = units.filter((u) => u.dests[0] === g.dest).length
+    // 물류대행비: 혼적 여부와 무관하게 최종 입고지별 물량 기준 (혼적 장은 양쪽 각각 1장)
+    g.billedPlt = units.filter((u) => u.dests.includes(g.dest)).length
+    g.mixedWith = [
+      ...new Set(
+        units.filter((u) => u.mixed && u.dests[0] === g.dest).flatMap((u) => u.dests.slice(1)),
+      ),
+    ]
+    g.sharedTo =
+      g.plt === 0 ? units.find((u) => u.mixed && u.dests.includes(g.dest))?.dests[0] ?? '' : ''
     g.overSku = g.skuCodes.length > MAX_SKU_PER_PLT
   }
   return list
 }
 
 /**
- * 포털 파렛트수 입력값 — 같은 입고지 내 첫 발주 행에 그 입고지의 팔레트 장수,
- * 나머지 행은 0. 반환값은 orders 와 같은 길이/순서.
+ * 포털 파렛트수 입력값 — 구성도 PLT 와 **같은 소스**(PalletGroup.plt).
+ * 한 입고지에 발주가 여러 건이면 첫 발주 행에만 장수를 적고 나머지는 0.
+ * 혼적 장은 대표 입고지(김포)에만 잡히므로 창원 몫은 0 이 된다.
+ * 반환값은 orders 와 같은 길이/순서.
  */
 export function palletInputValues(orders: KurlyOrderRow[], pallets: PalletGroup[]): number[] {
   const out = new Array(orders.length).fill(0)
@@ -687,91 +750,170 @@ export function palletInputValues(orders: KurlyOrderRow[], pallets: PalletGroup[
   return out
 }
 
+/** 팔레트 산정 결과 — 화면의 모든 팔레트 수치는 이 하나에서 나온다 */
+export type PalletCalc = {
+  units: PalletUnit[] // 실제로 준비하는 팔레트 (구성도 = 이 배열)
+  groups: PalletGroup[] // 입고지별 요약 (units 에서 파생)
+  totalPlt: number // = units.length = groups 의 plt 합 = 헤더 '총 N PLT'
+  inputs: number[] // 포털 파렛트수 (orders 와 같은 길이/순서)
+}
+
+/**
+ * **팔레트 산정 단일 진입점.**
+ * 포털 파렛트수 · 팔레트 요약(행+헤더) · 적재 구성도 · 운송비가 전부 이 결과를 참조한다.
+ * (입고예정일 분리는 호출부에서 sliceByDueDate 로 먼저 나눈 뒤 슬라이스마다 부른다)
+ */
+export function calcPallets(
+  orders: KurlyOrderRow[],
+  masterByCode: Record<string, ProductMaster> = {},
+): PalletCalc {
+  const units = buildPalletUnits(orders, masterByCode)
+  const groups = buildPallets(orders, masterByCode, units)
+  return { units, groups, totalPlt: units.length, inputs: palletInputValues(orders, groups) }
+}
+
 // ── 운송비 계산 ──────────────────────────────────────────────────
-export type CostLine = { label: string; unit: number; qty: number; amount: number; note?: string }
+export type CostLine = {
+  label: string
+  unit: number
+  qty: number
+  amount: number
+  note?: string
+  /** 요금표 근거 (시트 탭·구분 행·단가) — 화면 툴팁으로 그대로 보여준다 */
+  source?: string
+  /** 요금표에 단가 행이 없음 — 0 으로 채우지 않고 '단가 미확인'으로 표시한다 */
+  unknownUnit?: boolean
+}
 
 export type TransportCost = {
   totalPlt: number
-  vehicle: CostLine // 차량비 (총 PLT 구간 lookup)
+  vehicleTon: string // '1톤' | '3.5톤' | '' (0 PLT)
+  vehicle: CostLine // 차량비 (톤수 규칙 → 요금표 행 lookup)
   via: CostLine // 경유비 × 경유 곳 수
-  moveKimpo: CostLine // 이고비_김포 × 김포행 PLT
-  moveChangwon: CostLine // 이고비_창원 × 창원행 PLT
+  moveKimpo: CostLine // 물류대행비_김포 × 김포행 PLT (billedPlt)
+  moveChangwon: CostLine // 물류대행비_창원 × 창원행 PLT (billedPlt)
   total: number
   warnings: string[]
 }
 
-/**
- * 운송비 = 차량비 + 경유비×경유곳수 + 이고비_김포×김포PLT + 이고비_창원×창원PLT.
- * 전부 '부가포함 단가' 사용. 경유 곳 수는 김포/창원 중 물량 있는 곳만(평택 제외).
- *
- * 차량비 구간에 넣는 총 PLT 는 **실제로 싣는 팔레트 장수**다 — 혼적으로 한 장이
- * 줄면 그만큼 줄어든다. 이고비는 입고지별 물량 기준이라 혼적 장을 양쪽에 각각
- * 계상한다(pallets[].plt 가 이미 그렇게 계산돼 있다).
- * 단가·구간 lookup 자체는 건드리지 않는다.
- */
-export function calcTransportCost(
-  pallets: PalletGroup[],
-  prices: MilkrunPrice[],
-  physicalPlt?: number,
-): TransportCost {
-  const warnings: string[] = []
-  const totalPlt = physicalPlt ?? pallets.reduce((s, g) => s + g.plt, 0)
-  const pltIn = (r: Region) => pallets.filter((g) => g.region === r).reduce((s, g) => s + g.plt, 0)
+const PRICE_TAB = "구글시트 '컬리 밀크런 가격표'"
 
-  const kimpoPlt = pltIn('김포')
-  const changwonPlt = pltIn('창원')
+/** 요금표 근거 문자열 — 못 찾으면 '확인 필요' */
+const sourceOf = (p: MilkrunPrice | null, gubun: string): string => {
+  if (!p) return `${PRICE_TAB} 에 구분='${gubun}' 행이 없습니다 — 확인 필요`
+  const range =
+    p.minPlt != null || p.maxPlt != null ? ` · ${p.minPlt ?? 0}~${p.maxPlt ?? '∞'} PLT` : ''
+  const veh = p.vehicle ? ` · ${p.vehicle}` : ''
+  const note = p.note ? ` · 비고 "${p.note}"` : ''
+  return (
+    `${PRICE_TAB} 구분='${p.gubun}'${veh}${range} · 부가포함 단가 ` +
+    `${p.unitPrice.toLocaleString('ko-KR')}원 (원가 ${p.cost.toLocaleString('ko-KR')}원)${note}`
+  )
+}
+
+/**
+ * 운송비 = 차량비 + 경유비×경유곳수 + 물류대행비_김포×김포PLT + 물류대행비_창원×창원PLT.
+ * 전부 요금표의 '부가포함 단가'를 쓰고, 단가·구간 lookup 테이블 값은 건드리지 않는다.
+ *
+ * 차량비 — 톤수는 총 PLT 로 정한다(2PLT 이하 1톤 / 3PLT 이상 3.5톤, 1톤 최대 2PLT).
+ *   총 PLT 는 calc.totalPlt = 실제로 싣는 팔레트 장수(혼적 반영) 하나뿐이다.
+ *   해당 톤수 행이 요금표에 없으면 0 으로 채우지 않고 '단가 미확인'으로 남긴다.
+ *
+ * 경유비 — 근거: 구글시트 '컬리 밀크런 가격표' 구분='경유비' 행 (차량='곳당').
+ *   2026-09-08 확인 기준 부가포함 단가 35,200원 / 원가 32,000원,
+ *   비고 "김포·창원행 물량 실릴 때 해당 곳 수만큼 가산".
+ *   값은 매번 시트에서 읽는다 — 여기에 하드코딩하지 않는다. 행이 없으면 '확인 필요'.
+ *
+ * 물류대행비(시트 구분값은 '이고비') — 혼적 여부와 무관하게 **최종 입고지별 PLT**로
+ *   각각 lookup 한다(PalletGroup.billedPlt). 혼적 장은 김포·창원 양쪽에 각각 1장.
+ */
+export function calcTransportCost(calc: PalletCalc, prices: MilkrunPrice[]): TransportCost {
+  const pallets = calc.groups
+  const warnings: string[] = []
+  const totalPlt = calc.totalPlt
+
+  // 물류대행비 기준 PLT — 혼적 장을 양쪽에 각각 계상한 billedPlt 합
+  const billedIn = (r: Region) =>
+    pallets.filter((g) => g.region === r).reduce((s, g) => s + g.billedPlt, 0)
+  const kimpoPlt = billedIn('김포')
+  const changwonPlt = billedIn('창원')
   const viaCount = (kimpoPlt > 0 ? 1 : 0) + (changwonPlt > 0 ? 1 : 0) // 평택은 경유 아님
 
-  const veh = lookupVehicleFee(prices, totalPlt)
-  if (!veh && totalPlt > 0) warnings.push(`차량비 구간을 찾지 못했습니다 (총 ${totalPlt} PLT)`)
+  const ton = vehicleTonOf(totalPlt)
+  const veh = ton ? lookupVehicleFeeByTon(prices, ton, totalPlt) : null
+  if (ton && !veh) {
+    warnings.push(`요금표에 ${ton} 차량비 행이 없습니다 — 단가 미확인 (0 으로 계산하지 않음)`)
+  }
+  if (veh && veh.maxPlt != null && totalPlt > veh.maxPlt) {
+    warnings.push(
+      `총 ${totalPlt} PLT — ${ton} 요금 구간(${veh.minPlt ?? 0}~${veh.maxPlt} PLT) 상한 초과. 배차 확인 필요`,
+    )
+  }
 
   const viaRow = prices.find((p) => isViaFee(p.gubun)) ?? null
-  if (!viaRow && viaCount > 0) warnings.push('경유비 단가 행을 찾지 못했습니다')
+  if (!viaRow && viaCount > 0) warnings.push('경유비 단가 행을 찾지 못했습니다 — 확인 필요')
 
   const kimpoRow = prices.find((p) => isMoveFee(p.gubun, '김포')) ?? null
-  if (!kimpoRow && kimpoPlt > 0) warnings.push('이고비_김포 단가 행을 찾지 못했습니다')
+  if (!kimpoRow && kimpoPlt > 0) warnings.push('물류대행비_김포 단가 행을 찾지 못했습니다 — 확인 필요')
 
   const changwonRow = prices.find((p) => isMoveFee(p.gubun, '창원')) ?? null
-  if (!changwonRow && changwonPlt > 0) warnings.push('이고비_창원 단가 행을 찾지 못했습니다')
+  if (!changwonRow && changwonPlt > 0) {
+    warnings.push('물류대행비_창원 단가 행을 찾지 못했습니다 — 확인 필요')
+  }
 
   const unknown = pallets.filter((g) => g.region === '기타')
   if (unknown.length > 0) {
-    warnings.push(`권역 미판별 입고지: ${unknown.map((g) => g.dest).join(', ')} — 이고비 미반영`)
+    warnings.push(`권역 미판별 입고지: ${unknown.map((g) => g.dest).join(', ')} — 물류대행비 미반영`)
   }
   for (const g of pallets) {
     if (g.overSku) warnings.push(`${g.dest}: SKU ${g.skuCodes.length}종 — PLT당 최대 ${MAX_SKU_PER_PLT} 초과`)
   }
 
-  const line = (label: string, unit: number, qty: number, note?: string): CostLine => ({
+  const line = (
+    label: string,
+    row: MilkrunPrice | null,
+    gubun: string,
+    qty: number,
+    note?: string,
+  ): CostLine => ({
     label,
-    unit,
+    unit: row?.unitPrice ?? 0,
     qty,
-    amount: unit * qty,
+    amount: row ? row.unitPrice * qty : 0,
     note,
+    source: sourceOf(row, gubun),
+    unknownUnit: !row && qty > 0,
   })
 
   const vehicle = line(
     veh?.gubun || '차량비',
-    veh?.unitPrice ?? 0,
+    veh,
+    `차량비(${ton ?? '-'})`,
     totalPlt > 0 ? 1 : 0,
-    veh ? `${veh.minPlt ?? 0}~${veh.maxPlt ?? '∞'} PLT · ${veh.vehicle}` : undefined,
+    ton ? `총 ${totalPlt} PLT → ${ton}${veh ? ` · ${veh.vehicle}` : ''}` : '배차 없음',
   )
-  const via = line(viaRow?.gubun || '경유비', viaRow?.unitPrice ?? 0, viaCount, '김포/창원 중 물량 있는 곳')
-  const moveKimpo = line(kimpoRow?.gubun || '이고비_김포', kimpoRow?.unitPrice ?? 0, kimpoPlt, '김포행 PLT')
+  const via = line(viaRow?.gubun || '경유비', viaRow, '경유비', viaCount, '김포/창원 중 물량 있는 곳')
+  const moveKimpo = line(kimpoRow?.gubun || '이고비_김포', kimpoRow, '이고비_김포', kimpoPlt, '김포행 PLT')
   const moveChangwon = line(
     changwonRow?.gubun || '이고비_창원',
-    changwonRow?.unitPrice ?? 0,
+    changwonRow,
+    '이고비_창원',
     changwonPlt,
     '창원행 PLT',
   )
 
   return {
     totalPlt,
+    vehicleTon: ton ?? '',
     vehicle,
     via,
     moveKimpo,
     moveChangwon,
-    total: vehicle.amount + via.amount + moveKimpo.amount + moveChangwon.amount,
+    // 단가 미확인 줄은 0 으로 더하지 않고 합계에서 뺀다 (warnings 로 노출)
+    total: [vehicle, via, moveKimpo, moveChangwon].reduce(
+      (a, l) => a + (l.unknownUnit ? 0 : l.amount),
+      0,
+    ),
     warnings,
   }
 }

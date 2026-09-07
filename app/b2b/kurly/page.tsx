@@ -3,18 +3,18 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ORDER_SHEET_NAME,
+  MAX_PLT_PER_1TON,
   MAX_SKU_PER_PLT,
-  buildPallets,
-  buildPalletUnits,
+  MIX_MAX_BOXES,
+  calcPallets,
   calcTransportCost,
   indexByMasterCode,
   norm,
-  palletInputValues,
   sliceByDueDate,
+  type CostLine,
   type KurlyOrderRow,
   type MilkrunPrice,
-  type PalletGroup,
-  type PalletUnit,
+  type PalletCalc,
   type ProductMaster,
   type TransportCost,
 } from '@/lib/b2b/kurly'
@@ -105,20 +105,16 @@ export default function B2BPage() {
   const sections = useMemo(
     () =>
       sliceByDueDate(orders).map((sl) => {
-        // 팔레트 장수는 실측 박스 치수로 계산한다 — 상품마스터가 로드된 뒤 확정된다
-        const pallets = buildPallets(sl.orders, masterByCode)
-        // 실제로 싣는 팔레트 장수 (김포·창원 자투리 경유 혼적 반영) — 차량비 구간 기준
-        const units = buildPalletUnits(sl.orders, masterByCode)
-        const cost = calcTransportCost(pallets, prices, units.length)
-        const plan = buildPalletPlan(sl.orders, units, masterByCode)
+        // 팔레트 산정 단일 진입점 — 요약 행·헤더 총계·포털 파렛트수·구성도·운송비가 모두 이 결과다
+        const calc = calcPallets(sl.orders, masterByCode)
+        const cost = calcTransportCost(calc, prices)
+        const plan = buildPalletPlan(sl.orders, calc.units, masterByCode)
         return {
           ...sl,
-          pallets,
-          units,
+          calc,
           cost,
           plan,
           svg: plan.panels.length ? renderPalletPlanSvg(plan) : '',
-          inputs: palletInputValues(sl.orders, pallets),
         }
       }),
     [orders, masterByCode, prices],
@@ -128,7 +124,7 @@ export default function B2BPage() {
   // 포털 파렛트수 — 입고일 단위로 매긴 값을 원본 행 순서로 되돌린다
   const pltInputs = useMemo(() => {
     const out: number[] = new Array(orders.length).fill(0)
-    for (const sec of sections) sec.rowIndexes.forEach((oi, k) => (out[oi] = sec.inputs[k]))
+    for (const sec of sections) sec.rowIndexes.forEach((oi, k) => (out[oi] = sec.calc.inputs[k]))
     return out
   }, [orders, sections])
 
@@ -465,12 +461,10 @@ type DueSection = {
   dueDate: string
   rowIndexes: number[]
   orders: KurlyOrderRow[]
-  pallets: PalletGroup[]
-  units: PalletUnit[]
+  calc: PalletCalc
   cost: TransportCost
   plan: PalletPlan
   svg: string
-  inputs: number[]
 }
 
 /** '2026-08-06' → '8/6 입고' */
@@ -504,13 +498,24 @@ function PalletCostSection({
   openDests: string[]
   setOpenDests: React.Dispatch<React.SetStateAction<string[]>>
 }) {
-  const costLines = [sec.cost.vehicle, sec.cost.via, sec.cost.moveKimpo, sec.cost.moveChangwon]
+  const costLines: CostLine[] = [
+    sec.cost.vehicle,
+    sec.cost.via,
+    sec.cost.moveKimpo,
+    sec.cost.moveChangwon,
+  ]
+  const unknownLines = costLines.filter((l) => l.unknownUnit)
+  // 혼적 표기 — 대표 입고지 쪽에서 본 합적 상대
+  const mixedNote = sec.calc.groups
+    .filter((g) => g.mixedWith.length > 0)
+    .map((g) => `${g.dest}+${g.mixedWith.join('+')} 혼적 1PLT`)
+    .join(' · ')
   return (
     <>
       {showHeader && (
         <SectionHeader
           dueDate={sec.dueDate}
-          note={`총 ${sec.cost.totalPlt} PLT · 운송비 ${won(sec.cost.total)}원`}
+          note={`총 ${sec.cost.totalPlt} PLT · ${sec.cost.vehicleTon || '배차 없음'} · 운송비 ${won(sec.cost.total)}원`}
         />
       )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -518,7 +523,8 @@ function PalletCostSection({
           <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
             <h2 className="text-sm font-semibold">팔레트 요약</h2>
             <span className="text-xs text-gray-500">
-              총 {sec.cost.totalPlt} PLT · 입고지 {sec.pallets.length}곳
+              총 {sec.cost.totalPlt} PLT · 입고지 {sec.calc.groups.length}곳
+              {mixedNote && <span className="text-teal-700"> · {mixedNote}</span>}
             </span>
           </div>
           <div className="overflow-x-auto">
@@ -534,7 +540,7 @@ function PalletCostSection({
                 </tr>
               </thead>
               <tbody>
-                {sec.pallets.map((g) => {
+                {sec.calc.groups.map((g) => {
                   const key = `${sec.dueDate}|${g.dest}`
                   const open = openDests.includes(key)
                   return (
@@ -556,7 +562,17 @@ function PalletCostSection({
                           {g.dest}
                         </td>
                         <td className="px-3 py-2 text-gray-600">{g.region}</td>
-                        <td className="px-3 py-2 text-right">{g.plt}</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          {g.plt}
+                          {g.sharedTo && (
+                            <span className="ml-1 text-[11px] text-teal-700">— {g.sharedTo}와 합적</span>
+                          )}
+                          {g.mixedWith.length > 0 && (
+                            <span className="ml-1 text-[11px] text-teal-700">
+                              (+{g.mixedWith.join(', ')} 합적)
+                            </span>
+                          )}
+                        </td>
                         <td className={'px-3 py-2 text-right ' + (g.overSku ? 'text-red-600 font-semibold' : '')}>
                           {g.skuCodes.length}
                           {g.overSku && <span className="ml-1 text-xs">⚠️ 3초과</span>}
@@ -608,13 +624,18 @@ function PalletCostSection({
           </div>
           <p className="px-4 py-2 text-[11px] text-gray-400 border-t border-gray-100">
             최종 입고지 기준 분리 · 실측 박스 치수로 바닥 자리를 계산해 한 장을 넘으면 자동 분할 (PLT당 최대{' '}
-            {MAX_SKU_PER_PLT} SKU)
+            {MAX_SKU_PER_PLT} SKU) · 혼적: 김포·창원이 <b>둘 다 {MIX_MAX_BOXES}박스 이하</b>일 때만 한 장에
+            합적(자리·SKU 한도 내), 한쪽이라도 {MIX_MAX_BOXES + 1}박스 이상이면 입고지별 분리 · 평택(직납) 항상 단독 ·
+            물류대행비는 혼적과 무관하게 입고지별 물량으로 계산
           </p>
         </div>
 
         <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-200">
             <h2 className="text-sm font-semibold">운송비 (부가포함)</h2>
+            <p className="mt-1 text-[11px] text-gray-400">
+              단가는 구글시트 &apos;컬리 밀크런 가격표&apos; 값만 사용 · 항목명에 마우스를 올리면 요금표 근거 표시
+            </p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -630,17 +651,29 @@ function PalletCostSection({
                 {costLines.map((l, i) => (
                   <tr key={i} className="border-t border-gray-100">
                     <td className="px-3 py-2">
-                      {costLabel(l.label)}
+                      <span title={l.source} className="cursor-help border-b border-dotted border-gray-300">
+                        {costLabel(l.label)}
+                      </span>
                       {l.note && <div className="text-[11px] text-gray-400">{l.note}</div>}
+                      {l.source && <div className="text-[11px] text-gray-400">근거: {l.source}</div>}
                     </td>
-                    <td className="px-3 py-2 text-right">{won(l.unit)}</td>
+                    <td className={'px-3 py-2 text-right ' + (l.unknownUnit ? 'text-red-600' : '')}>
+                      {l.unknownUnit ? '단가 미확인' : won(l.unit)}
+                    </td>
                     <td className="px-3 py-2 text-right">{l.qty}</td>
-                    <td className="px-3 py-2 text-right">{won(l.amount)}</td>
+                    <td className={'px-3 py-2 text-right ' + (l.unknownUnit ? 'text-red-600' : '')}>
+                      {l.unknownUnit ? '단가 미확인' : won(l.amount)}
+                    </td>
                   </tr>
                 ))}
                 <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                   <td className="px-3 py-2" colSpan={3}>
                     합계
+                    {unknownLines.length > 0 && (
+                      <span className="ml-1 text-[11px] font-normal text-red-600">
+                        ({unknownLines.map((l) => costLabel(l.label)).join(', ')} 단가 미확인 — 합계 미포함)
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">{won(sec.cost.total)}원</td>
                 </tr>
@@ -715,7 +748,9 @@ function PlanSection({
         <div className="p-4 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_260px] gap-4">
           <PalletPlanView svg={sec.svg} />
           <div className="text-xs text-gray-600 space-y-2 xl:border-l xl:border-gray-100 xl:pl-4">
-            <p>① 3PLT 이상 → 2.5톤 이상 배차</p>
+            <p>
+              ① 배차 톤수: {MAX_PLT_PER_1TON}PLT 이하 → 1톤 / {MAX_PLT_PER_1TON + 1}PLT 이상 → 3.5톤
+            </p>
             <p>② 포털 파렛트수: 입고일별 같은 입고지 첫 발주만 기입, 나머지 0</p>
             <p>③ 배차 마감 입고 전일 18:00 / 변경 불가 전일 17:00 / 배차 문자 전일 21:30경</p>
           </div>
