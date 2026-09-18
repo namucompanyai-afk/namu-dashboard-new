@@ -149,20 +149,21 @@ export default function CoupangB2BPage() {
   const notDelivered = useMemo(() => routed.filter((r) => r.notDelivered), [routed])
   const fileStats = useMemo(() => summarizeCoupangFiles(items), [items])
 
-  // 팔레트 필요 안내 — 발주번호 × 출고지 박스 합계 기준(운송수단 자동 판정 없음)
+  // 팔레트 필요 안내 — 센터 × 입고예정일 × 출고지 박스 합계 기준
   const palletGroups = useMemo(() => buildPalletGroups(routed), [routed])
-  // PLT 장수는 실측 적재 기준(자리 수 × SKU별 단수) — 로켓 양식 파렛트 수도 같은 값을 쓴다
-  const pltByPo = useMemo(() => {
+  // PLT 장수는 실측 적재 기준(자리 수 × SKU별 단수) — 로켓 양식 파렛트 수도 같은 값을 쓴다.
+  // 키는 묶음(센터|입고예정일)이고, 로켓 양식은 진도팜분만 쓰므로 진도팜 묶음만 담는다.
+  const pltByGroup = useMemo(() => {
     const m: Record<string, number> = {}
-    for (const g of palletGroups) m[g.poNumber] = (m[g.poNumber] ?? 0) + pltCountOf(g)
+    for (const g of palletGroups) if (g.shipFrom === '진도팜') m[g.key] = pltCountOf(g)
     return m
   }, [palletGroups])
 
   const rocket = useMemo(
-    () => buildRocketRows(jindo, centers, madeDate, pltByPo),
-    [jindo, centers, madeDate, pltByPo],
+    () => buildRocketRows(jindo, centers, madeDate, pltByGroup),
+    [jindo, centers, madeDate, pltByGroup],
   )
-  // 9박스 이하 = 택배 발송분 / 초과 = 트럭 발송분(밀크런)
+  // 센터·입고예정일 묶음 9박스 이하 = 택배 발송분 / 초과 = 트럭 발송분(밀크런)
   const { parcel: rocketParcel, truck: rocketTruck } = useMemo(() => splitRocketRows(rocket), [rocket])
   const summary = useMemo(() => summarizeCoupang(routed), [routed])
 
@@ -573,7 +574,7 @@ export default function CoupangB2BPage() {
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">팔레트 필요 안내</h2>
               <span className="text-xs text-gray-500">
-                발주 × 출고지 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가
+                센터 × 입고예정일 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -715,8 +716,9 @@ export default function CoupangB2BPage() {
             )}
             <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs">
               {advisories.map((a) => (
-                <p key={`${a.center}-${a.dueDate}`} className="text-amber-700">
-                  ※ {a.center} · {a.dueDate}: 동일 센터·동일 입고일 합산 {num(a.boxes)}박스 — 팔레트 여부 확인 권장
+                <p key={`${a.shipFrom}-${a.center}-${a.dueDate}`} className="text-amber-700">
+                  ※ {a.center} · {a.dueDate}: 발주 {a.poCount}건 합산 {num(a.boxes)}박스 — 트럭
+                  발송분(팔레트)으로 판정
                 </p>
               ))}
               {[...new Set(needPallet.map((g) => g.shipFrom))].map((sf) => (
@@ -769,7 +771,7 @@ export default function CoupangB2BPage() {
               </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-gray-600">
-                  제조일자
+                  제조일자 (발주서에 없을 때만 적용)
                   <input
                     type="date"
                     value={madeDate}

@@ -8,7 +8,14 @@
  */
 import React from 'react'
 import { maxTiersOf as tiersByHeight, norm } from './kurly'
-import { PALLET_BOX_LIMIT, type RoutedItem, type ShipFrom } from './coupang'
+import {
+  PALLET_BOX_LIMIT,
+  groupByCenterDue,
+  shipGroupKey,
+  type RoutedItem,
+  type ShipFrom,
+  type ShipGroup,
+} from './coupang'
 import { downloadSvgAsJpg } from './svgExport'
 
 // ── 적재 가정 ────────────────────────────────────────────────────
@@ -27,25 +34,24 @@ export const SHIP_FROM_GUIDE: Record<string, string> = {
   위킵: '화성 출고는 밀크런 이용 가능 (접수 마감 D-1 영업일 16:00, 유료·매입대금 차감)',
 }
 
-// ── 발주 × 출고지 묶음 ───────────────────────────────────────────
-export type PoPalletGroup = {
-  poNumber: string
-  center: string
-  dueDate: string
-  shipFrom: ShipFrom
-  items: RoutedItem[]
-  boxes: number
-  needsPallet: boolean
-}
+// ── 센터 × 입고예정일 묶음 ───────────────────────────────────────
+/** 묶음 타입·9박스 판정은 lib/b2b/coupang.ts 가 단일 소스 (로켓 양식과 같은 함수) */
+export type PoPalletGroup = ShipGroup
+export { groupByCenterDue, shipGroupKey }
 
-/** 발주번호 단위 묶음 (호출부가 이미 출고지로 걸러 넘긴다) */
+/**
+ * 발주번호 단위 묶음 — 위킵 전달 안내문의 '발주별 발송 방식' 표기 전용.
+ * 택배/트럭·팔레트 판정에는 쓰지 말 것(묶음 기준은 groupByCenterDue).
+ */
 export function groupByPo(items: RoutedItem[]): PoPalletGroup[] {
   const map = new Map<string, PoPalletGroup>()
   for (const it of items) {
     let g = map.get(it.poNumber)
     if (!g) {
       g = {
+        key: shipGroupKey(it),
         poNumber: it.poNumber,
+        poNumbers: [it.poNumber],
         center: it.center,
         dueDate: it.dueDate,
         shipFrom: it.shipFrom,
@@ -63,38 +69,42 @@ export function groupByPo(items: RoutedItem[]): PoPalletGroup[] {
   return list
 }
 
-/** 발주번호 × 출고지 묶음 (미분류는 제외 — 출고지 확정 전이라 안내 대상 아님) */
+/**
+ * 센터 × 입고예정일 × 출고지 묶음 (미분류는 제외 — 출고지 확정 전이라 안내 대상 아님).
+ * needsPallet·PLT·밀크런·로켓 양식이 모두 이 묶음 단위를 본다.
+ */
 export function buildPalletGroups(routed: RoutedItem[]): PoPalletGroup[] {
   const out: PoPalletGroup[] = []
   for (const sf of ['진도팜', '위킵'] as ShipFrom[]) {
-    out.push(...groupByPo(routed.filter((r) => r.shipFrom === sf)))
+    out.push(...groupByCenterDue(routed.filter((r) => r.shipFrom === sf)))
   }
   return out.sort((a, b) =>
     a.dueDate === b.dueDate ? a.poNumber.localeCompare(b.poNumber) : a.dueDate.localeCompare(b.dueDate),
   )
 }
 
-export type CenterAdvisory = { center: string; dueDate: string; boxes: number; poCount: number }
+export type CenterAdvisory = {
+  shipFrom: ShipFrom
+  center: string
+  dueDate: string
+  boxes: number
+  poCount: number
+}
 
 /**
- * 같은 센터·같은 입고예정일에 발주가 여러 건이고 합산 9박스 초과면 참고 문구만 낸다.
- * (확정 판정 아님 — 발주별 배지는 발주 단위 박스 수 그대로)
+ * 발주 2건 이상이 묶여 트럭(9박스 초과)으로 판정된 묶음을 문구로 알린다.
+ * 판정은 묶음의 needsPallet 그대로 — 로켓 양식 시트와 항상 같은 값이다.
  */
 export function buildCenterAdvisories(groups: PoPalletGroup[]): CenterAdvisory[] {
-  const map = new Map<string, { center: string; dueDate: string; boxes: number; pos: Set<string> }>()
-  for (const g of groups) {
-    const k = `${g.center}|${g.dueDate}`
-    let e = map.get(k)
-    if (!e) {
-      e = { center: g.center, dueDate: g.dueDate, boxes: 0, pos: new Set() }
-      map.set(k, e)
-    }
-    e.boxes += g.boxes
-    e.pos.add(g.poNumber)
-  }
-  return [...map.values()]
-    .filter((e) => e.pos.size >= 2 && e.boxes > PALLET_BOX_LIMIT)
-    .map((e) => ({ center: e.center, dueDate: e.dueDate, boxes: e.boxes, poCount: e.pos.size }))
+  return groups
+    .filter((g) => g.poNumbers.length >= 2 && g.needsPallet)
+    .map((g) => ({
+      shipFrom: g.shipFrom,
+      center: g.center,
+      dueDate: g.dueDate,
+      boxes: g.boxes,
+      poCount: g.poNumbers.length,
+    }))
 }
 
 // ── 자리(더미) 모델 ──────────────────────────────────────────────

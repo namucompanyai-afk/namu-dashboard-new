@@ -25,6 +25,7 @@ export type CoupangOrderItem = {
   orderQty: number // 발주수량 (G열) — 참고 필드
   confirmQty: number // 납품가능수량 (H열) ← 실제 출고·매출·박스·PLT·이력 기준 (불변)
   unitPrice: number // 매입가 (공급가 블록 첫 컬럼) ← 매출 단가. 빈값·0이면 '단가 미확인'
+  madeDate?: string // 상품 표 '제조(수입)일자' — 없으면 undefined (화면 입력칸으로 폴백)
   qtyUnconfirmed: boolean // 발주서 전 행이 H=0 → 확정 전/구버전 발주서 (저장 차단)
   notDelivered: boolean // 확정 발주서 안의 H=0 행 → 미납품 확정 (차단 아님, 이력 제외)
   displayQty: number // 화면 표시용 — 미확정이면 G, 아니면 H
@@ -81,6 +82,23 @@ export function supplyPriceCol(rows: unknown[][], prodIdx: number): number {
   return SUPPLY_PRICE_COL
 }
 
+/** 상품 표 '제조(수입)일자' 열 (못 찾으면 실측 위치 U열) */
+export const MADE_DATE_COL = 20
+
+export function madeDateCol(rows: unknown[][], prodIdx: number): number {
+  for (const row of [rows[prodIdx + 2], rows[prodIdx + 3]]) {
+    const i = (row || []).findIndex((v) => norm(v).includes('제조') && norm(v).includes('일자'))
+    if (i >= 0) return i
+  }
+  return MADE_DATE_COL
+}
+
+/** 제조일자 셀 → YYYY-MM-DD. 빈칸·'-'·형식 불명은 undefined (화면 입력칸 폴백 대상) */
+const madeDateOf = (v: unknown): string | undefined => {
+  const s = fmtDate(v)
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined
+}
+
 export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrderItem[] {
   const A = (i: number) => textAt(rows, i, 0)
   const findRow = (pred: (s: string) => boolean) => rows.findIndex((_, i) => pred(A(i)))
@@ -106,6 +124,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   const prodIdx = findRow((s) => norm(s).startsWith('3.상품정보'))
   if (prodIdx < 0) return []
   const priceCol = supplyPriceCol(rows, prodIdx)
+  const mdCol = madeDateCol(rows, prodIdx)
 
   const raw: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {
@@ -123,6 +142,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       orderQty,
       confirmQty,
       unitPrice: toNum(cellAt(rows, r, priceCol)),
+      madeDate: madeDateOf(cellAt(rows, r, mdCol)),
       qtyUnconfirmed: false,
       notDelivered: false,
       displayQty: confirmQty,
@@ -276,6 +296,63 @@ export const PALLET_BOX_LIMIT = 9 // 초과 시 택배 불가 → 트럭(밀크�
 // PLT 장수는 고정 상수가 아니라 실측 적재(자리 수 × SKU별 단수)로 센다 —
 // lib/b2b/coupangDiagram.tsx 의 pltCountOf 가 단일 소스다.
 
+/**
+ * 센터 × 입고예정일 묶음 — 같은 센터·같은 입고예정일 발주는 한 차로 나가므로
+ * 9박스 판정을 발주 단건이 아니라 이 묶음의 박스 합계로 한다.
+ * 로켓 양식(택배/트럭 분기), 팔레트 안내, 밀크런이 모두 이 함수 하나를 본다.
+ */
+export type ShipGroup = {
+  key: string // `${center}|${dueDate}`
+  center: string
+  dueDate: string
+  shipFrom: ShipFrom
+  poNumbers: string[] // 묶인 발주번호 (오름차순)
+  poNumber: string // 표시·인덱스용 합친 라벨 ('142660856/142664345')
+  items: RoutedItem[]
+  boxes: number // 묶음 박스 합계 (마스터 미등록 행은 0으로 본다)
+  needsPallet: boolean // 합계가 9박스 초과 → 택배 불가, 트럭(팔레트) 발송
+}
+
+export const shipGroupKey = (it: { center: string; dueDate: string }): string =>
+  `${it.center}|${it.dueDate}`
+
+/** 발주번호 병기 라벨 — 묶음에 발주가 여러 건이면 '/' 로 잇는다 */
+export const joinPoNumbers = (pos: string[]): string => pos.join('/')
+
+export function groupByCenterDue(items: RoutedItem[]): ShipGroup[] {
+  const map = new Map<string, ShipGroup>()
+  for (const it of items) {
+    const key = shipGroupKey(it)
+    let g = map.get(key)
+    if (!g) {
+      g = {
+        key,
+        center: it.center,
+        dueDate: it.dueDate,
+        shipFrom: it.shipFrom,
+        poNumbers: [],
+        poNumber: '',
+        items: [],
+        boxes: 0,
+        needsPallet: false,
+      }
+      map.set(key, g)
+    }
+    g.items.push(it)
+    g.boxes += it.boxes ?? 0
+    if (!g.poNumbers.includes(it.poNumber)) g.poNumbers.push(it.poNumber)
+  }
+  const list = [...map.values()]
+  for (const g of list) {
+    g.poNumbers.sort()
+    g.poNumber = joinPoNumbers(g.poNumbers)
+    g.needsPallet = g.boxes > PALLET_BOX_LIMIT
+  }
+  return list.sort((a, b) =>
+    a.dueDate === b.dueDate ? a.center.localeCompare(b.center) : a.dueDate.localeCompare(b.dueDate),
+  )
+}
+
 // ── 곰표 출고 기준 ───────────────────────────────────────────────
 /** 곰표는 봉 단위로 팔레트를 센다 — 1PLT = 400봉 = 40박스 */
 export const GOMPYO_UNITS_PER_PLT = 400
@@ -326,12 +403,12 @@ export type RocketRow = {
   recipient: string // 받는분성명 = 센터명
   phone: string
   address: string
-  memo: string // 배송메세지1 (공란)
+  memo: string // 배송메세지1 = 발주번호 (묶음에 여러 건이면 '/' 병기)
   itemName: string // 내품명 = 발주서 상품명
   itemQty: number // 내품수량 = 납품가능수량
   boxes: number | null // 박스 수
   madeDate: string // 제조일자
-  pallet: number | null // 파렛트 수 — 트럭분 발주 첫 행에만 기입, 나머지는 null
+  pallet: number | null // 파렛트 수 — 트럭분 묶음 첫 행에만 기입, 나머지는 null
   invoice: string // 송장 (공란)
   centerKnown: boolean // 주소를 못 구하면 false → 행 강조
   masterKnown: boolean // 상품마스터 미등록이면 false → 박스 수 공란
@@ -341,52 +418,49 @@ export type RocketRow = {
   dueDate: string
 }
 
-/** 발주번호 → 박스 합계 (마스터 미등록 행은 0으로 본다) */
-const boxesByPo = (items: RoutedItem[]): Record<string, number> => {
-  const m: Record<string, number> = {}
-  for (const it of items) m[it.poNumber] = (m[it.poNumber] ?? 0) + (it.boxes ?? 0)
-  return m
-}
-
 /**
  * 진도팜분 → 로켓 양식 행 (정렬은 routeItems 에서 이미 적용된 순서 유지).
  *
- * 발주 단위 박스 합계가 9박스 이하면 택배분, 초과면 트럭분(밀크런)으로 나눈다.
+ * 택배/트럭은 **센터 × 입고예정일 묶음**의 박스 합계로 가른다(groupByCenterDue) —
+ * 같은 차로 나가는 발주라면 2박스 단건도 묶음이 9박스를 넘으면 트럭분이다.
  *   택배분 — 주소·전화는 기존 센터 주소록 lookup
  *   트럭분 — 주소는 발주서가 자동 출력한 값, 전화는 그 주소 괄호부의 택배수령담당자
  *            (발주서 값이 비면 주소록으로 대체)
- * 파렛트 수는 발주 단위 1회(첫 행)만 기입한다 — pltByPo(실측 적재 기준 PLT 장수)를 받아 쓴다.
+ * 파렛트 수는 묶음 1회(첫 행)만 기입한다 — pltByGroup(묶음 키 → 실측 PLT 장수).
+ * 배송메세지1 에는 묶음의 발주번호를 병기한다.
+ * 제조일자는 발주서 파싱값을 행별로 쓰고, 없는 행만 fallbackMadeDate(화면 입력칸)로 채운다.
  * 미납품(확정 발주서의 H=0) 행은 실제로 나가지 않으므로 양식에서 뺀다.
  */
 export function buildRocketRows(
   items: RoutedItem[],
   centers: CenterAddress[],
-  madeDate: string,
-  pltByPo: Record<string, number>,
+  fallbackMadeDate: string,
+  pltByGroup: Record<string, number>,
 ): RocketRow[] {
   const shipping = items.filter((it) => !it.notDelivered)
-  const poBoxes = boxesByPo(shipping)
+  const groupOf = new Map(groupByCenterDue(shipping).map((g) => [g.key, g]))
   const palletDone = new Set<string>()
   return shipping.map((it) => {
     const c = findCenter(centers, it.center)
-    const truck = (poBoxes[it.poNumber] ?? 0) > PALLET_BOX_LIMIT
+    const g = groupOf.get(shipGroupKey(it))
+    const truck = g?.needsPallet ?? false
     const address = truck ? it.centerAddress || c?.address || '' : c?.address || ''
     const phone = truck ? it.centerPhone || c?.phone || '' : c?.phone || ''
     let pallet: number | null = null
-    if (truck && !palletDone.has(it.poNumber)) {
-      palletDone.add(it.poNumber)
-      pallet = pltByPo[it.poNumber] ?? 0
+    if (truck && g && !palletDone.has(g.key)) {
+      palletDone.add(g.key)
+      pallet = pltByGroup[g.key] ?? 0
     }
     return {
       mode: (truck ? '트럭' : '택배') as RocketMode,
       recipient: it.center,
       phone,
       address,
-      memo: '',
+      memo: g?.poNumber || it.poNumber,
       itemName: it.productName,
       itemQty: it.confirmQty,
       boxes: it.boxes,
-      madeDate,
+      madeDate: it.madeDate || fallbackMadeDate,
       pallet,
       invoice: '',
       centerKnown: !!address,
