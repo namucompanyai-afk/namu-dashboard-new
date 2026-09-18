@@ -1202,7 +1202,7 @@ function RocketTable({
                   <td className="px-3 py-2 max-w-[26rem] truncate" title={r.address}>
                     {r.address}
                   </td>
-                  <td className="px-3 py-2" />
+                  <td className="px-3 py-2 text-gray-600">{r.memo}</td>
                   <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
                     {r.itemName}
                   </td>
