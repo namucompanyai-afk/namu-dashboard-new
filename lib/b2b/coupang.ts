@@ -82,12 +82,21 @@ export function supplyPriceCol(rows: unknown[][], prodIdx: number): number {
   return SUPPLY_PRICE_COL
 }
 
-/** 상품 표 '제조(수입)일자' 열 (못 찾으면 실측 위치 U열) */
+/**
+ * 상품 표 '제조(수입)일자' 열 (못 찾으면 실측 위치 U열).
+ *
+ * 헤더는 '제조(수입)일자\n유통(소비)기한' 처럼 줄바꿈으로 두 줄이 한 셀에 들어 있고,
+ * 바로 왼쪽(T열)에 'Y/N' 값을 갖는 **'제조일자관리'** 열이 있다 — 부분 일치로 찾으면
+ * 그쪽이 먼저 걸려 'Y' 를 날짜로 읽으려다 전 행이 폴백된다. 그래서 공백·줄바꿈을 지운
+ * 뒤 '제조(수입)일자' 로 시작하는 셀만 인정한다.
+ */
 export const MADE_DATE_COL = 20
+const MADE_DATE_HEADER = '제조(수입)일자'
 
 export function madeDateCol(rows: unknown[][], prodIdx: number): number {
+  const want = norm(MADE_DATE_HEADER)
   for (const row of [rows[prodIdx + 2], rows[prodIdx + 3]]) {
-    const i = (row || []).findIndex((v) => norm(v).includes('제조') && norm(v).includes('일자'))
+    const i = (row || []).findIndex((v) => norm(v).startsWith(want))
     if (i >= 0) return i
   }
   return MADE_DATE_COL
