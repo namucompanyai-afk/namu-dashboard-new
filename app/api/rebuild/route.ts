@@ -414,6 +414,25 @@ const M3_ID_LIST_CELL = 'O1'
 const M3_ID_LIST_HEADER = '원료ID 목록 (단가DB E 선택 목록)'
 const M3_ID_LIST_FORMULA = `=UNIQUE(TOCOL({'진도팜 원가표'!A12:A;'${M3_GOM_TAB}'!A12:A},1))`
 const M3_ID_LIST_REF = `='설정'!$O$2:$O`
+// m4: 중복 별칭 삭제 + 별칭 통일 (단가DB A열이 표준)
+const M4_DELETE = '[쌀쌀쌀] 국산 찰흑미 2kg'
+const M4_KEEP = '[쌀쌀쌀] 흑미 2kg'
+const M4_RENAME: [string, string][] = [
+  ['[쌀쌀쌀] 국산 찰흑미 2kg', '[쌀쌀쌀] 흑미 2kg'],
+  ['[쌀쌀쌀] 찰흑미 2kg', '[쌀쌀쌀] 흑미 2kg'],
+  ['[보배마을] 귀리 10곡 800g', '[보배마을] 귀리혼합10곡 800g'],
+  ['[쌀쌀쌀] 렌틸콩 2kg', '[쌀쌀쌀] 캐나다산 렌틸콩 2kg'],
+  ['[쌀쌀쌀] 저속식단 2kg', '[쌀쌀쌀] 저속노화 잡곡 2kg 캐귀리'],
+  ['[보배마을] 현미 귀리 즉석밥 180g * 6', '[보배마을] 즉석밥 6개'],
+  ['[보배마을] 현미 귀리 즉석밥 180g * 24', '[보배마을] 즉석밥 24개'],
+]
+// 별칭 열 (탭 · 헤더 이름)
+const M4_ALIAS_COLS: { tab: string; header: string }[] = [
+  { tab: MAP_TAB, header: '표준 별칭' },
+  { tab: '상품마스터', header: '별칭' },
+  { tab: '발주 이력', header: '상품(별칭)' },
+  { tab: MARGIN_TAB, header: '별칭' },
+]
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -6981,6 +7000,136 @@ export async function GET(req: Request) {
         )
       }
       return NextResponse.json({ ok: true, 규칙: out })
+    }
+
+    // ── m4: 나무_마스터 4단계 — 중복 별칭 행 삭제 + 다른 탭 별칭 통일 + 곰표 원가표 선택 목록 보완 ──
+    //   · ?dry=1 이면 사전 확인만 (쓰기 없음). 별칭 셀·단가DB 1행 삭제·곰표 원가표 드롭다운 외 쓰기 없음
+    if (action === 'm4') {
+      const sheets = getSheets()
+      const dry = url.searchParams.get('dry') === '1'
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE' = 'UNFORMATTED_VALUE', range = 'A1:Z5000') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title))' })
+      const idOf = (t: string) => (meta.data.sheets || []).find((x) => x.properties?.title === t)?.properties?.sheetId as number | undefined
+      const price = await read(PRICE_TAB)
+      const rowsOf = (al: string) => price.map((r, i) => (String(r?.[0] ?? '') === al ? i + 1 : 0)).filter(Boolean)
+
+      // ── 0. 사전 확인 ─────────────────────────────────────────
+      const problems: string[] = []
+      const delRows = rowsOf(M4_DELETE)
+      const keepRows = rowsOf(M4_KEEP)
+      if (delRows.length !== 1) problems.push(`${M4_DELETE}: 단가DB ${delRows.length}행`)
+      if (keepRows.length !== 1) problems.push(`${M4_KEEP}: 단가DB ${keepRows.length}행`)
+      let cmp: any = null
+      if (delRows.length === 1 && keepRows.length === 1) {
+        const a = price[delRows[0] - 1] || []
+        const b = price[keepRows[0] - 1] || []
+        cmp = { 삭제행: delRows[0], 유지행: keepRows[0], 원료ID: [a[4], b[4]], g: [a[5], b[5]], 소포장: [a[7], b[7]], 벌크: [a[8], b[8]] }
+        for (const c of [4, 5, 7, 8]) if (String(a[c] ?? '') !== String(b[c] ?? '')) problems.push(`${colName(c)} 다름: ${a[c]} ≠ ${b[c]}`)
+      }
+      const okNames = new Map<string, string>()
+      const badNames: string[] = []
+      for (const [from, to] of M4_RENAME) {
+        if (rowsOf(to).length === 1) okNames.set(from, to)
+        else badNames.push(`${from} → ${to}: 단가DB ${rowsOf(to).length}행`)
+      }
+      // 탭별 별칭 열
+      const tabData: { tab: string; col: number; rows: Cell[][] }[] = []
+      for (const { tab, header } of M4_ALIAS_COLS) {
+        const rows = await read(tab, 'FORMULA')
+        const col = (rows[0] || []).findIndex((h) => String(h ?? '').trim() === header)
+        if (col < 0) problems.push(`${tab} 에 '${header}' 헤더 없음`)
+        else tabData.push({ tab, col, rows })
+      }
+      const cells: { tab: string; r: number; c: number; from: string; to: string }[] = []
+      for (const t of tabData) {
+        t.rows.forEach((row, i) => {
+          if (i === 0) return
+          const v = String(row?.[t.col] ?? '')
+          const to = okNames.get(v)
+          if (to) cells.push({ tab: t.tab, r: i + 1, c: t.col, from: v, to })
+        })
+      }
+      const count: Record<string, Record<string, number>> = {}
+      for (const x of cells) {
+        count[x.tab] = count[x.tab] || {}
+        count[x.tab][`${x.from} → ${x.to}`] = (count[x.tab][`${x.from} → ${x.to}`] || 0) + 1
+      }
+      if (dry || problems.length) {
+        return NextResponse.json(
+          { ok: problems.length === 0, dry, 문제: problems, 비교: cmp, 제외_이름: badNames, 바꿀_셀: count, 셀수: cells.length },
+          { status: problems.length ? 409 : 200 }
+        )
+      }
+
+      const marginBefore = await read(MARGIN_TAB)
+      const keepBefore = price[keepRows[0] - 1]
+
+      // ── 1. 별칭 셀 교체 ───────────────────────────────────────
+      if (cells.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: {
+            valueInputOption: 'RAW',
+            data: cells.map((x) => ({ range: `${quote(x.tab)}!${colName(x.c)}${x.r}`, values: [[x.to]] })),
+          },
+        })
+      }
+      // ── 2. 단가DB 중복 행 삭제 + 곰표 원가표 14~18행 선택 목록 ────────
+      const gomId = idOf(M3_GOM_TAB)
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: MASTER_SHEET_ID, ranges: [`${quote(M3_GOM_TAB)}!A12:Q12`], includeGridData: true,
+        fields: 'sheets(data(rowData(values(dataValidation))))',
+      })
+      const r12 = gd.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values || []
+      const dvCols = [11, 12, 16].filter((c) => r12[c]?.dataValidation)
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            ...dvCols.map((c) => ({
+              setDataValidation: {
+                range: { sheetId: gomId!, startRowIndex: 13, endRowIndex: 18, startColumnIndex: c, endColumnIndex: c + 1 },
+                rule: r12[c].dataValidation,
+              },
+            })),
+            { deleteDimension: { range: { sheetId: idOf(PRICE_TAB)!, dimension: 'ROWS', startIndex: delRows[0] - 1, endIndex: delRows[0] } } },
+          ],
+        },
+      })
+
+      // ── 3. 검증 ─────────────────────────────────────────────
+      const priceAfter = await read(PRICE_TAB)
+      const aliasSet = new Set(priceAfter.slice(1).map((r) => String(r?.[0] ?? '')).filter(Boolean))
+      const colVals = async (tab: string, header: string) => {
+        const rows = await read(tab)
+        const c = (rows[0] || []).findIndex((h) => String(h ?? '').trim() === header)
+        return { rows, c }
+      }
+      const pm = await colVals('상품마스터', '별칭')
+      const pmMissing = Array.from(new Set(pm.rows.slice(1).map((r) => String(r?.[pm.c] ?? '')).filter((a) => a && !aliasSet.has(a))))
+      const mp = await colVals(MAP_TAB, 'DB확인')
+      const mapIssues = mp.rows.slice(1).filter((r) => String(r?.[mp.c] ?? '').trim() !== '').length
+      const hi = await colVals('발주 이력', '상품(별칭)')
+      const hiMissing = Array.from(new Set(hi.rows.slice(1).map((r) => String(r?.[hi.c] ?? '')).filter((a) => a && !aliasSet.has(a))))
+      const marginAfter = await read(MARGIN_TAB)
+      const keepAfter = priceAfter.find((r) => String(r?.[0] ?? '') === M4_KEEP) || []
+      const marginChanged = marginBefore
+        .map((b, i) => ({ i, b, a: marginAfter[i] || [] }))
+        .filter((x) => x.i > 0 && String(x.b?.[5] ?? '') !== String(x.a[5] ?? ''))
+        .map((x) => ({ 행: x.i + 1, 별칭: x.a[1], 전: x.b?.[5] ?? '', 후: x.a[5] ?? '' }))
+      return NextResponse.json({
+        ok: pmMissing.length === 0 && mapIssues === 0,
+        삭제: cmp, 제외_이름: badNames, 바꾼_셀: count, 셀수: cells.length,
+        곰표원가표_선택목록_열: dvCols.map((c) => colName(c)),
+        상품마스터_단가DB없음: pmMissing,
+        발주매핑_DB확인_표시: mapIssues,
+        발주이력: { 바뀐_행: cells.filter((x) => x.tab === '발주 이력').length, 단가DB없음: hiMissing },
+        오류셀: { 단가DB: errorCellsOf(PRICE_TAB, priceAfter).length, 마진계산: errorCellsOf(MARGIN_TAB, marginAfter).length },
+        흑미2kg: { 전: { G: keepBefore?.[6], H: keepBefore?.[7], I: keepBefore?.[8] }, 후: { G: keepAfter[6], H: keepAfter[7], I: keepAfter[8] } },
+        마진계산_원가_변경: marginChanged,
+      })
     }
 
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
