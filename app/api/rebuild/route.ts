@@ -387,6 +387,33 @@ const M2_GOMPYO_LINK: Record<string, string> = {
   '[쌀쌀쌀] 캐나다산 렌틸콩 2kg': '곰표_렌틸콩',
 }
 const M2_FORBIDDEN = ['원가표미러', '채널DB', '비용DB', COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID, 'docs.google.com']
+// m3: 곰표 원료 추가·연결
+const M3_GOM_TAB = '곰표 원가표'
+const M3_NEW_ITEMS: { item: string; price: number }[] = [
+  { item: '귀리', price: 1050 },
+  { item: '루피니빈', price: 3800 },
+  { item: '치아시드', price: 5900 },
+  { item: '파로', price: 4800 },
+  { item: '레드렌틸', price: 1800 },
+]
+const M3_LINKS: Record<string, string> = {
+  '[쌀쌀쌀] 레드 렌틸콩 2kg': '곰표_레드렌틸',
+  '[쌀쌀쌀] 호주산 레드 스플릿 렌틸콩 1kg': '곰표_레드렌틸',
+  '[쌀쌀쌀] 터키 파로 2kg': '곰표_파로',
+  '[쌀쌀쌀] 루피니빈 1kg': '곰표_루피니빈',
+  '[쌀쌀쌀] 루피니빈 2kg': '곰표_루피니빈',
+  '[쌀쌀쌀] 치아시드 500g': '곰표_치아시드',
+  '[쌀쌀쌀] 치아시드 1kg': '곰표_치아시드',
+  '[쌀쌀쌀] 치아시드 2kg': '곰표_치아시드',
+  '[쌀쌀쌀] 캐나다산 귀리 1kg': '곰표_귀리',
+  '[쌀쌀쌀] 캐나다산 귀리 2kg': '곰표_귀리',
+}
+// 단가DB E 선택 목록 — 설정 O열 한 곳에서 원가표 탭들의 원료ID 를 모은다.
+// 거래처 원가표 탭이 늘면 이 배열에 ;'새 탭'!A12:A 만 추가하면 된다.
+const M3_ID_LIST_CELL = 'O1'
+const M3_ID_LIST_HEADER = '원료ID 목록 (단가DB E 선택 목록)'
+const M3_ID_LIST_FORMULA = `=UNIQUE(TOCOL({'진도팜 원가표'!A12:A;'${M3_GOM_TAB}'!A12:A},1))`
+const M3_ID_LIST_REF = `='설정'!$O$2:$O`
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -6786,6 +6813,151 @@ export async function GET(req: Request) {
         N2_비움: clearN2,
         N열: post.map((r, i) => [i + 1, String(r?.[13] ?? '')]).filter((x) => x[1] !== ''),
         원가표ID_잔존: post.flat().filter((c) => String(c ?? '').includes(COST_SHEET_ID)).length,
+      })
+    }
+
+    // ── m3: 나무_마스터 3단계 — 곰표 원료 5행 추가 + 단가DB 곰표 행 연결·정리 + E 선택 목록 ──
+    //   · 쓰기 대상은 MASTER_SHEET_ID 의 곰표 원가표 14~18행, 단가DB 곰표 행 E·K·M, 설정 O열, 단가DB E 드롭다운뿐
+    if (action === 'm3') {
+      const sheets = getSheets()
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range = 'A1:Z1000') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title))' })
+      const idOf = (t: string) => (meta.data.sheets || []).find((x) => x.properties?.title === t)?.properties?.sheetId as number | undefined
+      const priceId = idOf(PRICE_TAB)
+      if (priceId == null || idOf(M3_GOM_TAB) == null || idOf(M2_SETTING_TAB) == null) throw new Error('마스터 탭 누락')
+
+      // ── 0. 가드 ──────────────────────────────────────────────
+      const gomFx = await read(M3_GOM_TAB, 'FORMULA', 'A1:Q1000')
+      const tpl = gomFx[12] || []
+      if (String(tpl[0] ?? '') === '' || String(tpl[2] ?? '') !== '렌틸콩') throw new Error('곰표 원가표 13행(렌틸콩) 템플릿이 아님 — 중단')
+      const occupied = gomFx.slice(13, 18).some((r) => (r || []).some((c) => String(c ?? '') !== ''))
+      if (occupied) return NextResponse.json({ ok: false, error: '곰표 원가표 14~18행이 비어있지 않음 — 쓰기 중단', 행: gomFx.slice(13, 18) }, { status: 409 })
+      const setFx = await read(M2_SETTING_TAB, 'FORMULA', 'O1:O3')
+      if (setFx.flat().some((c) => String(c ?? '') !== '')) return NextResponse.json({ ok: false, error: '설정 O열이 비어있지 않음 — 쓰기 중단', O: setFx }, { status: 409 })
+
+      const priceFxBefore = await read(PRICE_TAB, 'FORMULA', `A1:M${PRICE_ROWS_TO}`)
+      const priceBefore = await read(PRICE_TAB, 'UNFORMATTED_VALUE', `A1:M${PRICE_ROWS_TO}`)
+      const marginBefore = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:T${1 + MARGIN_ROWS}`)
+      // 별칭 → 행 (정확히 1개일 때만)
+      const rowsOf = (al: string) => priceFxBefore.map((r, i) => (String(r?.[0] ?? '').trim() === al ? i + 1 : 0)).filter(Boolean)
+      const skipped: string[] = []
+      const links: { r: number; alias: string; id: string }[] = []
+      for (const [al, id] of Object.entries(M3_LINKS)) {
+        const rs = rowsOf(al)
+        if (rs.length !== 1) { skipped.push(`${al}: 일치 ${rs.length}행`); continue }
+        if (!isGompyo(priceFxBefore[rs[0] - 1]?.[2])) { skipped.push(`${al}: 발송거래처가 곰표 아님`); continue }
+        links.push({ r: rs[0], alias: al, id })
+      }
+      // 현재 E 드롭다운 규칙 (보고용)
+      const dvNow = await sheets.spreadsheets.get({
+        spreadsheetId: MASTER_SHEET_ID, ranges: [`${quote(PRICE_TAB)}!E2:E3`], includeGridData: true,
+        fields: 'sheets(data(rowData(values(dataValidation))))',
+      })
+      const eRuleBefore = dvNow.data.sheets?.[0]?.data?.[0]?.rowData?.[0]?.values?.[0]?.dataValidation || null
+
+      // ── 1. 곰표 원가표 14~18행 ──────────────────────────────────
+      const reRow = (f: string, to: number) => f.replace(/([A-Z]{1,2})13(?!\d)/g, `$1${to}`)
+      const gomRows: Cell[][] = M3_NEW_ITEMS.map((it, i) => {
+        const r = 14 + i
+        const row: Cell[] = Array(17).fill('')
+        row[0] = reRow(String(tpl[0]), r)
+        for (let c = 5; c <= 10; c++) row[c] = String(tpl[c] ?? '').startsWith('=') ? reRow(String(tpl[c]), r) : ''
+        row[1] = '곰표'
+        row[2] = it.item
+        row[4] = it.price
+        row[11] = '면세'
+        row[16] = 'O'
+        return row
+      })
+      // ── 2·3. 단가DB 곰표 행: E 연결 · M 봉투 Y · K "원료 미연결" 제거 ──
+      const linkByRow = new Map(links.map((x) => [x.r, x.id]))
+      const priceData: { range: string; values: Cell[][] }[] = links.map((x) => ({ range: `${quote(PRICE_TAB)}!E${x.r}`, values: [[x.id]] }))
+      const gomRowsInPrice: number[] = []
+      priceFxBefore.forEach((row, i) => {
+        if (i === 0 || !isGompyo(row?.[2])) return
+        const r = i + 1
+        gomRowsInPrice.push(r)
+        priceData.push({ range: `${quote(PRICE_TAB)}!M${r}`, values: [['Y']] })
+        const eAfter = linkByRow.get(r) ?? String(row?.[4] ?? '')
+        const note = String(row?.[10] ?? '')
+        if (eAfter.trim() !== '' && note.includes('원료 미연결')) {
+          const cleaned = note.split('·').map((x) => x.trim()).filter((x) => x && x !== '원료 미연결').join(' · ')
+          priceData.push({ range: `${quote(PRICE_TAB)}!K${r}`, values: [[cleaned]] })
+        }
+      })
+
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(M3_GOM_TAB)}!A14:Q18`, values: gomRows },
+            { range: `${quote(M2_SETTING_TAB)}!O1:O2`, values: [[M3_ID_LIST_HEADER], [M3_ID_LIST_FORMULA]] },
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: { valueInputOption: 'RAW', data: priceData },
+      })
+      // ── 4. E 선택 목록 → 설정 O열 ──────────────────────────────
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              setDataValidation: {
+                range: { sheetId: priceId, startRowIndex: 1, endRowIndex: PRICE_ROWS_TO, startColumnIndex: 4, endColumnIndex: 5 },
+                rule: { condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: M3_ID_LIST_REF }] }, showCustomUi: true, strict: false },
+              },
+            },
+            {
+              repeatCell: {
+                range: { sheetId: idOf(M2_SETTING_TAB)!, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 14, endColumnIndex: 15 },
+                cell: { userEnteredFormat: { textFormat: { bold: true } } },
+                fields: 'userEnteredFormat.textFormat.bold',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 5. 검증 ─────────────────────────────────────────────
+      const gomAfter = await read(M3_GOM_TAB, 'UNFORMATTED_VALUE', 'A12:Q18')
+      const idList = (await read(M2_SETTING_TAB, 'UNFORMATTED_VALUE', 'O2:O1000')).map((r) => String(r?.[0] ?? '')).filter(Boolean)
+      const priceAfter = await read(PRICE_TAB, 'UNFORMATTED_VALUE', `A1:M${PRICE_ROWS_TO}`)
+      const marginAfter = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:T${1 + MARGIN_ROWS}`)
+      const idSet = new Set(idList)
+      const eMissing = priceAfter.slice(1).map((r) => String(r?.[4] ?? '').trim()).filter((e) => e && !idSet.has(e))
+      const eq = (a: Cell | undefined, b: Cell | undefined) =>
+        typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : String(a ?? '') === String(b ?? '')
+      const otherChanged: number[] = []
+      priceBefore.forEach((b, i) => {
+        if (i === 0 || isGompyo(b?.[2])) return
+        const a = priceAfter[i] || []
+        if (Array.from({ length: 13 }, (_, c) => c).some((c) => !eq(b?.[c], a[c]))) otherChanged.push(i + 1)
+      })
+      const marginDiff = marginBefore
+        .map((b, i) => ({ i, b, a: marginAfter[i] || [] }))
+        .filter((x) => x.i > 0 && !eq(x.b?.[5], x.a[5]))
+        .map((x) => ({ 행: x.i + 1, 별칭: x.a[1], 전: x.b?.[5] ?? '', 후: x.a[5] ?? '' }))
+      return NextResponse.json({
+        ok: skipped.length === 0 && eMissing.length === 0 && otherChanged.length === 0,
+        E_규칙_전: eRuleBefore,
+        곰표원가표: gomAfter.map((r) => ({ 원료ID: r[0], 원곡가: r[4], 작업비: r[5], 최종공급가: r[10] })),
+        연결: links.map((x) => `${x.alias} → ${x.id}`),
+        연결_제외: skipped,
+        단가DB_곰표행: priceAfter
+          .map((r, i) => ({ r, i }))
+          .filter((x) => x.i > 0 && isGompyo(x.r[2]))
+          .map(({ r, i }) => ({ 행: i + 1, 별칭: r[0], 원료ID: r[4] || '(빈칸)', g: r[5], G: r[6] === '' ? '(빈칸)' : r[6], H: r[7] === '' ? '(빈칸)' : r[7], M: r[12], K: r[10] ?? '' })),
+        E_목록_수: idList.length,
+        E_목록밖_값: eMissing,
+        오류셀: { 단가DB: errorCellsOf(PRICE_TAB, priceAfter).length, 마진계산: errorCellsOf(MARGIN_TAB, marginAfter).length },
+        마진계산_원가_변경: marginDiff,
+        곰표외_단가DB_변경행: otherChanged,
       })
     }
 
