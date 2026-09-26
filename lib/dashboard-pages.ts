@@ -10,7 +10,6 @@ export interface DashboardPage {
 }
 
 export const DASHBOARD_PAGES: DashboardPage[] = [
-  { id: 'sales-dashboard', title: 'Sales Dashboard', emoji: '📊', href: '/sales' },
   { id: 'hr-dashboard', title: 'HR Dashboard', emoji: '👤', href: '/hr' },
   { id: 'leave-apply', title: '연차 신청', emoji: '🌴', href: '/hr/leave/apply' },
   { id: 'team-leave-calendar', title: '팀원 휴가 캘린더', emoji: '📅', href: '/hr/calendar' },
