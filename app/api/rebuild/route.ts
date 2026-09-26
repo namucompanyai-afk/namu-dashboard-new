@@ -342,6 +342,12 @@ const PRICE_J_HEADER_V2 = '총 공급가(소포장)'
 //   U 는 비워둔 채 두고 V1 사용안내 문구는 보존 → 검사·기입 모두 W 부터
 const COUPANG_1P_HEADER = ['노출ID', '옵션ID', '소비자가(1P)', '쿠팡마진율(1P)']
 const UX_LETTERS = ['W', 'X', 'Y', 'Z', 'AA', 'AB']
+// init19: 비용DB 곰표 작업비 3줄 (A4:D6) — B 는 대표님 입력 (2kg 만 600 확정)
+const GOMPYO_COST_ROWS: Cell[][] = [
+  ['곰표 작업비 500g', '', '원', '곰표 제조 1봉당 소포장 작업비'],
+  ['곰표 작업비 1kg', '', '원', '곰표 제조 1봉당 소포장 작업비'],
+  ['곰표 작업비 2kg', 600, '원', '곰표 제조 1봉당 소포장 작업비'],
+]
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -435,6 +441,37 @@ function getSheets() {
 }
 
 const quote = (tab: string) => `'${tab.replace(/'/g, "''")}'`
+
+// ── 곰표 행 보호 — C(발송거래처)="곰표" 행의 G(원곡가)는 대표님 수기 입력 ──
+//   G 파생 수식을 쓰는 init(3·4·13·16)은 이 행의 G 를 덮어쓰지 않는다.
+const GOMPYO = '곰표'
+const isGompyo = (c: Cell | undefined) => String(c ?? '').trim() === GOMPYO
+
+// 현재 단가DB 에서 곰표 행의 별칭 → G 원문(수식/값) 맵
+async function readGompyoG(sheets: ReturnType<typeof getSheets>): Promise<Map<string, Cell>> {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: TARGET_SHEET_ID,
+    range: `${quote(PRICE_TAB)}!A2:G1000`,
+    valueRenderOption: 'FORMULA',
+  })
+  const out = new Map<string, Cell>()
+  for (const r of (res.data.values || []) as Cell[][]) {
+    const al = String(r?.[0] ?? '').trim()
+    if (al && isGompyo(r?.[2])) out.set(al, r?.[6] ?? '')
+  }
+  return out
+}
+
+// 쓰려는 G~ 행렬(row[0]=G)에서 곰표 행의 G 를 현재 값으로 되돌린다 (신규 곰표 행은 빈칸)
+function keepGompyoG(rows: Cell[][], keys: { alias: Cell; vendor?: Cell }[], cur: Map<string, Cell>) {
+  rows.forEach((row, i) => {
+    const k = keys[i]
+    if (!k) return
+    const kept = cur.get(String(k.alias ?? '').trim())
+    if (kept !== undefined) row[0] = kept
+    else if (isGompyo(k.vendor)) row[0] = ''
+  })
+}
 
 const hex = (h: string) => ({
   red: parseInt(h.slice(0, 2), 16) / 255,
@@ -1005,6 +1042,13 @@ export async function GET(req: Request) {
       const priceLast = 1 + alias.rows.length // R169
       const mapLast = 1 + mapping.rows.length // R645
 
+      // 곰표 행 G(대표님 입력)는 전면 교체 전에 읽어 두고 그대로 되돌린다
+      keepGompyoG(
+        colGI,
+        colAF.map((r) => ({ alias: r[0], vendor: r[2] })),
+        await readGompyoG(sheets),
+      )
+
       // ── 4. 단가DB 전면 교체 ───────────────────────────────────
       await sheets.spreadsheets.values.clear({
         spreadsheetId: TARGET_SHEET_ID,
@@ -1397,6 +1441,8 @@ export async function GET(req: Request) {
           ],
         },
       })
+      // 곰표 행 G(대표님 입력)는 덮어쓰지 않음
+      keepGompyoG(colGK, alias.rows.map((a) => ({ alias: a[0] })), await readGompyoG(sheets))
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: TARGET_SHEET_ID,
         requestBody: {
@@ -4383,6 +4429,12 @@ export async function GET(req: Request) {
           addedRows.push({ 행: `R${r}`, 별칭: al, 원료ID: rid || '(빈칸)', g })
         })
         const lastNew = first + toAdd.length - 1
+        // 곰표 행 G(대표님 입력)는 수식을 깔지 않음
+        keepGompyoG(
+          valuesGK,
+          toAdd.map((n) => ({ alias: n[0] as Cell, vendor: n[4] as Cell })),
+          await readGompyoG(sheets),
+        )
         await sheets.spreadsheets.values.batchUpdate({
           spreadsheetId: TARGET_SHEET_ID,
           requestBody: {
@@ -4839,7 +4891,8 @@ export async function GET(req: Request) {
           run = []
         }
         for (let r = 2; r <= LAST; r++) {
-          const skip = c.letter === 'J' && isManualJ(r)
+          // 곰표 행 G 는 대표님 입력칸 — 비어 있어도 수식을 깔지 않음
+          const skip = (c.letter === 'J' && isManualJ(r)) || (c.letter === 'G' && isGompyo(at(r, 2)))
           if (at(r, c.idx) === '' && !skip) run.push(r)
           else flush()
         }
@@ -5467,6 +5520,169 @@ export async function GET(req: Request) {
         A_X_해시: { 전: before, 후: after, 동일: before === after },
         서식: { Y: 'TEXT', Z: '#,##0' },
         비고: '데이터 입력 없음 · A~X·V1 안내문·단가DB·채널DB 무변경 · 원가표 시트 미접근',
+      })
+    }
+
+    // ── init19: 단가DB H·I 곰표 분기 + 비용DB 곰표 작업비 3줄 ──────
+    //   · H: C="곰표" → G + 비용DB '곰표 작업비 {g}' (G·작업비 빈칸이면 ""), 그 외 → 기존 H 수식 그대로
+    //   · I: C="곰표" → H, 그 외 → 기존 I 수식 그대로
+    //   · 기존 수식은 FORMULA 로 읽어 감싸기만 한다 (재조립 없음). 수기 값·빈칸·이미 감싼 행은 건너뜀.
+    //   · 비용DB A4:D6 가 비어있지 않으면 쓰지 않고 409.
+    //   · 단가DB A~G·J~N 값·수식은 실행 전·후 해시, H·I 는 계산값 비교로 무변경 확인.
+    if (action === 'init19') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const costDbId = (meta.data.sheets || []).find((s) => s.properties?.title === '비용DB')
+        ?.properties?.sheetId
+      if (costDbId == null) throw new Error(`'비용DB' 탭이 없습니다.`)
+      const LAST = PRICE_ROWS_TO // 300
+
+      // ── 0. 가드 — 비용DB A4:D6 값·수식 비어있음 ─────────────────
+      const costPre = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote('비용DB')}!A4:D6`,
+        valueRenderOption: 'FORMULA',
+      })
+      const costStray = ((costPre.data.values || []) as Cell[][]).flat().filter((c) => String(c ?? '').trim() !== '')
+      if (costStray.length > 0) {
+        return NextResponse.json(
+          { ok: false, error: '비용DB A4:D6 가 비어있지 않습니다 — 쓰기 중단', 현재: costPre.data.values },
+          { status: 409 }
+        )
+      }
+
+      // ── 1. 단가DB 스냅샷 (수식 원문 · 계산값) ──────────────────
+      const snap = async () => {
+        const res = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!A2:N${LAST}`,
+          valueRenderOption: 'FORMULA',
+        })
+        const val = await sheets.spreadsheets.values.get({
+          spreadsheetId: TARGET_SHEET_ID,
+          range: `${quote(PRICE_TAB)}!A2:N${LAST}`,
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        const fx = (res.data.values || []) as Cell[][]
+        const vals = (val.data.values || []) as Cell[][]
+        // A~G(0~6) · J~N(9~13) 만 해시 — H·I(7·8)는 제외
+        const keep = (rows: Cell[][]) =>
+          rows.map((r) => [...(r || []).slice(0, 7), ...(r || []).slice(9, 14)])
+        const hash = createHash('sha256')
+          .update(JSON.stringify([keep(fx), keep(vals)]))
+          .digest('hex')
+        const hi = Array.from({ length: LAST - 1 }, (_, i) => [
+          (vals[i] || [])[7] ?? '',
+          (vals[i] || [])[8] ?? '',
+        ])
+        return { fx, hash, hi }
+      }
+      const before = await snap()
+      const fxAt = (r: number, c: number) => String((before.fx[r - 2] || [])[c] ?? '').trim()
+
+      // ── 2. H·I 새 수식 (행별, 기존 수식 감싸기) ─────────────────
+      const WRAP_MARK = `TRIM($C`
+      const manualRows: { 행: number; H: Cell; I: Cell }[] = []
+      const skippedBlank: number[] = []
+      let already = 0
+      const data: { range: string; values: Cell[][] }[] = []
+      let run: { r: number; hi: Cell[] }[] = []
+      const flush = () => {
+        if (!run.length) return
+        data.push({
+          range: `${quote(PRICE_TAB)}!H${run[0].r}:I${run[run.length - 1].r}`,
+          values: run.map((x) => x.hi),
+        })
+        run = []
+      }
+      for (let r = 2; r <= LAST; r++) {
+        const h = fxAt(r, 7)
+        const i = fxAt(r, 8)
+        if (h === '' && i === '') {
+          skippedBlank.push(r)
+          flush()
+          continue
+        }
+        if (!h.startsWith('=') || !i.startsWith('=')) {
+          manualRows.push({ 행: r, H: h, I: i })
+          flush()
+          continue
+        }
+        if (h.includes(WRAP_MARK) || i.includes(WRAP_MARK)) {
+          already++
+          flush()
+          continue
+        }
+        const key = `"곰표 작업비 "&IF($F${r}<1000,$F${r}&"g",$F${r}/1000&"kg")`
+        const labor = `IFERROR(VLOOKUP(${key},'비용DB'!$A:$B,2,FALSE),"")`
+        const newH =
+          `=IF(TRIM($C${r})="${GOMPYO}",IF(OR($G${r}="",${labor}=""),"",$G${r}+${labor}),` +
+          `${h.slice(1)})`
+        const newI = `=IF(TRIM($C${r})="${GOMPYO}",$H${r},${i.slice(1)})`
+        run.push({ r, hi: [newH, newI] })
+      }
+      flush()
+
+      // ── 3. 비용DB A4:D6 + 서식(A2:D2 → A4:D6) ─────────────────
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote('비용DB')}!A4:D6`,
+        valueInputOption: 'RAW',
+        requestBody: { values: GOMPYO_COST_ROWS },
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              copyPaste: {
+                source: { sheetId: costDbId, startRowIndex: 1, endRowIndex: 2, startColumnIndex: 0, endColumnIndex: 4 },
+                destination: { sheetId: costDbId, startRowIndex: 3, endRowIndex: 6, startColumnIndex: 0, endColumnIndex: 4 },
+                pasteType: 'PASTE_FORMAT',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 4. 단가DB H·I 기입 ───────────────────────────────────
+      if (data.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { valueInputOption: 'USER_ENTERED', data },
+        })
+      }
+
+      // ── 5. 검증 ─────────────────────────────────────────────
+      const after = await snap()
+      const hiDiff: { 행: number; 전: Cell[]; 후: Cell[] }[] = []
+      before.hi.forEach((b, i) => {
+        const a = after.hi[i]
+        if (JSON.stringify(b) !== JSON.stringify(a)) hiDiff.push({ 행: i + 2, 전: b, 후: a })
+      })
+      const sampleIdx = after.fx.findIndex((r) => String(r?.[0] ?? '').trim() === '[쌀쌀쌀] 캐나다산 렌틸콩 2kg')
+      const cost = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote('비용DB')}!A1:D6`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      return NextResponse.json({
+        ok: true,
+        message: '단가DB H·I 곰표 분기 + 비용DB 곰표 작업비 3줄 완료',
+        H_I_재작성_행수: data.reduce((n, d) => n + d.values.length, 0),
+        건너뜀: { 수기값: manualRows, 빈칸: skippedBlank.length, 이미_적용: already },
+        H_I_계산값: { 변경_행수: hiDiff.length, 변경: hiDiff.slice(0, 10) },
+        A_G_J_N_해시: { 전: before.hash, 후: after.hash, 동일: before.hash === after.hash },
+        샘플: sampleIdx < 0 ? null : {
+          행: sampleIdx + 2,
+          H: (after.fx[sampleIdx] || [])[7] ?? '',
+          I: (after.fx[sampleIdx] || [])[8] ?? '',
+        },
+        비용DB_A1_D6: cost.data.values || [],
+        비고: '단가DB C·G·마진계산·원가표 시트 무변경',
       })
     }
 
