@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
+import { createHash } from 'crypto'
 import aliasData from './alias-data.json'
 import mappingData from './mapping-data.json'
 import migrationData from './migration-data.json'
@@ -341,6 +342,9 @@ const PRICE_J_HEADER_V2 = '총 공급가(소포장)'
 //   U 는 비워둔 채 두고 V1 사용안내 문구는 보존 → 검사·기입 모두 W 부터
 const COUPANG_1P_HEADER = ['노출ID', '옵션ID', '소비자가(1P)', '쿠팡마진율(1P)']
 const UX_LETTERS = ['W', 'X', 'Y', 'Z', 'AA', 'AB']
+// init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
+const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
+const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
 // 단가DB 자동 파생 컬럼 배경 (입력 흰색과 대비)
 const AUTO_GRAY = 'D9D9D9'
 // init13: 마진마스터 이관
@@ -5349,6 +5353,120 @@ export async function GET(req: Request) {
         쿠팡1P_수수료율: { 행: chRow, 이전: before1P, 이후: 0 },
         서식: { W: 'TEXT', X: 'TEXT', Y: '#,##0', Z: '0.0% (PERCENT)' },
         비고: '열 삽입 없음 · A~T·V1 안내문·단가DB 무변경 · 원가표 시트 미접근',
+      })
+    }
+
+    // ── init18: 마진계산 Y·Z 헤더 이름 변경 + 서식 전환 (데이터 입력 없음) ──
+    //   · Y1 '소비자가(1P)' → '1P 상품코드' (Y2:Y301 텍스트)
+    //   · Z1 '쿠팡마진율(1P)' → '1P 납품가(부가포함)' (Z2:Z301 #,##0)
+    //   · Y1·Z1 이 기존 헤더가 아니거나 Y2:Z301 에 값·수식이 있으면 쓰지 않고 409.
+    //   · A~X 값·수식은 실행 전·후 해시로 무변경 확인.
+    if (action === 'init18') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const marginId = (meta.data.sheets || []).find((s) => s.properties?.title === MARGIN_TAB)
+        ?.properties?.sheetId
+      if (marginId == null) throw new Error(`'${MARGIN_TAB}' 탭이 없습니다.`)
+      const marginLast = 1 + MARGIN_ROWS // 301
+
+      const hashAX = async () => {
+        const res = await sheets.spreadsheets.values.batchGet({
+          spreadsheetId: TARGET_SHEET_ID,
+          ranges: [`${quote(MARGIN_TAB)}!A1:X${marginLast}`],
+          valueRenderOption: 'FORMULA',
+        })
+        return createHash('sha256')
+          .update(JSON.stringify(res.data.valueRanges?.[0]?.values || []))
+          .digest('hex')
+      }
+
+      // ── 0. 가드 — Y1·Z1 기존 헤더 + Y2:Z301 값·수식 비어있음 ─────
+      const pre = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!Y1:Z${marginLast}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const preRows = (pre.data.values || []) as Cell[][]
+      const head = [String(preRows[0]?.[0] ?? '').trim(), String(preRows[0]?.[1] ?? '').trim()]
+      if (head[0] !== COUPANG_1P_YZ_OLD[0] || head[1] !== COUPANG_1P_YZ_OLD[1]) {
+        return NextResponse.json(
+          { ok: false, error: 'Y1·Z1 이 기존 헤더가 아닙니다 — 쓰기 중단', 현재_Y1_Z1: head },
+          { status: 409 }
+        )
+      }
+      const stray: { 셀: string; 값: Cell }[] = []
+      preRows.slice(1).forEach((r, ri) =>
+        (r || []).forEach((c, ci) => {
+          if (String(c ?? '').trim() !== '') stray.push({ 셀: `${ci === 0 ? 'Y' : 'Z'}${ri + 2}`, 값: c })
+        })
+      )
+      if (stray.length > 0) {
+        return NextResponse.json(
+          { ok: false, error: `마진계산 Y2:Z${marginLast} 가 비어있지 않습니다 (${stray.length}셀) — 쓰기 중단`, 점유셀: stray.slice(0, 10) },
+          { status: 409 }
+        )
+      }
+      const before = await hashAX()
+
+      // ── 1. 헤더 (Y1:Z1) ──────────────────────────────────────
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!Y1:Z1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [COUPANG_1P_YZ_NEW] },
+      })
+
+      // ── 2. 서식 (Y·Z, 데이터 2~301행) ─────────────────────────
+      const grid = (c0: number, c1: number) => ({
+        sheetId: marginId,
+        startRowIndex: 1,
+        endRowIndex: marginLast,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            // Y 1P 상품코드 — 텍스트 (8자리 코드 숫자 변환 방지)
+            {
+              repeatCell: {
+                range: grid(24, 25),
+                cell: {
+                  userEnteredFormat: { numberFormat: { type: 'TEXT' }, horizontalAlignment: 'LEFT' },
+                },
+                fields: 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment',
+              },
+            },
+            // Z 1P 납품가(부가포함) — 숫자(쉼표)
+            {
+              repeatCell: {
+                range: grid(25, 26),
+                cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } } },
+                fields: 'userEnteredFormat.numberFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 3. 결과 확인 ─────────────────────────────────────────
+      const after = await hashAX()
+      const post = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!A1:Z1`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      return NextResponse.json({
+        ok: true,
+        message: '마진계산 Y·Z 헤더 이름 변경 + 서식 전환 완료',
+        마진계산_헤더_A_Z: post.data.values?.[0] || [],
+        A_X_해시: { 전: before, 후: after, 동일: before === after },
+        서식: { Y: 'TEXT', Z: '#,##0' },
+        비고: '데이터 입력 없음 · A~X·V1 안내문·단가DB·채널DB 무변경 · 원가표 시트 미접근',
       })
     }
 
