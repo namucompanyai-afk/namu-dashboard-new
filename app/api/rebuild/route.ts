@@ -6961,6 +6961,28 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── mdv: 마스터 전 탭 드롭다운(ONE_OF_RANGE) 규칙 요약 (쓰기 없음) ──
+    if (action === 'mdv') {
+      const sheets = getSheets()
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: MASTER_SHEET_ID,
+        includeGridData: true,
+        fields: 'sheets(properties(title),data(rowData(values(dataValidation))))',
+      })
+      const out: Record<string, number> = {}
+      for (const sh of gd.data.sheets || []) {
+        ;(sh.data?.[0]?.rowData || []).forEach((rd) =>
+          (rd.values || []).forEach((v, ci) => {
+            const c: any = v.dataValidation?.condition
+            if (!c) return
+            const k = `${sh.properties?.title}!${colName(ci)} ${c.type} ${(c.values || []).map((x: any) => x.userEnteredValue).join('|')}`
+            out[k] = (out[k] || 0) + 1
+          })
+        )
+      }
+      return NextResponse.json({ ok: true, 규칙: out })
+    }
+
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
   } catch (e: any) {
     console.error('[rebuild] error:', e?.message || e)
