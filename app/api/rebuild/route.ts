@@ -733,6 +733,21 @@ function m2PriceFormula(f: string, col: 'G' | 'H' | 'I' | 'J', r: number): strin
   return out
 }
 
+// 원가표 파일로 가는 HYPERLINK → 같은 파일 안 진도팜 원가표 탭 링크 (정렬로 위치가 바뀌므로 위치 대신 내용으로 찾음)
+function m2LinkCells(fx: Cell[][], jinGid: number | undefined) {
+  const out: { r: number; c: number; f: string }[] = []
+  fx.forEach((row, ri) =>
+    (row || []).forEach((c, ci) => {
+      const f = String(c ?? '')
+      if (f.startsWith('=HYPERLINK(') && f.includes(COST_SHEET_ID)) {
+        const m = f.match(/,"([^"]*)"\)$/)
+        out.push({ r: ri + 1, c: ci, f: `=HYPERLINK("#gid=${jinGid}","${m ? m[1] : '원가표 바로가기'}")` })
+      }
+    })
+  )
+  return out
+}
+
 // 마진계산·설정 등: 탭 이름만 바꾸는 변환
 function m2RenameRefs(f: string): string {
   return f
@@ -6557,7 +6572,7 @@ export async function GET(req: Request) {
           valueInputOption: 'USER_ENTERED',
           data: [
             { range: `${quote(PRICE_TAB)}!G2:J${LAST}`, values: priceGJ },
-            { range: `${quote(PRICE_TAB)}!N2`, values: [[`=HYPERLINK("#gid=${jinId}","원가표 바로가기")`]] },
+            ...m2LinkCells(priceFx, jinId).map((x) => ({ range: `${quote(PRICE_TAB)}!${colName(x.c)}${x.r}`, values: [[x.f]] })),
             ...colRuns(marginCells, MARGIN_TAB),
           ],
         },
@@ -6733,6 +6748,44 @@ export async function GET(req: Request) {
         마진계산_입력값_변경: inputDiff.slice(0, 20),
         곰표행: gompyo,
         원본_수정시각: { 전: mtime(driveBefore), 후: mtime(driveAfter) },
+      })
+    }
+
+    // ── m2link: m2 보정 — 단가DB 원가표 바로가기 링크를 파일 안 링크로 (정렬로 N10 으로 옮겨진 것) ──
+    //   · 마스터 단가DB 에서 원가표 파일 HYPERLINK 를 #gid 링크로 바꾸고,
+    //     m2 가 N2 에 새로 넣은 링크는 원본 N2 가 빈칸이었을 때만 지운다.
+    if (action === 'm2link') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title))' })
+      const jinId = (meta.data.sheets || []).find((x) => x.properties?.title === '진도팜 원가표')?.properties?.sheetId as number | undefined
+      if (jinId == null) throw new Error('마스터에 진도팜 원가표 없음')
+      const get = async (id: string) =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: id, range: `${quote(PRICE_TAB)}!A1:N${PRICE_ROWS_TO}`, valueRenderOption: 'FORMULA' }))
+          .data.values || []) as Cell[][]
+      const fx = await get(MASTER_SHEET_ID)
+      const src = await get(TARGET_SHEET_ID)
+      const links = m2LinkCells(fx, jinId)
+      const n2Mine = String(fx[1]?.[13] ?? '') === `=HYPERLINK("#gid=${jinId}","원가표 바로가기")`
+      const n2SrcBlank = String(src[1]?.[13] ?? '').trim() === ''
+      const clearN2 = n2Mine && n2SrcBlank && links.length > 0
+      if (!links.length && !clearN2) return NextResponse.json({ ok: true, message: '바꿀 링크 없음' })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            ...links.map((x) => ({ range: `${quote(PRICE_TAB)}!${colName(x.c)}${x.r}`, values: [[x.f]] })),
+            ...(clearN2 ? [{ range: `${quote(PRICE_TAB)}!N2`, values: [['']] }] : []),
+          ],
+        },
+      })
+      const post = await get(MASTER_SHEET_ID)
+      return NextResponse.json({
+        ok: true,
+        변경: links.map((x) => `${colName(x.c)}${x.r}`),
+        N2_비움: clearN2,
+        N열: post.map((r, i) => [i + 1, String(r?.[13] ?? '')]).filter((x) => x[1] !== ''),
+        원가표ID_잔존: post.flat().filter((c) => String(c ?? '').includes(COST_SHEET_ID)).length,
       })
     }
 
