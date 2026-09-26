@@ -337,6 +337,9 @@ const ETC_TAB_RETIRED = '(폐기)기타거래처 원가표'
 const PRICE_J_HEADER = '총 공급가'
 // init12: 헤더 명확화
 const PRICE_J_HEADER_V2 = '총 공급가(소포장)'
+// init17: 마진계산 U~X — 쿠팡 1P 준비 열 (열 삽입 없이 빈 열에 헤더만)
+const COUPANG_1P_HEADER = ['노출ID', '옵션ID', '소비자가(1P)', '쿠팡마진율(1P)']
+const UX_LETTERS = ['U', 'V', 'W', 'X', 'Y', 'Z', 'AA', 'AB']
 // 단가DB 자동 파생 컬럼 배경 (입력 흰색과 대비)
 const AUTO_GRAY = 'D9D9D9'
 // init13: 마진마스터 이관
@@ -5113,6 +5116,237 @@ export async function GET(req: Request) {
           cols: s.properties?.gridProperties?.columnCount,
           rows: s.properties?.gridProperties?.rowCount,
         })),
+      })
+    }
+
+    // ── inspectUX: 마진계산 U~AB 점유 여부 · 색 표본 읽기 전용 (쓰기 없음) ──
+    if (action === 'inspectUX') {
+      const sheets = getSheets()
+      const marginLast = 1 + MARGIN_ROWS
+      const val = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [
+          `${quote(MARGIN_TAB)}!U1:AB${marginLast}`,
+          `${quote(MARGIN_TAB)}!A1:X1`,
+          `${quote('채널DB')}!A1:H20`,
+        ],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const fx = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!U1:AB${marginLast}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(MARGIN_TAB)}!A1:X1`, `${quote(MARGIN_TAB)}!A2:X2`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+      })
+      const bgRow = (i: number) =>
+        (gd.data.sheets?.[0]?.data?.[i]?.rowData?.[0]?.values || []).map(
+          (c) => c.effectiveFormat?.backgroundColor
+        )
+      const cellsOf = (rows: Cell[][]) => {
+        const out: { 셀: string; 값: Cell }[] = []
+        ;(rows || []).forEach((r, ri) =>
+          (r || []).forEach((c, ci) => {
+            if (String(c ?? '').trim() === '') return
+            out.push({ 셀: `${UX_LETTERS[ci] ?? `+${ci}`}${ri + 1}`, 값: c })
+          })
+        )
+        return out
+      }
+      const v = val.data.valueRanges || []
+      const occVal = cellsOf((v[0]?.values || []) as Cell[][])
+      const occFx = cellsOf((fx.data.values || []) as Cell[][])
+      return NextResponse.json({
+        ok: true,
+        UAB_비어있음: occVal.length === 0 && occFx.length === 0,
+        UAB_점유_값: occVal.slice(0, 20),
+        UAB_점유_수식: occFx.slice(0, 20),
+        마진계산_헤더_A_X: v[1]?.values?.[0] || [],
+        헤더1행_배경: bgRow(0),
+        데이터2행_배경: bgRow(1),
+        채널DB: v[2]?.values || [],
+      })
+    }
+
+    // ── init17: 마진계산 U~X 쿠팡 1P 준비 열 + 채널DB 쿠팡 1P 수수료율 0 ──
+    //   · 열 삽입 없음 — 빈 U~X 에 헤더만 기입. A~T 값·수식은 건드리지 않는다.
+    //   · U~AB 에 예상 헤더 외 값·수식이 하나라도 있으면 아무것도 쓰지 않고 중단.
+    if (action === 'init17') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title,gridProperties(columnCount)))',
+      })
+      const marginProps = (meta.data.sheets || []).find(
+        (s) => s.properties?.title === MARGIN_TAB
+      )?.properties
+      const marginId = marginProps?.sheetId
+      if (marginId == null) throw new Error(`'${MARGIN_TAB}' 탭이 없습니다.`)
+      const colCount = marginProps?.gridProperties?.columnCount ?? 0
+      if (colCount < 24) throw new Error(`'${MARGIN_TAB}' 열 수 부족: ${colCount} (24 이상 필요)`)
+      const channelId = (meta.data.sheets || []).find((s) => s.properties?.title === '채널DB')
+        ?.properties?.sheetId
+      if (channelId == null) throw new Error(`'채널DB' 탭이 없습니다.`)
+      const marginLast = 1 + MARGIN_ROWS // 301
+
+      // ── 0. 사전 가드 — U~AB 값·수식 점유 검사 ──────────────────
+      const pre = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!U1:AB${marginLast}`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const preFx = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!U1:AB${marginLast}`,
+        valueRenderOption: 'FORMULA',
+      })
+      // 재실행 허용 — U1~X1 이 이미 같은 헤더인 경우만 점유로 보지 않는다
+      const strayOf = (rows: Cell[][]) => {
+        const out: { 셀: string; 값: Cell }[] = []
+        ;(rows || []).forEach((r, ri) =>
+          (r || []).forEach((c, ci) => {
+            const s = String(c ?? '').trim()
+            if (s === '') return
+            if (ri === 0 && ci < 4 && s === COUPANG_1P_HEADER[ci]) return
+            out.push({ 셀: `${UX_LETTERS[ci] ?? `+${ci}`}${ri + 1}`, 값: c })
+          })
+        )
+        return out
+      }
+      const stray = [
+        ...strayOf((pre.data.values || []) as Cell[][]),
+        ...strayOf((preFx.data.values || []) as Cell[][]),
+      ]
+      if (stray.length > 0) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `마진계산 U~AB 가 비어있지 않습니다 (${stray.length}셀) — 쓰기 중단`,
+            점유셀: stray.slice(0, 10),
+          },
+          { status: 409 }
+        )
+      }
+
+      // ── 1. 색 표본 — K1(수기 입력 컬럼 헤더) · D2(수기 입력 데이터) ──
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(MARGIN_TAB)}!K1`, `${quote(MARGIN_TAB)}!D2`],
+        includeGridData: true,
+        fields: 'sheets(data(rowData(values(effectiveFormat(backgroundColor)))))',
+      })
+      const bgAt = (i: number) =>
+        gd.data.sheets?.[0]?.data?.[i]?.rowData?.[0]?.values?.[0]?.effectiveFormat?.backgroundColor
+      const headerBg = bgAt(0) || { red: 0.95, green: 0.95, blue: 0.95 }
+      const inputBg = bgAt(1) || { red: 1, green: 1, blue: 1 }
+
+      // ── 2. 헤더 기입 (U1:X1) ──────────────────────────────────
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!U1:X1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [COUPANG_1P_HEADER] },
+      })
+
+      // ── 3. 서식 (U~X, 데이터 2~301행) ─────────────────────────
+      const grid = (r0: number, r1: number, c0: number, c1: number) => ({
+        sheetId: marginId,
+        startRowIndex: r0,
+        endRowIndex: r1,
+        startColumnIndex: c0,
+        endColumnIndex: c1,
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            // 헤더 U~X — 수기 입력 컬럼 헤더와 같은 색 + 볼드
+            {
+              repeatCell: {
+                range: grid(0, 1, 20, 24),
+                cell: {
+                  userEnteredFormat: { textFormat: { bold: true }, backgroundColor: headerBg },
+                },
+                fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor',
+              },
+            },
+            // 데이터 U~X — 수기 입력 배경
+            {
+              repeatCell: {
+                range: grid(1, marginLast, 20, 24),
+                cell: { userEnteredFormat: { backgroundColor: inputBg } },
+                fields: 'userEnteredFormat.backgroundColor',
+              },
+            },
+            // U 노출ID · V 옵션ID — 텍스트 서식 (긴 숫자 ID 지수표기 방지)
+            {
+              repeatCell: {
+                range: grid(1, marginLast, 20, 22),
+                cell: {
+                  userEnteredFormat: {
+                    numberFormat: { type: 'TEXT' },
+                    horizontalAlignment: 'LEFT',
+                  },
+                },
+                fields: 'userEnteredFormat.numberFormat,userEnteredFormat.horizontalAlignment',
+              },
+            },
+            // W 소비자가(1P) — 숫자(쉼표)
+            {
+              repeatCell: {
+                range: grid(1, marginLast, 22, 23),
+                cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } } },
+                fields: 'userEnteredFormat.numberFormat',
+              },
+            },
+            // X 쿠팡마진율(1P) — 퍼센트 (마진율 P열과 동일 표기)
+            {
+              repeatCell: {
+                range: grid(1, marginLast, 23, 24),
+                cell: { userEnteredFormat: { numberFormat: { type: 'PERCENT', pattern: '0.0%' } } },
+                fields: 'userEnteredFormat.numberFormat',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 4. 채널DB '쿠팡 1P' 수수료율(B) → 0 (해당 행만) ────────
+      const ch = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote('채널DB')}!A1:B60`,
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      const chRows = (ch.data.values || []) as Cell[][]
+      const idx = chRows.findIndex((r, i) => i > 0 && String(r?.[0] ?? '').trim() === '쿠팡 1P')
+      if (idx < 0) throw new Error(`채널DB 에 '쿠팡 1P' 행이 없습니다.`)
+      const chRow = idx + 1 // 1-based 시트 행번호
+      const before1P = chRows[idx]?.[1] ?? ''
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote('채널DB')}!B${chRow}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[0]] },
+      })
+
+      // ── 5. 결과 확인 ─────────────────────────────────────────
+      const post = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(MARGIN_TAB)}!A1:X1`, `${quote('채널DB')}!A1:B20`],
+        valueRenderOption: 'UNFORMATTED_VALUE',
+      })
+      return NextResponse.json({
+        ok: true,
+        message: '마진계산 U~X(쿠팡 1P 준비) 헤더·서식 + 채널DB 쿠팡 1P 수수료율 0 완료',
+        마진계산_헤더_A_X: post.data.valueRanges?.[0]?.values?.[0] || [],
+        채널DB_A_B: post.data.valueRanges?.[1]?.values || [],
+        쿠팡1P_수수료율: { 행: chRow, 이전: before1P, 이후: 0 },
+        서식: { U: 'TEXT', V: 'TEXT', W: '#,##0', X: '0.0% (PERCENT)' },
+        비고: '열 삽입 없음 · A~T 및 단가DB 무변경 · 원가표 시트 미접근',
       })
     }
 
