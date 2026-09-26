@@ -6323,6 +6323,23 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── mread: 탭 읽기 전용 덤프 (쓰기 없음) — file=master|cost|rebuild|b2b · tab=탭이름 ──
+    if (action === 'mread') {
+      const sheets = getSheets()
+      const FILES: Record<string, string> = {
+        master: MASTER_SHEET_ID, cost: COST_SHEET_ID, rebuild: TARGET_SHEET_ID, b2b: B2B_SHEET_ID,
+      }
+      const id = FILES[url.searchParams.get('file') || '']
+      const tab = url.searchParams.get('tab') || ''
+      if (!id || !tab) return NextResponse.json({ ok: false, error: 'file·tab 필요' }, { status: 400 })
+      const [f, v] = await Promise.all(
+        (['FORMULA', 'UNFORMATTED_VALUE'] as const).map((opt) =>
+          sheets.spreadsheets.values.get({ spreadsheetId: id, range: `${quote(tab)}!A1:AB1000`, valueRenderOption: opt })
+        )
+      )
+      return NextResponse.json({ ok: true, 수식: f.data.values || [], 값: v.data.values || [] })
+    }
+
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
   } catch (e: any) {
     console.error('[rebuild] error:', e?.message || e)
