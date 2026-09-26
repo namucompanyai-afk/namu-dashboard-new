@@ -433,6 +433,21 @@ const M4_ALIAS_COLS: { tab: string; header: string }[] = [
   { tab: '발주 이력', header: '상품(별칭)' },
   { tab: MARGIN_TAB, header: '별칭' },
 ]
+// m5: 마진계산 1P 열·행
+const M5_PM_TAB = '상품마스터'
+// 1P 행 입력 [옵션ID, SKU ID, 봉수] — 옵션ID 빈칸 = 광고 안 하는 1P
+const M5_ROWS: [string, string, number][] = [
+  ['95687867677', '70438823', 1], ['95693656020', '70438823', 2], ['95693656023', '70438823', 3],
+  ['95670768339', '62185201', 1], ['95686834089', '62185201', 2], ['95686834074', '62185201', 3],
+  ['95769750935', '67096372', 1], ['95775967172', '67096372', 2], ['95775967168', '67096372', 3],
+  ['95768169394', '41667341', 1], ['95774490088', '41667341', 2],
+  ['95907154741', '77752344', 1], ['95907173477', '77754189', 1],
+  ['95637041436', '47846695', 1], ['95641151017', '47846695', 2],
+  ['95637333653', '50470320', 1], ['95641300858', '50470320', 2],
+  ['95664489857', '56115225', 1], ['95669821249', '56115225', 2],
+  ['', '67166778', 1], ['', '70439507', 1], ['', '79665140', 1], ['', '79933349', 1],
+  ['', '79911593', 1], ['', '80677477', 1], ['', '54146619', 1],
+]
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -7129,6 +7144,142 @@ export async function GET(req: Request) {
         오류셀: { 단가DB: errorCellsOf(PRICE_TAB, priceAfter).length, 마진계산: errorCellsOf(MARGIN_TAB, marginAfter).length },
         흑미2kg: { 전: { G: keepBefore?.[6], H: keepBefore?.[7], I: keepBefore?.[8] }, 후: { G: keepAfter[6], H: keepAfter[7], I: keepAfter[8] } },
         마진계산_원가_변경: marginChanged,
+      })
+    }
+
+    // ── m5: 나무_마스터 5단계 — 마진계산 1P 열(Z~AC)·1P 행 + 설정 입고박스 단가 ──
+    //   · 쓰기: 설정 J4:M6, 마진계산 Z~AC(2~301행 수식)·AA1:AC1 헤더, 1P 새 행의 A·B·C·D·H·I·K·X·Y
+    //   · 기존 데이터 행(A~X)·상품마스터·단가DB 는 쓰지 않음
+    if (action === 'm5') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range: string) =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title,gridProperties(columnCount)))' })
+      const propOf = (t: string) => (meta.data.sheets || []).find((x) => x.properties?.title === t)?.properties
+      const marginProp = propOf(MARGIN_TAB)
+      if (!marginProp || !propOf(M2_SETTING_TAB) || !propOf(M5_PM_TAB)) throw new Error('마스터 탭 누락')
+
+      // ── 0. 가드 ──────────────────────────────────────────────
+      const setJM = await read(M2_SETTING_TAB, 'FORMULA', 'J4:M6')
+      if (setJM.flat().some((c) => String(c ?? '') !== '')) return NextResponse.json({ ok: false, error: '설정 J4:M6 비어있지 않음 — 쓰기 중단', 값: setJM }, { status: 409 })
+      const mFx = await read(MARGIN_TAB, 'FORMULA', `A1:AC${MLAST}`)
+      const mVal = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const zacStray = mFx.slice(1).some((r) => (r || []).slice(25, 29).some((c) => String(c ?? '') !== '' && !String(c).startsWith('=')))
+      if (zacStray) return NextResponse.json({ ok: false, error: '마진계산 Z~AC 에 입력값이 있음 — 쓰기 중단' }, { status: 409 })
+      const jin = await read('진도팜 원가표', 'UNFORMATTED_VALUE', 'A1:F8')
+      const gom = await read(M3_GOM_TAB, 'UNFORMATTED_VALUE', 'A1:F8')
+      const findBox = (rows: Cell[][], label: string) => {
+        const i = rows.findIndex((r) => String(r?.[3] ?? '').trim() === label)
+        return i < 0 ? null : { cell: `$E$${i + 1}`, v: rows[i]?.[4] }
+      }
+      const jinBox = findBox(jin, '대')
+      const gomBox = findBox(gom, '10개입')
+      if (!jinBox || !gomBox) throw new Error('입고박스 참고표 셀을 찾지 못함')
+
+      // 마지막 데이터 행 · 재실행 대비 기존 1P 키
+      let last = 1
+      mFx.forEach((r, i) => { if (i > 0 && (String(r?.[0] ?? '').trim() || String(r?.[1] ?? '').trim())) last = i + 1 })
+      const existing = new Set(mVal.slice(1).map((r) => (String(r?.[23] ?? '').trim() ? `o:${String(r?.[23]).trim()}` : `s:${String(r?.[24] ?? '').trim()}`)))
+      const todo = M5_ROWS.filter(([o, sku]) => !existing.has(o ? `o:${o}` : `s:${sku}`))
+      const skipped = M5_ROWS.filter((x) => !todo.includes(x)).map(([o, sku]) => o || `SKU ${sku}`)
+      if (last + todo.length > MLAST) throw new Error('마진계산 301행 초과')
+      const beforeHash = createHash('sha256').update(JSON.stringify([mFx.slice(0, last).map((r) => (r || []).slice(0, 24)), mVal.slice(0, last).map((r) => (r || []).slice(0, 24))])).digest('hex')
+
+      // ── 1. 설정 입고박스 3줄 ──────────────────────────────────
+      const setRows: Cell[][] = [
+        ['입고박스 진도팜', `='진도팜 원가표'!${jinBox.cell}`, '원', '1P 쿠팡 입고용 대박스'],
+        ['입고박스 곰표', `='${M3_GOM_TAB}'!${gomBox.cell}`, '원', '1P 쿠팡 입고용 10개입 박스'],
+        ['입고박스 위킵', 0, '원', '1P 쿠팡 입고용 (위킵 출고)'],
+      ]
+      // ── 2. Z~AC 행별 수식 (상품마스터 SKU 문자·숫자 모두 매칭) ─────
+      const pm = (col: string, r: number) =>
+        `INDEX('${M5_PM_TAB}'!$${col}:$${col},IFERROR(MATCH(TO_TEXT($Y${r}),'${M5_PM_TAB}'!$F:$F,0),MATCH(VALUE($Y${r}),'${M5_PM_TAB}'!$F:$F,0)))`
+      const zac: Cell[][] = []
+      for (let r = 2; r <= MLAST; r++) {
+        zac.push([
+          `=IF($Y${r}="","",IFERROR(${pm('G', r)},""))`,
+          `=IF($Y${r}="","",IFERROR(${pm('E', r)},""))`,
+          `=IF($Y${r}="","",IFERROR(${pm('M', r)},""))`,
+          `=IF($Y${r}="","",IFERROR(VLOOKUP("입고박스 "&$AB${r},'${M2_SETTING_TAB}'!$J$2:$K$50,2,FALSE)/$AA${r},""))`,
+        ])
+      }
+      // ── 3. 1P 행 ─────────────────────────────────────────────
+      const rowData: { range: string; values: Cell[][] }[] = []
+      const rawData: { range: string; values: Cell[][] }[] = []
+      todo.forEach(([o, sku, n], i) => {
+        const r = last + 1 + i
+        rawData.push({ range: `${quote(MARGIN_TAB)}!A${r}`, values: [['쿠팡 1P']] })
+        rawData.push({ range: `${quote(MARGIN_TAB)}!C${r}`, values: [[n]] })
+        rawData.push({ range: `${quote(MARGIN_TAB)}!H${r}`, values: [['없음']] })
+        rawData.push({ range: `${quote(MARGIN_TAB)}!X${r}:Y${r}`, values: [[o, sku]] })
+        rowData.push({ range: `${quote(MARGIN_TAB)}!B${r}`, values: [[`=IF($Y${r}="","",IFERROR(${pm('B', r)},""))`]] })
+        rowData.push({ range: `${quote(MARGIN_TAB)}!D${r}`, values: [[`=IF(OR($Z${r}="",$C${r}=""),"",$Z${r}*$C${r})`]] })
+        rowData.push({ range: `${quote(MARGIN_TAB)}!I${r}`, values: [[`=IF(OR($AC${r}="",$C${r}=""),"",$AC${r}*$C${r})`]] })
+        rowData.push({ range: `${quote(MARGIN_TAB)}!K${r}`, values: [[`=IF($A${r}="","",IFERROR(VLOOKUP($A${r},'${M2_SETTING_TAB}'!$A$2:$C$19,3,FALSE),""))`]] })
+      })
+
+      // 열 수 확보 (AC = 29열)
+      const colCount = marginProp.gridProperties?.columnCount ?? 0
+      if (colCount < 29) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: { requests: [{ appendDimension: { sheetId: marginProp.sheetId!, dimension: 'COLUMNS', length: 29 - colCount } }] },
+        })
+      }
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [{ range: `${quote(MARGIN_TAB)}!AA1:AC1`, values: [['박스입수', '출고지', '입고박스비(봉당)']] }, ...rawData],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(M2_SETTING_TAB)}!J4:M6`, values: setRows },
+            { range: `${quote(MARGIN_TAB)}!Z2:AC${MLAST}`, values: zac },
+            ...rowData,
+          ],
+        },
+      })
+      // 서식: AA~AC 자동 칸 회색 · 헤더 볼드 · AC 숫자
+      const grid = (r0: number, r1: number, c0: number, c1: number) => ({ sheetId: marginProp.sheetId!, startRowIndex: r0, endRowIndex: r1, startColumnIndex: c0, endColumnIndex: c1 })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            { repeatCell: { range: grid(0, 1, 26, 29), cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: hex(AUTO_GRAY) } }, fields: 'userEnteredFormat.textFormat.bold,userEnteredFormat.backgroundColor' } },
+            { repeatCell: { range: grid(1, MLAST, 26, 29), cell: { userEnteredFormat: { backgroundColor: hex(AUTO_GRAY) } }, fields: 'userEnteredFormat.backgroundColor' } },
+            { repeatCell: { range: grid(1, MLAST, 28, 29), cell: { userEnteredFormat: { numberFormat: { type: 'NUMBER', pattern: '#,##0' } } }, fields: 'userEnteredFormat.numberFormat' } },
+          ],
+        },
+      })
+
+      // ── 4. 검증 ─────────────────────────────────────────────
+      const aFx = await read(MARGIN_TAB, 'FORMULA', `A1:AC${MLAST}`)
+      const aVal = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const afterHash = createHash('sha256').update(JSON.stringify([aFx.slice(0, last).map((r) => (r || []).slice(0, 24)), aVal.slice(0, last).map((r) => (r || []).slice(0, 24))])).digest('hex')
+      const oldYAC = aVal.slice(1, last).filter((r) => (r || []).slice(24, 29).some((c) => String(c ?? '') !== '')).length
+      const g = (r: Cell[], i: number) => (r?.[i] === undefined ? '' : r[i])
+      const oneP = aVal.slice(last).filter((r) => String(r?.[0] ?? '') === '쿠팡 1P').map((r) => ({
+        옵션ID: g(r, 23), SKU: g(r, 24), 별칭: g(r, 1), 봉수: g(r, 2), 판매가: g(r, 3), 원가: g(r, 5), 봉투: g(r, 6),
+        박스: g(r, 8), 수수료: g(r, 11), 총비용: g(r, 13), 마진: g(r, 14), 마진율: g(r, 15), BEP: g(r, 16), 상태: g(r, 19),
+        박스입수: g(r, 26), 출고지: g(r, 27),
+      }))
+      const setAfter = await read(M2_SETTING_TAB, 'UNFORMATTED_VALUE', 'J1:M6')
+      return NextResponse.json({
+        ok: beforeHash === afterHash && oldYAC === 0 && errorCellsOf(MARGIN_TAB, aVal).length === 0,
+        설정_입고박스: setAfter.slice(3),
+        입고박스_참조: { 진도팜: jinBox, 곰표: gomBox },
+        시작행: last + 1, 추가: todo.length, 건너뜀: skipped,
+        기존행_A_X_동일: beforeHash === afterHash,
+        기존행_Y_AC_값있음: oldYAC,
+        오류셀: errorCellsOf(MARGIN_TAB, aVal).length,
+        '1P': oneP,
       })
     }
 
