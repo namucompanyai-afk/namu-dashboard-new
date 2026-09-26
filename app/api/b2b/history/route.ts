@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
+import { requireRole } from '@/lib/server-auth'
 import {
   HISTORY_COL_COUNT,
   HISTORY_HEADERS,
@@ -82,8 +83,11 @@ const padRow = (r: unknown[]): (string | number)[] =>
   })
 
 /** 기록된 이력 조회 (읽기 전용 — '발주 이력' 탭만) */
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    // 로그인 필수 (서명 쿠키 nd_auth) — 허용: admin, staff
+    const denied = requireRole(req, ['admin', 'staff'])
+    if (denied) return denied
     const sheets = getSheets()
     const cur = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
@@ -104,6 +108,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    // 로그인 필수 (서명 쿠키 nd_auth) — 허용: admin, staff
+    const denied = requireRole(req, ['admin', 'staff'])
+    if (denied) return denied
     const body = await req.json()
     const incoming = (Array.isArray(body?.rows) ? body.rows : [])
       .slice(0, MAX_ROWS)

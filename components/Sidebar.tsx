@@ -38,6 +38,7 @@ export default function Sidebar() {
     if (!(await confirm({ title: '로그아웃', message: '로그아웃 하시겠습니까?', confirmText: '로그아웃' }))) return;
     localStorage.removeItem('user');
     document.cookie = 'nd_role=; path=/; max-age=0'; // 미들웨어 게이팅 쿠키 제거
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {}); // 서버 로그인 쿠키(nd_auth) 만료
     router.push('/login');
   };
 

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
+import { requireRole } from '@/lib/server-auth'
 import { parseProductMaster, parseMilkrunPrices } from '@/lib/b2b/kurly'
 import { parseCenters } from '@/lib/b2b/coupang'
 import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
@@ -42,6 +43,9 @@ function getSheets() {
 
 export async function GET(req: Request) {
   try {
+    // 로그인 필수 (서명 쿠키 nd_auth) — 허용: admin, staff
+    const denied = requireRole(req, ['admin', 'staff'])
+    if (denied) return denied
     const debug = new URL(req.url).searchParams.get('debug') === '1'
     const sheets = getSheets()
 

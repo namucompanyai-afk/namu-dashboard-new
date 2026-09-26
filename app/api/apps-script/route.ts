@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { setAuthCookie } from "@/lib/server-auth";
 
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxTaB84ClwxR5PZGXpqbIBUWDphYL-ol6FRwnkcdBbinOYTwKdc0fzEjeDLX-RWAxVWuA/exec";
 
@@ -78,7 +79,10 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json(data);
+    const out = NextResponse.json(data);
+    // 로그인 성공 → 서버측 확인용 서명 쿠키(nd_auth) 발급 (보호 API 가 이 쿠키로 역할 확인)
+    if (body?.action === "login" && data?.ok) setAuthCookie(out, data.user?.role);
+    return out;
   } catch (err: any) {
     return NextResponse.json({
       ok: false,

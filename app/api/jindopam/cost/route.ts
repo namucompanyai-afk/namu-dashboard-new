@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
+import { requireRole } from '@/lib/server-auth'
 
 /**
  * 진도팜 원가표 write API (서비스 계정)
@@ -125,8 +126,11 @@ async function notifySlack(text: string): Promise<void> {
 const READ_RANGE = `${quote(COST_TAB)}!A11:Q`
 const READ_RANGE_REF = `${quote(COST_TAB)}!A1:F8`
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    // 로그인 필수 (서명 쿠키 nd_auth) — 허용: admin, staff, jindo
+    const denied = requireRole(req, ['admin', 'staff', 'jindo'])
+    if (denied) return denied
     const sheets = getSheets()
     const res = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SHEET_ID,
@@ -145,6 +149,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    // 로그인 필수 (서명 쿠키 nd_auth) — 허용: admin, staff, jindo
+    const denied = requireRole(req, ['admin', 'staff', 'jindo'])
+    if (denied) return denied
     const body = await req.json()
     const action = body?.action as string
     const sheets = getSheets()

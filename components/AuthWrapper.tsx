@@ -10,12 +10,39 @@ const JINDO_ALLOWED = ['/jindopam/cost'];
 const GUEST_ALLOWED = ['/coupang-tools/ad-analysis'];
 const inAllowed = (pathname: string, allowed: string[]) =>
   allowed.some((p) => pathname === p || pathname.startsWith(p + '/'));
+// 서버 로그인 확인(nd_auth 쿠키) 대상 API — 401 이면 로그인 쿠키가 없거나 만료된 것
+const AUTH_APIS = ['/api/b2b/sheets', '/api/b2b/history', '/api/jindopam/cost'];
+
+// 보호 API 가 401 을 주면 localStorage 로그인만 남은 상태 → 로그아웃 처리 후 재로그인 (1회 설치)
+function installAuthExpiryHandler() {
+  const w = window as typeof window & { __ndAuthFetch?: boolean };
+  if (w.__ndAuthFetch) return;
+  w.__ndAuthFetch = true;
+  const orig = window.fetch.bind(window);
+  window.fetch = async (input, init) => {
+    const res = await orig(input, init);
+    if (res.status === 401) {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(url, window.location.origin).pathname;
+      if (AUTH_APIS.some((p) => path === p || path.startsWith(p + '/'))) {
+        localStorage.removeItem('user');
+        document.cookie = 'nd_role=; path=/; max-age=0';
+        window.location.href = '/login';
+      }
+    }
+    return res;
+  };
+}
 
 export default function AuthWrapper({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [checked, setChecked] = useState(false);
   const [loggedIn, setLoggedIn] = useState(false);
+
+  useEffect(() => {
+    installAuthExpiryHandler();
+  }, []);
 
   useEffect(() => {
     const user = localStorage.getItem('user');
