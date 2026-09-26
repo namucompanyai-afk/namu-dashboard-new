@@ -348,6 +348,29 @@ const GOMPYO_COST_ROWS: Cell[][] = [
   ['곰표 작업비 1kg', '', '원', '곰표 제조 1봉당 소포장 작업비'],
   ['곰표 작업비 2kg', 600, '원', '곰표 제조 1봉당 소포장 작업비'],
 ]
+// ── 나무_마스터 통합 (m 계열 액션) — 대상 MASTER_SHEET_ID, 원본 3개 파일은 읽기·copyTo 만 ──
+const MASTER_SHEET_ID = '1yryYZabPHf_4dD_ywyvrFx0iSqMZR8YVgYGm8mvAu3M'
+const B2B_SHEET_ID = '1nujXWT95QWnYBX1LpSAL1hLL3Uv8MBt7kJDz8i6WbFU'
+// m1: 그대로 복사하는 탭 (원본 파일 · 탭 이름) — 복사 순서 = 참조 먼저
+const M1_COPIES: { src: string; file: string; tab: string }[] = [
+  { src: COST_SHEET_ID, file: '원가표', tab: '진도팜 원가표' },
+  { src: COST_SHEET_ID, file: '원가표', tab: '곰표 원가표' },
+  { src: TARGET_SHEET_ID, file: '마진리빌드', tab: '발주매핑' },
+  { src: B2B_SHEET_ID, file: 'b2b', tab: '상품마스터' },
+  { src: B2B_SHEET_ID, file: 'b2b', tab: '쿠팡 센터 주소록' },
+  { src: B2B_SHEET_ID, file: 'b2b', tab: '쿠팡 밀크런 가격표' },
+  { src: B2B_SHEET_ID, file: 'b2b', tab: '컬리 밀크런 가격표' },
+  { src: B2B_SHEET_ID, file: 'b2b', tab: '발주 이력' },
+]
+const M1_LOG_TAB = '원가 변동 로그'
+const M1_LOG_HEADER = ['일시', '종류', '원료ID·항목', '구분', '품목', '변경 전', '변경 후', '적용 시작일', '변경자']
+const M1_SRC_UNIT_LOG = '단가 변동 로그' // 일시|원료ID|구분|품목|변경 전|변경 후|적용 시작일|변경자
+const M1_SRC_PROC_LOG = '가공비 변동 로그' // 일시|종류|항목|변경 전|변경 후|적용 시작일|변경자
+const M1_ORDER = [
+  '진도팜 원가표', '곰표 원가표', M1_LOG_TAB,
+  // (2단계 탭 자리)
+  '상품마스터', '발주매핑', '쿠팡 센터 주소록', '쿠팡 밀크런 가격표', '컬리 밀크런 가격표', '발주 이력',
+]
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -597,6 +620,49 @@ const errorCellsOf = (tab: string, rows: Cell[][]) => {
     })
   )
   return out
+}
+
+// Drive 메타(수정 시각·편집 가능 여부) — drive.metadata.readonly. 실패하면 null (Drive API 미사용 환경 대비)
+async function driveMeta(ids: string[]) {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT
+  if (!raw) return null
+  try {
+    const creds = JSON.parse(raw)
+    if (typeof creds.private_key === 'string') creds.private_key = creds.private_key.replace(/\\n/g, '\n')
+    const auth = new google.auth.GoogleAuth({
+      credentials: creds,
+      scopes: ['https://www.googleapis.com/auth/drive.metadata.readonly'],
+    })
+    const drive = google.drive({ version: 'v3', auth })
+    const out: Record<string, { name?: string | null; modifiedTime?: string | null; canEdit?: boolean | null }> = {}
+    for (const id of ids) {
+      const r = await drive.files.get({ fileId: id, fields: 'name,modifiedTime,capabilities(canEdit)' })
+      out[id] = { name: r.data.name, modifiedTime: r.data.modifiedTime, canEdit: r.data.capabilities?.canEdit }
+    }
+    return out
+  } catch (e: any) {
+    return { 오류: e?.message || String(e) } as any
+  }
+}
+
+// 탭 전체 값·수식 스냅샷 + 해시
+async function tabSnapshot(sheets: ReturnType<typeof getSheets>, id: string, tab: string) {
+  const [f, v] = await Promise.all(
+    (['FORMULA', 'UNFORMATTED_VALUE'] as const).map((opt) =>
+      sheets.spreadsheets.values.get({ spreadsheetId: id, range: quote(tab), valueRenderOption: opt })
+    )
+  )
+  const fx = (f.data.values || []) as Cell[][]
+  const vals = (v.data.values || []) as Cell[][]
+  const h = (x: unknown) => createHash('sha256').update(JSON.stringify(x)).digest('hex').slice(0, 12)
+  return {
+    행수: vals.length,
+    헤더: vals[0] || [],
+    값해시: h(vals),
+    수식해시: h(fx),
+    수식셀: fx.flat().filter((c) => String(c ?? '').startsWith('=')).length,
+    오류셀: errorCellsOf(tab, vals).length,
+  }
 }
 
 const hex = (h: string) => ({
@@ -6069,6 +6135,191 @@ export async function GET(req: Request) {
         가공참조_당김: procShift,
         샘플_마진계산_R2: sample.data.valueRanges?.[0]?.values?.[0] || [],
         샘플_발주매핑_I2: sample.data.valueRanges?.[1]?.values?.[0]?.[0] ?? '',
+      })
+    }
+
+    // ── m1check: 나무_마스터 1단계 사전 확인 (쓰기 없음) ──────────
+    if (action === 'm1check') {
+      const sheets = getSheets()
+      const tabsOf = async (id: string) => {
+        const m = await sheets.spreadsheets.get({
+          spreadsheetId: id,
+          fields: 'properties.title,sheets(properties(sheetId,title,hidden,gridProperties(rowCount,columnCount)))',
+        })
+        return {
+          파일: m.data.properties?.title,
+          탭: (m.data.sheets || []).map((x) => ({
+            title: x.properties?.title,
+            hidden: !!x.properties?.hidden,
+            rows: x.properties?.gridProperties?.rowCount,
+          })),
+        }
+      }
+      const out: Record<string, any> = {}
+      for (const [k, id] of [['마스터', MASTER_SHEET_ID], ['원가표', COST_SHEET_ID], ['마진리빌드', TARGET_SHEET_ID], ['b2b', B2B_SHEET_ID]] as const) {
+        try {
+          out[k] = await tabsOf(id)
+        } catch (e: any) {
+          out[k] = { 오류: e?.message || String(e) }
+        }
+      }
+      const srcTabs = (file: string) => new Set(((out[file]?.탭 || []) as any[]).map((t) => t.title))
+      const missing = M1_COPIES.filter((c) => !srcTabs(c.file).has(c.tab)).map((c) => `${c.file}!${c.tab}`)
+      for (const t of [M1_SRC_UNIT_LOG, M1_SRC_PROC_LOG]) if (!srcTabs('원가표').has(t)) missing.push(`원가표!${t}`)
+      return NextResponse.json({
+        ok: true,
+        파일: out,
+        원본_누락탭: missing,
+        드라이브: await driveMeta([MASTER_SHEET_ID, COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID]),
+      })
+    }
+
+    // ── m1: 나무_마스터 1단계 — 탭 그대로 복사 + 원가 변동 로그 합치기 ──
+    //   · 원본 3개 파일은 values.get·sheets.copyTo 만 (쓰기 없음). 쓰기 대상은 MASTER_SHEET_ID 뿐.
+    //   · 가드: 마스터에 기본 시트 1개 외 탭이 있거나, 원본 탭이 없으면 409 (아무것도 안 씀)
+    //   · 탭 하나씩 copyTo → 즉시 원래 이름으로 변경 (뒤 탭의 탭 간 참조가 이름으로 이어지게)
+    if (action === 'm1') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: MASTER_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const masterTabs = (meta.data.sheets || []).map((x) => ({
+        id: x.properties?.sheetId as number,
+        title: x.properties?.title || '',
+      }))
+      const clash = masterTabs.filter((t) => M1_ORDER.includes(t.title)).map((t) => t.title)
+      if (clash.length) {
+        return NextResponse.json({ ok: false, error: '마스터에 같은 이름 탭이 이미 있음 — 쓰기 중단', 탭: clash }, { status: 409 })
+      }
+      if (masterTabs.length !== 1) {
+        return NextResponse.json(
+          { ok: false, error: '마스터가 비어있지 않음 (기본 시트 1개가 아님) — 쓰기 중단', 탭: masterTabs.map((t) => t.title) },
+          { status: 409 }
+        )
+      }
+      const defaultSheet = masterTabs[0]
+
+      // 원본 탭 sheetId 확인
+      const srcIds = new Map<string, Map<string, number>>()
+      for (const id of Array.from(new Set(M1_COPIES.map((c) => c.src)))) {
+        const m = await sheets.spreadsheets.get({ spreadsheetId: id, fields: 'sheets(properties(sheetId,title))' })
+        srcIds.set(id, new Map((m.data.sheets || []).map((x) => [x.properties?.title || '', x.properties?.sheetId as number])))
+      }
+      const missing = M1_COPIES.filter((c) => srcIds.get(c.src)?.get(c.tab) == null).map((c) => `${c.file}!${c.tab}`)
+      for (const t of [M1_SRC_UNIT_LOG, M1_SRC_PROC_LOG]) if (srcIds.get(COST_SHEET_ID)?.get(t) == null) missing.push(`원가표!${t}`)
+      if (missing.length) {
+        return NextResponse.json({ ok: false, error: '원본 탭 없음 — 쓰기 중단', 누락: missing }, { status: 409 })
+      }
+      const driveBefore = await driveMeta([COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID])
+
+      // 원가 변동 로그 원본 읽기 (표시값 그대로)
+      const logs = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: COST_SHEET_ID,
+        ranges: [quote(M1_SRC_UNIT_LOG), quote(M1_SRC_PROC_LOG)],
+        valueRenderOption: 'FORMATTED_VALUE',
+      })
+      const dataRows = (rows: Cell[][]) => {
+        const h = rows.findIndex((r) => String(r?.[0] ?? '').trim() === '일시')
+        return h < 0 ? [] : rows.slice(h + 1).filter((r) => String(r?.[0] ?? '').trim() !== '')
+      }
+      const unitRows = dataRows((logs.data.valueRanges?.[0]?.values || []) as Cell[][])
+      const procRows = dataRows((logs.data.valueRanges?.[1]?.values || []) as Cell[][])
+      const g = (r: Cell[], i: number) => r[i] ?? ''
+      const merged: Cell[][] = [
+        ...unitRows.map((r) => [g(r, 0), '단가', g(r, 1), g(r, 2), g(r, 3), g(r, 4), g(r, 5), g(r, 6), g(r, 7)]),
+        ...procRows.map((r) => [g(r, 0), g(r, 1), g(r, 2), '', '', g(r, 3), g(r, 4), g(r, 5), g(r, 6)]),
+      ]
+      merged.sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+
+      // ── 1. 탭 복사 (copyTo → 이름 변경) ──────────────────────────
+      const newIds = new Map<string, number>()
+      for (const c of M1_COPIES) {
+        const res = await sheets.spreadsheets.sheets.copyTo({
+          spreadsheetId: c.src,
+          sheetId: srcIds.get(c.src)!.get(c.tab)!,
+          requestBody: { destinationSpreadsheetId: MASTER_SHEET_ID },
+        })
+        const nid = res.data.sheetId as number
+        newIds.set(c.tab, nid)
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: {
+            requests: [{ updateSheetProperties: { properties: { sheetId: nid, title: c.tab }, fields: 'title' } }],
+          },
+        })
+      }
+
+      // ── 2. 원가 변동 로그 새 탭 ────────────────────────────────
+      const add = await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              addSheet: {
+                properties: { title: M1_LOG_TAB, gridProperties: { frozenRowCount: 1, rowCount: Math.max(100, merged.length + 50), columnCount: 9 } },
+              },
+            },
+          ],
+        },
+      })
+      const logId = add.data.replies?.[0]?.addSheet?.properties?.sheetId as number
+      newIds.set(M1_LOG_TAB, logId)
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: MASTER_SHEET_ID,
+        range: `${quote(M1_LOG_TAB)}!A1:I${1 + merged.length}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [M1_LOG_HEADER, ...merged] },
+      })
+
+      // ── 3. 탭 순서 + 기본 시트 삭제 + 로그 헤더 볼드 ─────────────
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            { deleteSheet: { sheetId: defaultSheet.id } },
+            ...M1_ORDER.map((t, i) => ({
+              updateSheetProperties: { properties: { sheetId: newIds.get(t)!, index: i }, fields: 'index' },
+            })),
+            {
+              repeatCell: {
+                range: { sheetId: logId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 9 },
+                cell: { userEnteredFormat: { textFormat: { bold: true } } },
+                fields: 'userEnteredFormat.textFormat.bold',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 4. 검증 (원본 ↔ 마스터) ───────────────────────────────
+      const 비교: Record<string, any> = {}
+      for (const c of M1_COPIES) {
+        const [a, b] = await Promise.all([tabSnapshot(sheets, c.src, c.tab), tabSnapshot(sheets, MASTER_SHEET_ID, c.tab)])
+        비교[c.tab] = {
+          행수: `${a.행수}→${b.행수}`,
+          헤더_동일: JSON.stringify(a.헤더) === JSON.stringify(b.헤더),
+          값_동일: a.값해시 === b.값해시,
+          수식_동일: a.수식해시 === b.수식해시,
+          수식셀: `${a.수식셀}→${b.수식셀}`,
+          오류셀: `${a.오류셀}→${b.오류셀}`,
+        }
+      }
+      const logSnap = await tabSnapshot(sheets, MASTER_SHEET_ID, M1_LOG_TAB)
+      const finalMeta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(title,index))' })
+      const driveAfter = await driveMeta([COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID])
+      return NextResponse.json({
+        ok: true,
+        message: '나무_마스터 1단계 복사 완료',
+        탭순서: (finalMeta.data.sheets || []).map((x) => x.properties?.title),
+        비교,
+        원가변동로그: {
+          원본_단가: unitRows.length,
+          원본_가공비: procRows.length,
+          합: unitRows.length + procRows.length,
+          새탭_데이터행: logSnap.행수 - 1,
+        },
+        원본_수정시각: { 전: driveBefore, 후: driveAfter },
       })
     }
 
