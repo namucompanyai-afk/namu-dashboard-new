@@ -3,14 +3,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
 
-// ── 구글시트 설정 ────────────────────────────────────────────────
-const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
-// 탭 이름 공백 포함 → 작은따옴표 + encodeURIComponent
-// 마스터: A11 헤더 + A12~ 데이터. init14 배치: E 원곡가 / F~K 비용분해·최종공급가(시트수식) /
-// L 과세여부 · M 취급상태 · N 파쇄 · O 제분 · P 혼합곡수
-const RANGE = "'진도팜 원가표'!A11:Q"
-// 참고표 좌상단 배치(init12): 가공비 A1:B8(헤더+7항목) · 배송비 D1:F4(헤더+소/중/대)
-const RANGE_REF = "'진도팜 원가표'!A1:F8"
+// ── 원가표 read — 서버 라우트(서비스 계정) GET /api/jindopam/cost ──────
+// values: '진도팜 원가표'!A11:Q — A11 헤더 + A12~ 데이터. init14 배치: E 원곡가 /
+//   F~K 비용분해·최종공급가(시트수식) / L 과세여부 · M 취급상태 · N 파쇄 · O 제분 · P 혼합곡수
+// ref: '진도팜 원가표'!A1:F8 — 참고표(init12): 가공비 A1:B8(헤더+7항목) · 배송비 D1:F4(헤더+소/중/대)
 
 // 참고표 값 (시트에서 read, 하드코딩 아님)
 type RefCost = {
@@ -306,21 +302,12 @@ export default function JindopamCostPage() {
 
   // 원가표 read (저장 후 재호출용으로 함수화)
   const loadData = useCallback(async () => {
-    const key = process.env.NEXT_PUBLIC_GSHEET_API_KEY
-    if (!key) {
-      setError('API 키가 설정되지 않았습니다. (.env.local 의 NEXT_PUBLIC_GSHEET_API_KEY)')
-      setLoading(false)
-      return
-    }
-    const base = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/`
-    const url = `${base}${encodeURIComponent(RANGE)}?key=${key}`
-    const refUrl = `${base}${encodeURIComponent(RANGE_REF)}?key=${key}`
     try {
       setLoading(true)
       setError(null)
-      const [res, refRes] = await Promise.all([fetch(url), fetch(refUrl)])
-      if (!res.ok) throw new Error(`시트 응답 오류 (${res.status})`)
-      const json = await res.json()
+      const res = await fetch('/api/jindopam/cost', { cache: 'no-store' })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `시트 응답 오류 (${res.status})`)
       const values: string[][] = json.values || []
       // values[0] = R4 헤더 → 스킵, R5부터 데이터
       const data: CostRow[] = values
@@ -350,9 +337,8 @@ export default function JindopamCostPage() {
       setRows(data)
       // 참고 기준표 A1:F8 (init12 배치)
       // 가공비: A열 라벨·B열 단가 → rv[1..7]의 [1]. 배송비: D열 규격·E 박스·F 택배 → rv[1..3]의 [3],[4],[5]
-      if (refRes.ok) {
-        const rj = await refRes.json()
-        const rv: string[][] = rj.values || []
+      {
+        const rv: string[][] = json.ref || []
         setRefCost({
           작업비소포장: toNum(rv[1]?.[1]),
           작업비벌크: toNum(rv[2]?.[1]),

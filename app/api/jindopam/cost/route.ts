@@ -5,8 +5,9 @@ import { google } from 'googleapis'
  * 진도팜 원가표 write API (서비스 계정)
  *
  * 진도팜/나무 담당자는 대시보드 계정만 사용하고 구글시트를 직접 열지 않는다.
- * read 는 클라이언트가 API 키(NEXT_PUBLIC_GSHEET_API_KEY)로 직접 하고,
- * write(수정/신규)만 이 라우트가 서비스 계정으로 처리한다.
+ * read(GET)·write(POST) 모두 이 라우트가 서비스 계정으로 처리한다 (원가표 링크 공개 불필요).
+ *
+ * GET: 화면용 두 범위만 고정 반환 — values('진도팜 원가표'!A11:Q) · ref('진도팜 원가표'!A1:F8)
  *
  * 액션(POST body.action):
  *   - 'init'   : 변동로그 탭 헤더(R4) 세팅 (최초 1회, 멱등)
@@ -117,6 +118,28 @@ async function notifySlack(text: string): Promise<void> {
     })
   } catch (e) {
     console.error('[jindopam/cost] slack 알림 실패(무시):', (e as any)?.message || e)
+  }
+}
+
+// 화면 read 범위 — 이 두 범위 외 탭·범위는 반환하지 않는다 (요청 파라미터로 바꿀 수 없음)
+const READ_RANGE = `${quote(COST_TAB)}!A11:Q`
+const READ_RANGE_REF = `${quote(COST_TAB)}!A1:F8`
+
+export async function GET() {
+  try {
+    const sheets = getSheets()
+    const res = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId: SHEET_ID,
+      ranges: [READ_RANGE, READ_RANGE_REF],
+    })
+    const v = res.data.valueRanges || []
+    return NextResponse.json(
+      { ok: true, values: v[0]?.values || [], ref: v[1]?.values || [] },
+      { headers: { 'Cache-Control': 'no-store' } }
+    )
+  } catch (e: any) {
+    console.error('[jindopam/cost GET] error:', e?.message || e)
+    return NextResponse.json({ ok: false, error: e?.message || '서버 오류' }, { status: 500 })
   }
 }
 
