@@ -817,6 +817,44 @@ function m2RenameRefs(f: string): string {
     .split(`'원가표미러'!`).join(`'진도팜 원가표'!`)
 }
 
+// ── 단가DB 수기 H·J 보호 — 원료ID(E)가 빈 행의 H(소포장 공급가)·J(과세여부)가 값이면 덮어쓰기 금지 ──
+//   마스터 단가DB 에 H~J 를 쓰는 액션은 쓰기 전에 반드시 이 가드를 통과해야 한다.
+async function guardManualPriceHJ(sheets: ReturnType<typeof getSheets>, spreadsheetId: string, ranges: string[]) {
+  const res = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${quote(PRICE_TAB)}!A1:J1000`, valueRenderOption: 'FORMULA' })
+  const fx = (res.data.values || []) as Cell[][]
+  const hits: string[] = []
+  for (const rg of ranges) {
+    const m = rg.match(/^'단가DB'!([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/)
+    if (!m) continue
+    const c0 = colIdx(m[1]), c1 = colIdx(m[3] || m[1]), r0 = Number(m[2]), r1 = Number(m[4] || m[2])
+    for (let r = r0; r <= r1; r++) {
+      const row = fx[r - 1] || []
+      if (String(row[4] ?? '').trim() !== '') continue
+      for (const c of [7, 9]) {
+        const v = String(row[c] ?? '')
+        if (c >= c0 && c <= c1 && v !== '' && !v.startsWith('=')) hits.push(`${colName(c)}${r} ${row[0] ?? ''}`)
+      }
+    }
+  }
+  if (hits.length) throw new Error(`원료ID 빈 행의 수기 H·J 덮어쓰기 차단: ${hits.slice(0, 5).join(', ')}`)
+}
+
+// ── m6 마진계산 과세 분기 변환 ─────────────────────────────────────
+//   O: 과세 → (매출 − 총비용) × 10/11 · 면세 그대로 / Q: 과세 → ×1.1 없음 · 면세 그대로
+const M6_O = /^=IF\(NOT\(ISNUMBER\(\$N(\d+)\)\),"",IF\((.+?="과세"),\((.+)\)\*10\/11,(.+)\)-\$N\1\)$/
+const M6_Q = /^=IF\(OR\(NOT\(ISNUMBER\(\$O(\d+)\)\),\$O\1=0\),"",\$D\1\/\$O\1\*1\.1\)$/
+function m6Rewrite(o: string, q: string, r: number): { o: string; q: string } | null {
+  const mo = o.match(M6_O)
+  const mq = q.match(M6_Q)
+  if (!mo || !mq || Number(mo[1]) !== r || Number(mq[1]) !== r || mo[3] !== mo[4]) return null
+  const cond = mo[2]
+  const rev = mo[3]
+  return {
+    o: `=IF(NOT(ISNUMBER($N${r})),"",IF(${cond},(${rev}-$N${r})*10/11,${rev}-$N${r}))`,
+    q: `=IF(OR(NOT(ISNUMBER($O${r})),$O${r}=0),"",$D${r}/$O${r}*IF(${cond},1,1.1))`,
+  }
+}
+
 const hex = (h: string) => ({
   red: parseInt(h.slice(0, 2), 16) / 255,
   green: parseInt(h.slice(2, 4), 16) / 255,
@@ -6627,6 +6665,7 @@ export async function GET(req: Request) {
           ],
         },
       })
+      await guardManualPriceHJ(sheets, MASTER_SHEET_ID, [`${quote(PRICE_TAB)}!G2:J${LAST}`])
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: MASTER_SHEET_ID,
         requestBody: {
@@ -7280,6 +7319,150 @@ export async function GET(req: Request) {
         기존행_Y_AC_값있음: oldYAC,
         오류셀: errorCellsOf(MARGIN_TAB, aVal).length,
         '1P': oneP,
+      })
+    }
+
+    // ── m6: 나무_마스터 6단계 — 마진계산 O·Q 과세 분기 + 선택 목록 정상화 ──
+    //   · 쓰기: 마진계산 O·Q (2~301행, 과세 분기만), ONE_OF_RANGE 드롭다운 재설정. 단가DB 쓰기 없음
+    if (action === 'm6') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range: string) =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const g = (rows: Cell[][], r: number, c: number) => (rows[r - 1] || [])[c] ?? ''
+
+      // ── [1] 단가DB 확인 (쓰기 없음) ─────────────────────────────
+      const pFx = await read(PRICE_TAB, 'FORMULA', 'A1:M1000')
+      const pVal = await read(PRICE_TAB, 'UNFORMATTED_VALUE', 'A1:M1000')
+      const rowOfAlias = (al: string) => pVal.findIndex((r) => String(r?.[0] ?? '') === al) + 1
+      const check1 = {
+        즉석밥6개: (() => { const r = rowOfAlias('[보배마을] 즉석밥 6개'); return r ? { H: g(pVal, r, 7), J: g(pVal, r, 9) } : null })(),
+        즉석밥24개: (() => { const r = rowOfAlias('[보배마을] 즉석밥 24개'); return r ? { H: g(pVal, r, 7), J: g(pVal, r, 9) } : null })(),
+        귀리현미즉석밥_남음: rowOfAlias('[보배마을] 귀리현미 즉석밥') > 0,
+        원료ID빈칸_HJ수기: pFx
+          .map((r, i) => ({ r, i }))
+          .filter(({ r, i }) => i > 0 && String(r?.[0] ?? '') && String(r?.[4] ?? '').trim() === '' &&
+            [7, 9].some((c) => String(r?.[c] ?? '') !== '' && !String(r?.[c]).startsWith('=')))
+          .map(({ r, i }) => `${i + 1} ${r[0]}: H=${r[7] ?? ''} J=${r[9] ?? ''}`),
+      }
+      const taxOf = new Map(pVal.slice(1).map((r) => [String(r?.[0] ?? ''), String(r?.[9] ?? '')]))
+
+      // ── [2] O·Q 변환안 (전부 성공해야 씀) ─────────────────────────
+      const mFx = await read(MARGIN_TAB, 'FORMULA', `A1:T${MLAST}`)
+      const mBefore = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const oq: Cell[][] = []
+      const bad: number[] = []
+      let already = 0
+      for (let r = 2; r <= MLAST; r++) {
+        const o = String(g(mFx, r, 14))
+        const q = String(g(mFx, r, 16))
+        if (o.includes('*10/11,') && o.includes(`-$N${r})*10/11`)) { already++; oq.push([o, q]); continue }
+        const nw = m6Rewrite(o, q, r)
+        if (!nw) { bad.push(r); continue }
+        oq.push([nw.o, nw.q])
+      }
+      if (bad.length) return NextResponse.json({ ok: false, error: 'O·Q 수식 형태가 예상과 다름 — 쓰기 중단', 행: bad.slice(0, 20), check1 }, { status: 409 })
+
+      // ── [3] 선택 목록 규칙 수집 ────────────────────────────────
+      const auditDv = async () => {
+        const gd = await sheets.spreadsheets.get({
+          spreadsheetId: MASTER_SHEET_ID, includeGridData: true,
+          fields: 'sheets(properties(sheetId,title),data(rowData(values(dataValidation,effectiveValue))))',
+        })
+        const listCache = new Map<string, Set<string>>()
+        const listOf = async (ref: string) => {
+          if (listCache.has(ref)) return listCache.get(ref)!
+          const rg = ref.replace(/^=/, '')
+          const v = ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: rg, valueRenderOption: 'UNFORMATTED_VALUE' })).data.values || []) as Cell[][]
+          const set = new Set(v.flat().map((x) => String(x ?? '').trim()).filter(Boolean))
+          listCache.set(ref, set)
+          return set
+        }
+        const rules: { sheetId: number; tab: string; row: number; col: number; rule: any }[] = []
+        const invalid: Record<string, number> = {}
+        for (const sh of gd.data.sheets || []) {
+          const tab = sh.properties?.title || ''
+          const rows = sh.data?.[0]?.rowData || []
+          for (let ri = 0; ri < rows.length; ri++) {
+            const vals = rows[ri].values || []
+            for (let ci = 0; ci < vals.length; ci++) {
+              const dv: any = vals[ci].dataValidation
+              if (!dv?.condition) continue
+              rules.push({ sheetId: sh.properties?.sheetId as number, tab, row: ri, col: ci, rule: dv })
+              const ev: any = vals[ci].effectiveValue
+              const v = String(ev?.stringValue ?? ev?.numberValue ?? ev?.boolValue ?? '').trim()
+              if (!v) continue
+              const c = dv.condition
+              let allowed: Set<string> | null = null
+              if (c.type === 'ONE_OF_LIST') allowed = new Set((c.values || []).map((x: any) => String(x.userEnteredValue ?? '').trim()))
+              else if (c.type === 'ONE_OF_RANGE') allowed = await listOf(String(c.values?.[0]?.userEnteredValue ?? ''))
+              if (allowed && !allowed.has(v)) {
+                const k = `${tab}!${colName(ci)}`
+                invalid[k] = (invalid[k] || 0) + 1
+              }
+            }
+          }
+        }
+        return { rules, invalid }
+      }
+      const dvBefore = await auditDv()
+
+      // ── 쓰기: O·Q ───────────────────────────────────────────────
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: MASTER_SHEET_ID,
+        range: `${quote(MARGIN_TAB)}!O2:Q${MLAST}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: oq.map(([o, q], i) => [o, String(g(mFx, i + 2, 15)), q]) },
+      })
+      // ── 쓰기: ONE_OF_RANGE 규칙 재설정 (발주매핑 C 는 '단가DB'!$A$2:$A) ──
+      const reqs: any[] = []
+      for (const x of dvBefore.rules) {
+        if (x.rule.condition.type !== 'ONE_OF_RANGE') continue
+        const ref = x.tab === MAP_TAB && x.col === 2 ? `='${PRICE_TAB}'!$A$2:$A` : String(x.rule.condition.values?.[0]?.userEnteredValue ?? '')
+        reqs.push({
+          setDataValidation: {
+            range: { sheetId: x.sheetId, startRowIndex: x.row, endRowIndex: x.row + 1, startColumnIndex: x.col, endColumnIndex: x.col + 1 },
+            rule: { ...x.rule, condition: { type: 'ONE_OF_RANGE', values: [{ userEnteredValue: ref }] } },
+          },
+        })
+      }
+      for (let i = 0; i < reqs.length; i += 500) {
+        await sheets.spreadsheets.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { requests: reqs.slice(i, i + 500) } })
+      }
+
+      // ── 검증 ─────────────────────────────────────────────────
+      const mAfter = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const dvAfter = await auditDv()
+      const eq = (a: Cell, b: Cell) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : String(a ?? '') === String(b ?? ''))
+      const changed: any[] = []
+      let taxFreeChanged = 0
+      for (let r = 2; r <= MLAST; r++) {
+        const b = mBefore[r - 1] || []
+        const a = mAfter[r - 1] || []
+        const cols = [14, 15, 16].filter((c) => !eq(b[c] ?? '', a[c] ?? ''))
+        if (!cols.length) continue
+        const tax = taxOf.get(String(a[1] ?? '')) === '과세'
+        if (!tax) taxFreeChanged++
+        changed.push({ 행: r, 채널: a[0], 별칭: a[1], 과세: tax, 전: cols.map((c) => `${colName(c)}=${b[c] ?? ''}`).join(' '), 후: cols.map((c) => `${colName(c)}=${a[c] ?? ''}`).join(' ') })
+      }
+      const inputChanged = mBefore.some((b, i) => [0, 1, 2, 3, 4, 7, 10, 17, 23, 24].some((c) => !eq(b?.[c] ?? '', (mAfter[i] || [])[c] ?? '')))
+      const pick = (al: string) => mAfter.filter((r) => String(r?.[0] ?? '') === '쿠팡 1P' && String(r?.[1] ?? '') === al).map((r) => ({
+        판매가: r[3], 원가: r[5], 봉투: r[6], 박스: r[8], 총비용: r[13], 마진: r[14], 마진율: r[15], BEP: r[16], 상태: r[19],
+      }))
+      const errs = async (t: string) => errorCellsOf(t, await read(t, 'UNFORMATTED_VALUE', 'A1:AC1000')).length
+      return NextResponse.json({
+        ok: taxFreeChanged === 0 && !inputChanged,
+        check1,
+        OQ_변환: { 행: oq.length - already, 이미적용: already },
+        즉석밥_6개: pick('[보배마을] 즉석밥 6개'),
+        즉석밥_24개: pick('[보배마을] 즉석밥 24개'),
+        변경행: changed,
+        면세행_변경: taxFreeChanged,
+        입력값_변경: inputChanged,
+        드롭다운_재설정: reqs.length,
+        목록밖_값: { 전: dvBefore.invalid, 후: dvAfter.invalid },
+        오류셀: { 마진계산: await errs(MARGIN_TAB), 단가DB: await errs(PRICE_TAB), 발주매핑: await errs(MAP_TAB) },
       })
     }
 
