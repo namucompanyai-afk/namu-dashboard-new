@@ -473,6 +473,132 @@ function keepGompyoG(rows: Cell[][], keys: { alias: Cell; vendor?: Cell }[], cur
   })
 }
 
+// ── init20: 단가DB J열(총 공급가) 삭제에 따른 타 탭 수식 변환 ────────
+//   · 고정 범위 '단가DB'!$A$2:$N$169 → 열 전체 '단가DB'!$A:$M (J 뒤 열은 한 칸 당김)
+//   · 마진계산 F 의 J(10) 폴백 제거 → H(8)만
+//   · VLOOKUP 열 번호: 10 미만 그대로 · 10 은 오류 · 10 초과는 -1
+//   · 변환 뒤 남는 단가DB 참조는 '$A:$X,<n>,'(VLOOKUP) 또는 '$A:$A'(COUNTIF 류)만 허용
+const PRICE_J_IDX = 9
+const colIdx = (L: string) => L.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1
+const colName = (i: number): string =>
+  i < 26 ? String.fromCharCode(65 + i) : colName(Math.floor(i / 26) - 1) + String.fromCharCode(65 + (i % 26))
+const shiftAfterJ = (L: string) => {
+  const i = colIdx(L)
+  if (i === PRICE_J_IDX) throw new Error(`단가DB J열 직접 참조`)
+  return i > PRICE_J_IDX ? colName(i - 1) : L
+}
+const PRICE_FIXED_RANGE = /'단가DB'!\$([A-Z]{1,2})\$\d+:\$([A-Z]{1,2})\$\d+/g
+const PRICE_J_FALLBACK =
+  /IF\(ISNUMBER\(VLOOKUP\(\$B(\d+),'단가DB'!\$A:\$M,10,FALSE\)\),VLOOKUP\(\$B\1,'단가DB'!\$A:\$M,10,FALSE\)\*\$C\1,""\)\)/g
+const PRICE_VLOOKUP_IDX = /('단가DB'!\$A:\$[A-Z]{1,2},)(\d+)(?=,)/g
+
+function shiftPriceFormula(f: string): string {
+  let out = f.replace(PRICE_FIXED_RANGE, (_m, a: string, b: string) => `'단가DB'!$${shiftAfterJ(a)}:$${shiftAfterJ(b)}`)
+  // IF(ISNUMBER(V8),V8*$C,IF(ISNUMBER(V10),V10*$C,"")) → IF(ISNUMBER(V8),V8*$C,"")
+  out = out.replace(PRICE_J_FALLBACK, '"")')
+  out = out.replace(PRICE_VLOOKUP_IDX, (_m, head: string, n: string) => {
+    const k = Number(n)
+    if (k === PRICE_J_IDX + 1) throw new Error(`VLOOKUP 열 번호 10(J) 잔존`)
+    return `${head}${k > PRICE_J_IDX + 1 ? k - 1 : k}`
+  })
+  // 남은 단가DB 참조가 전부 허용 형태인지 확인
+  const refs = out.match(/'?단가DB'?!\S{0,20}/g) || []
+  for (const r of refs) {
+    if (!/^'단가DB'!\$A:\$[A-Z]{1,2},\d+,/.test(r) && !/^'단가DB'!\$A:\$A[,)]/.test(r)) {
+      throw new Error(`처리 못 하는 단가DB 참조: ${r}`)
+    }
+  }
+  return out
+}
+
+// 단가DB 를 참조하는 타 탭 수식 전부 → 변환안 (쓰기 없음)
+async function planPriceRefs(sheets: ReturnType<typeof getSheets>) {
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: TARGET_SHEET_ID,
+    fields: 'sheets(properties(sheetId,title))',
+  })
+  const titles = (meta.data.sheets || [])
+    .map((s) => s.properties?.title || '')
+    .filter((t) => t && t !== PRICE_TAB)
+  const res = await sheets.spreadsheets.values.batchGet({
+    spreadsheetId: TARGET_SHEET_ID,
+    ranges: titles.map((t) => quote(t)),
+    valueRenderOption: 'FORMULA',
+  })
+  const cells: { tab: string; row: number; col: number; before: string; after: string }[] = []
+  const errors: { 셀: string; 오류: string; 수식: string }[] = []
+  ;(res.data.valueRanges || []).forEach((vr, ti) => {
+    ;((vr.values || []) as Cell[][]).forEach((r, ri) =>
+      (r || []).forEach((c, ci) => {
+        const f = String(c ?? '')
+        if (!f.startsWith('=') || !f.includes('단가DB')) return
+        try {
+          cells.push({ tab: titles[ti], row: ri + 1, col: ci, before: f, after: shiftPriceFormula(f) })
+        } catch (e: any) {
+          errors.push({ 셀: `${titles[ti]}!${colName(ci)}${ri + 1}`, 오류: e?.message || String(e), 수식: f.slice(0, 200) })
+        }
+      })
+    )
+  })
+  const summary: Record<string, { 셀수: number; 샘플_전: string; 샘플_후: string }> = {}
+  for (const c of cells) {
+    const k = `${c.tab}!${colName(c.col)}`
+    if (!summary[k]) summary[k] = { 셀수: 0, 샘플_전: c.before, 샘플_후: c.after }
+    summary[k].셀수++
+  }
+  return { cells, errors, summary }
+}
+
+// 단가DB A열 고정 범위를 쓰는 드롭다운(ONE_OF_RANGE) → 열 끝까지 열린 범위로
+const PRICE_ALIAS_FIXED = /^='단가DB'!\$A\$2:\$A\$\d+$/
+const PRICE_ALIAS_OPEN = `='단가DB'!$A$2:$A`
+async function planPriceValidations(sheets: ReturnType<typeof getSheets>, tabs: string[]) {
+  const gd = await sheets.spreadsheets.get({
+    spreadsheetId: TARGET_SHEET_ID,
+    ranges: tabs.map((t) => quote(t)),
+    includeGridData: true,
+    fields: 'sheets(properties(sheetId,title),data(startRow,startColumn,rowData(values(dataValidation))))',
+  })
+  const runs: { tab: string; sheetId: number; col: number; r0: number; r1: number; rule: any }[] = []
+  for (const sh of gd.data.sheets || []) {
+    const sheetId = sh.properties?.sheetId as number
+    const tab = sh.properties?.title || ''
+    const rows = sh.data?.[0]?.rowData || []
+    const byCol = new Map<number, { r: number; rule: any }[]>()
+    rows.forEach((rd, ri) =>
+      (rd.values || []).forEach((v, ci) => {
+        const dv: any = v.dataValidation
+        const ref = dv?.condition?.values?.[0]?.userEnteredValue
+        if (dv?.condition?.type !== 'ONE_OF_RANGE' || !PRICE_ALIAS_FIXED.test(String(ref ?? ''))) return
+        if (!byCol.has(ci)) byCol.set(ci, [])
+        byCol.get(ci)!.push({ r: ri, rule: dv })
+      })
+    )
+    for (const [col, list] of Array.from(byCol.entries())) {
+      for (const x of list) {
+        const tail = runs[runs.length - 1]
+        const same =
+          tail && tail.tab === tab && tail.col === col && tail.r1 === x.r &&
+          JSON.stringify(tail.rule) === JSON.stringify(x.rule)
+        if (same) tail.r1 = x.r + 1
+        else runs.push({ tab, sheetId, col, r0: x.r, r1: x.r + 1, rule: x.rule })
+      }
+    }
+  }
+  return runs
+}
+
+const ERR_VALUE = /^#(REF!|N\/A|VALUE!|DIV\/0!|NAME\?|ERROR!|NUM!|NULL!)/
+const errorCellsOf = (tab: string, rows: Cell[][]) => {
+  const out: string[] = []
+  ;(rows || []).forEach((r, ri) =>
+    (r || []).forEach((c, ci) => {
+      if (typeof c === 'string' && ERR_VALUE.test(c)) out.push(`${tab}!${colName(ci)}${ri + 1} ${c}`)
+    })
+  )
+  return out
+}
+
 const hex = (h: string) => ({
   red: parseInt(h.slice(0, 2), 16) / 255,
   green: parseInt(h.slice(2, 4), 16) / 255,
@@ -493,6 +619,18 @@ export async function GET(req: Request) {
     const authed = authHeader === `Bearer ${secret}` || url.searchParams.get('secret') === secret
     if (!authed) {
       return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+    }
+
+    // ── 구 구조 전용 init 차단 — init20(단가DB J열 삭제) 이후 재실행하면 열 구조가 깨진다 ──
+    const LEGACY_ACTIONS = new Set([
+      'init1', 'init2', 'init3', 'init4', 'init5', 'init6', 'init7', 'init8',
+      'init9', 'init10', 'init11', 'init12', 'init13', 'init14', 'init16',
+    ])
+    if (action && LEGACY_ACTIONS.has(action)) {
+      return NextResponse.json(
+        { ok: false, error: `${action}: 구 구조 전용 — 재실행 금지 (init20 단가DB J열 삭제 이후)` },
+        { status: 410 }
+      )
     }
 
     // ── init1: 마진리빌드 시트 초기 세팅 (멱등) ───────────────────
@@ -5528,7 +5666,7 @@ export async function GET(req: Request) {
     //   · I: C="곰표" → H, 그 외 → 기존 I 수식 그대로
     //   · 기존 수식은 FORMULA 로 읽어 감싸기만 한다 (재조립 없음). 수기 값·빈칸·이미 감싼 행은 건너뜀.
     //   · 비용DB A4:D6 가 비어있지 않으면 쓰지 않고 409.
-    //   · 단가DB A~G·J~N 값·수식은 실행 전·후 해시, H·I 는 계산값 비교로 무변경 확인.
+    //   · 단가DB A~G·J~M 값·수식은 실행 전·후 해시, H·I 는 계산값 비교로 무변경 확인.
     if (action === 'init19') {
       const sheets = getSheets()
       const meta = await sheets.spreadsheets.get({
@@ -5558,19 +5696,19 @@ export async function GET(req: Request) {
       const snap = async () => {
         const res = await sheets.spreadsheets.values.get({
           spreadsheetId: TARGET_SHEET_ID,
-          range: `${quote(PRICE_TAB)}!A2:N${LAST}`,
+          range: `${quote(PRICE_TAB)}!A2:M${LAST}`,
           valueRenderOption: 'FORMULA',
         })
         const val = await sheets.spreadsheets.values.get({
           spreadsheetId: TARGET_SHEET_ID,
-          range: `${quote(PRICE_TAB)}!A2:N${LAST}`,
+          range: `${quote(PRICE_TAB)}!A2:M${LAST}`,
           valueRenderOption: 'UNFORMATTED_VALUE',
         })
         const fx = (res.data.values || []) as Cell[][]
         const vals = (val.data.values || []) as Cell[][]
-        // A~G(0~6) · J~N(9~13) 만 해시 — H·I(7·8)는 제외
+        // A~G(0~6) · J~M(9~12) 만 해시 — H·I(7·8)는 제외 (init20 J열 삭제 후 구조)
         const keep = (rows: Cell[][]) =>
-          rows.map((r) => [...(r || []).slice(0, 7), ...(r || []).slice(9, 14)])
+          rows.map((r) => [...(r || []).slice(0, 7), ...(r || []).slice(9, 13)])
         const hash = createHash('sha256')
           .update(JSON.stringify([keep(fx), keep(vals)]))
           .digest('hex')
@@ -5675,7 +5813,7 @@ export async function GET(req: Request) {
         H_I_재작성_행수: data.reduce((n, d) => n + d.values.length, 0),
         건너뜀: { 수기값: manualRows, 빈칸: skippedBlank.length, 이미_적용: already },
         H_I_계산값: { 변경_행수: hiDiff.length, 변경: hiDiff.slice(0, 10) },
-        A_G_J_N_해시: { 전: before.hash, 후: after.hash, 동일: before.hash === after.hash },
+        A_G_J_M_해시: { 전: before.hash, 후: after.hash, 동일: before.hash === after.hash },
         샘플: sampleIdx < 0 ? null : {
           행: sampleIdx + 2,
           H: (after.fx[sampleIdx] || [])[7] ?? '',
@@ -5683,6 +5821,254 @@ export async function GET(req: Request) {
         },
         비용DB_A1_D6: cost.data.values || [],
         비고: '단가DB C·G·마진계산·원가표 시트 무변경',
+      })
+    }
+
+    // ── inspect20: init20 사전 백업 + 변환 dry-run (쓰기 없음) ──────
+    if (action === 'inspect20') {
+      const sheets = getSheets()
+      const TABS20 = [PRICE_TAB, MARGIN_TAB, MAP_TAB]
+      const [fx, val] = await Promise.all(
+        (['FORMULA', 'UNFORMATTED_VALUE'] as const).map((opt) =>
+          sheets.spreadsheets.values.batchGet({
+            spreadsheetId: TARGET_SHEET_ID,
+            ranges: TABS20.map((t) => quote(t)),
+            valueRenderOption: opt,
+          })
+        )
+      )
+      const backup: Record<string, { 수식: Cell[][]; 값: Cell[][] }> = {}
+      TABS20.forEach((t, i) => {
+        backup[t] = {
+          수식: (fx.data.valueRanges?.[i]?.values || []) as Cell[][],
+          값: (val.data.valueRanges?.[i]?.values || []) as Cell[][],
+        }
+      })
+      const priceFx = backup[PRICE_TAB].수식
+      const jBad = priceFx
+        .slice(1)
+        .map((r, i) => ({ 행: i + 2, J: String((r || [])[PRICE_J_IDX] ?? '') }))
+        .filter((x) => x.J.trim() !== '' && !x.J.startsWith('=IF($H'))
+      const plan = await planPriceRefs(sheets)
+      const dv = await planPriceValidations(sheets, [MARGIN_TAB, MAP_TAB])
+      return NextResponse.json({
+        ok: true,
+        단가DB_헤더: priceFx[0] || [],
+        J_수기값: jBad,
+        참조_요약: plan.summary,
+        참조_셀수: plan.cells.length,
+        변환_오류: plan.errors,
+        드롭다운: dv.map((d) => ({
+          범위: `${d.tab}!${colName(d.col)}${d.r0 + 1}:${colName(d.col)}${d.r1}`,
+          참조: d.rule?.condition?.values?.[0]?.userEnteredValue,
+        })),
+        오류셀_현재: TABS20.flatMap((t) => errorCellsOf(t, backup[t].값)),
+        백업: backup,
+      })
+    }
+
+    // ── init20: 단가DB J열(총 공급가) 삭제 + 참조 보정 + 범위 열 전체 확장 ──
+    //   · 가드: J 에 수기 값 1개라도 / 변환 못 하는 단가DB 참조 1개라도 → 409, 쓰기 없음
+    //   · deleteDimension 으로 J 열 삭제 → 타 탭 수식은 삭제 전 원문을 변환해 행별로 다시 기입
+    //   · 발주매핑·마진계산의 단가DB A열 드롭다운 → '단가DB'!$A$2:$A (열린 범위)
+    //   · 검증에서 오류 셀이 생기면 ok:false 로 보고만 (자동 복구 없음)
+    if (action === 'init20') {
+      const sheets = getSheets()
+      const meta = await sheets.spreadsheets.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        fields: 'sheets(properties(sheetId,title))',
+      })
+      const priceId = (meta.data.sheets || []).find((s) => s.properties?.title === PRICE_TAB)
+        ?.properties?.sheetId
+      if (priceId == null) throw new Error(`'${PRICE_TAB}' 탭이 없습니다.`)
+      const TABS20 = [PRICE_TAB, MARGIN_TAB, MAP_TAB]
+      const readVals = async () => {
+        const res = await sheets.spreadsheets.values.batchGet({
+          spreadsheetId: TARGET_SHEET_ID,
+          ranges: TABS20.map((t) => quote(t)),
+          valueRenderOption: 'UNFORMATTED_VALUE',
+        })
+        const out: Record<string, Cell[][]> = {}
+        TABS20.forEach((t, i) => (out[t] = (res.data.valueRanges?.[i]?.values || []) as Cell[][]))
+        return out
+      }
+      const hashOf = (x: unknown) => createHash('sha256').update(JSON.stringify(x)).digest('hex')
+      // 마진계산 W~Z 전체 + V1 (값·수식)
+      const readWZ = async () => {
+        const [a, b] = await Promise.all(
+          (['FORMULA', 'UNFORMATTED_VALUE'] as const).map((opt) =>
+            sheets.spreadsheets.values.batchGet({
+              spreadsheetId: TARGET_SHEET_ID,
+              ranges: [`${quote(MARGIN_TAB)}!V1`, `${quote(MARGIN_TAB)}!W1:Z${1 + MARGIN_ROWS}`],
+              valueRenderOption: opt,
+            })
+          )
+        )
+        return hashOf([a.data.valueRanges?.map((v) => v.values), b.data.valueRanges?.map((v) => v.values)])
+      }
+
+      // ── 0. 가드 ──────────────────────────────────────────────
+      const hdr = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!A1:O1000`,
+        valueRenderOption: 'FORMULA',
+      })
+      const priceFx = (hdr.data.values || []) as Cell[][]
+      const jHead = String(priceFx[0]?.[PRICE_J_IDX] ?? '').trim()
+      if (jHead !== PRICE_J_HEADER_V2) {
+        return NextResponse.json(
+          { ok: false, error: `단가DB J1 이 '${PRICE_J_HEADER_V2}' 가 아닙니다 — 이미 삭제됐거나 구조가 다름`, J1: jHead, 헤더: priceFx[0] },
+          { status: 409 }
+        )
+      }
+      const jBad = priceFx
+        .slice(1)
+        .map((r, i) => ({ 행: i + 2, J: String((r || [])[PRICE_J_IDX] ?? '') }))
+        .filter((x) => x.J.trim() !== '' && !x.J.startsWith('=IF($H'))
+      if (jBad.length) {
+        return NextResponse.json({ ok: false, error: 'J 에 수기 값이 있습니다 — 쓰기 중단', J_수기값: jBad }, { status: 409 })
+      }
+      const plan = await planPriceRefs(sheets)
+      if (plan.errors.length) {
+        return NextResponse.json({ ok: false, error: '변환 못 하는 단가DB 참조 — 쓰기 중단', 변환_오류: plan.errors }, { status: 409 })
+      }
+      const dv = await planPriceValidations(sheets, [MARGIN_TAB, MAP_TAB])
+
+      const before = await readVals()
+      const wzBefore = await readWZ()
+      const errBefore = TABS20.flatMap((t) => errorCellsOf(t, before[t]))
+
+      // ── 1. J 열 삭제 ─────────────────────────────────────────
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: TARGET_SHEET_ID,
+        requestBody: {
+          requests: [
+            {
+              deleteDimension: {
+                range: { sheetId: priceId, dimension: 'COLUMNS', startIndex: PRICE_J_IDX, endIndex: PRICE_J_IDX + 1 },
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 2. 타 탭 수식 재기입 (삭제 전 원문 기준 변환, 열별 연속 구간) ──
+      const byCol = new Map<string, typeof plan.cells>()
+      for (const c of plan.cells) {
+        const k = `${c.tab}\u0000${c.col}`
+        if (!byCol.has(k)) byCol.set(k, [])
+        byCol.get(k)!.push(c)
+      }
+      const data: { range: string; values: Cell[][] }[] = []
+      for (const list of Array.from(byCol.values())) {
+        list.sort((a, b) => a.row - b.row)
+        let run: typeof plan.cells = []
+        const flush = () => {
+          if (!run.length) return
+          const L = colName(run[0].col)
+          data.push({
+            range: `${quote(run[0].tab)}!${L}${run[0].row}:${L}${run[run.length - 1].row}`,
+            values: run.map((c) => [c.after]),
+          })
+          run = []
+        }
+        for (const c of list) {
+          if (run.length && run[run.length - 1].row + 1 !== c.row) flush()
+          run.push(c)
+        }
+        flush()
+      }
+      if (data.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: { valueInputOption: 'USER_ENTERED', data },
+        })
+      }
+
+      // ── 3. 드롭다운 범위 열기 ─────────────────────────────────
+      if (dv.length) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: TARGET_SHEET_ID,
+          requestBody: {
+            requests: dv.map((d) => ({
+              setDataValidation: {
+                range: { sheetId: d.sheetId, startRowIndex: d.r0, endRowIndex: d.r1, startColumnIndex: d.col, endColumnIndex: d.col + 1 },
+                rule: {
+                  ...d.rule,
+                  condition: { ...d.rule.condition, values: [{ userEnteredValue: PRICE_ALIAS_OPEN }] },
+                },
+              },
+            })),
+          },
+        })
+      }
+
+      // ── 4. 검증 ─────────────────────────────────────────────
+      const after = await readVals()
+      const wzAfter = await readWZ()
+      const errAfter = TABS20.flatMap((t) => errorCellsOf(t, after[t]))
+      const postFx = await sheets.spreadsheets.values.get({
+        spreadsheetId: TARGET_SHEET_ID,
+        range: `${quote(PRICE_TAB)}!A1:N${PRICE_ROWS_TO}`,
+        valueRenderOption: 'FORMULA',
+      })
+      const pf = (postFx.data.values || []) as Cell[][]
+      // 단가DB 값: 전 A~I·K~N == 후 A~M
+      const dropJ = (r: Cell[]) => [...(r || []).slice(0, PRICE_J_IDX), ...(r || []).slice(PRICE_J_IDX + 1, 14)]
+      const trim = (r: Cell[]) => {
+        const x = [...r]
+        while (x.length && String(x[x.length - 1] ?? '') === '') x.pop()
+        return x
+      }
+      const priceDiff: number[] = []
+      const nP = Math.max(before[PRICE_TAB].length, after[PRICE_TAB].length)
+      for (let i = 0; i < nP; i++) {
+        const b = trim(dropJ(before[PRICE_TAB][i] || []))
+        const a = trim((after[PRICE_TAB][i] || []).slice(0, 13))
+        if (JSON.stringify(a) !== JSON.stringify(b)) priceDiff.push(i + 1)
+      }
+      // 마진계산 A~T 계산값 전·후
+      const marginDiff: { 행: number; 별칭: Cell; 전: Cell[]; 후: Cell[] }[] = []
+      const nM = Math.max(before[MARGIN_TAB].length, after[MARGIN_TAB].length)
+      for (let i = 1; i < nM; i++) {
+        const b = trim((before[MARGIN_TAB][i] || []).slice(0, 20))
+        const a = trim((after[MARGIN_TAB][i] || []).slice(0, 20))
+        if (JSON.stringify(a) !== JSON.stringify(b)) {
+          const cols = Array.from({ length: 20 }, (_, c) => c).filter((c) => String(b[c] ?? '') !== String(a[c] ?? ''))
+          marginDiff.push({
+            행: i + 1,
+            별칭: (after[MARGIN_TAB][i] || [])[1] ?? '',
+            전: cols.map((c) => `${colName(c)}=${b[c] ?? ''}`),
+            후: cols.map((c) => `${colName(c)}=${a[c] ?? ''}`),
+          })
+        }
+      }
+      // 단가DB H·I 가공 참조가 $L 로 당겨졌는지
+      const procShift = { L: 0, M_잔존: 0 }
+      pf.slice(1).forEach((r, i) => {
+        const h = String((r || [])[7] ?? '') + String((r || [])[8] ?? '')
+        if (h.includes(`$L${i + 2}="파쇄"`)) procShift.L++
+        if (h.includes(`$M${i + 2}="파쇄"`)) procShift.M_잔존++
+      })
+      const sample = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: TARGET_SHEET_ID,
+        ranges: [`${quote(MARGIN_TAB)}!A2:T2`, `${quote(MAP_TAB)}!I2`],
+        valueRenderOption: 'FORMULA',
+      })
+      return NextResponse.json({
+        ok: errAfter.length === 0 && priceDiff.length === 0 && wzBefore === wzAfter,
+        message: errAfter.length ? '오류 셀 발생 — 백업 기준으로 원인 확인 필요 (자동 복구 안 함)' : '단가DB J열 삭제 + 참조 보정 완료',
+        단가DB_헤더_A_M: (pf[0] || []).slice(0, 13),
+        재기입_셀수: plan.cells.length,
+        참조_요약: Object.fromEntries(Object.entries(plan.summary).map(([k, v]) => [k, v.셀수])),
+        드롭다운_변경: dv.map((d) => `${d.tab}!${colName(d.col)}${d.r0 + 1}:${colName(d.col)}${d.r1}`),
+        오류셀: { 전: errBefore, 후: errAfter },
+        단가DB_값_불일치_행: priceDiff,
+        마진계산_A_T_변경: marginDiff,
+        마진계산_W_Z_V1_동일: wzBefore === wzAfter,
+        가공참조_당김: procShift,
+        샘플_마진계산_R2: sample.data.valueRanges?.[0]?.values?.[0] || [],
+        샘플_발주매핑_I2: sample.data.valueRanges?.[1]?.values?.[0]?.[0] ?? '',
       })
     }
 
