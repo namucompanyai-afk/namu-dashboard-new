@@ -371,6 +371,22 @@ const M1_ORDER = [
   // (2단계 탭 자리)
   '상품마스터', '발주매핑', '쿠팡 센터 주소록', '쿠팡 밀크런 가격표', '컬리 밀크런 가격표', '발주 이력',
 ]
+// m2: 단가DB·마진계산·설정 이관
+const M2_ORDER = [
+  '진도팜 원가표', '곰표 원가표', M1_LOG_TAB, PRICE_TAB, MARGIN_TAB, '설정',
+  '상품마스터', '발주매핑', '쿠팡 센터 주소록', '쿠팡 밀크런 가격표', '컬리 밀크런 가격표', '발주 이력',
+]
+const M2_SETTING_TAB = '설정'
+// 비용DB 중 설정 J~M 으로 옮기는 행 (곰표 작업비 3줄은 곰표 원가표 행 작업비로 대체되어 제외)
+const M2_COST_KEEP = ['봉투 단가', '경고 기준 마진율']
+// 곰표 원료ID 자동 연결 (이 4행만)
+const M2_GOMPYO_LINK: Record<string, string> = {
+  '[쌀쌀쌀] 병아리콩 2kg': '곰표_병아리콩',
+  '[쌀쌀쌀] 캐나다산 병아리콩 1kg': '곰표_병아리콩',
+  '[쌀쌀쌀] 캐나다산 렌틸콩 1kg': '곰표_렌틸콩',
+  '[쌀쌀쌀] 캐나다산 렌틸콩 2kg': '곰표_렌틸콩',
+}
+const M2_FORBIDDEN = ['원가표미러', '채널DB', '비용DB', COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID, 'docs.google.com']
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -663,6 +679,66 @@ async function tabSnapshot(sheets: ReturnType<typeof getSheets>, id: string, tab
     수식셀: fx.flat().filter((c) => String(c ?? '').startsWith('=')).length,
     오류셀: errorCellsOf(tab, vals).length,
   }
+}
+
+// ── m2 수식 변환 ─────────────────────────────────────────────────
+// 원료ID 조회: 진도팜 원가표 먼저, 없으면 곰표 원가표 (끝행 제한 없음)
+const m2Lookup = (e: string, n: number | string) =>
+  `IFERROR(VLOOKUP(${e},'진도팜 원가표'!$A$12:$Q,${n},FALSE),VLOOKUP(${e},'곰표 원가표'!$A$12:$Q,${n},FALSE))`
+const M2_MIRROR_VLOOKUP = /VLOOKUP\((\$E\d+),'원가표미러'!\$A\$12:\$P\$200,(\d+),FALSE\)/g
+
+// 최상위 함수 인자 분리 — "IF(a,b,c)" 의 괄호 안 문자열을 받아 [a,b,c] (문자열·중첩 괄호 고려)
+function splitTopArgs(inner: string): string[] {
+  const out: string[] = []
+  let depth = 0
+  let inStr = false
+  let cur = ''
+  for (const ch of inner) {
+    if (ch === '"') inStr = !inStr
+    if (!inStr) {
+      if (ch === '(') depth++
+      if (ch === ')') depth--
+      if (ch === ',' && depth === 0) {
+        out.push(cur)
+        cur = ''
+        continue
+      }
+    }
+    cur += ch
+  }
+  out.push(cur)
+  return out
+}
+
+// init19 곰표 분기 벗기기: =IF(TRIM($C#)="곰표",X,원래식) → =원래식
+function m2Unwrap(f: string): string {
+  if (!f.startsWith('=IF(TRIM($C')) return f
+  const args = splitTopArgs(f.slice(4, -1))
+  if (args.length !== 3) throw new Error(`곰표 분기 해석 실패: ${f.slice(0, 80)}`)
+  return `=${args[2]}`
+}
+
+// 단가DB 한 셀 변환 (G·H·I·J). r = 행번호
+function m2PriceFormula(f: string, col: 'G' | 'H' | 'I' | 'J', r: number): string {
+  let out = col === 'H' || col === 'I' ? m2Unwrap(f) : f
+  out = out.replace(M2_MIRROR_VLOOKUP, (_m, e: string, n: string) => m2Lookup(e, n))
+  // H 소포장: 작업비 고정값(원가표미러 B2) → 원가표 행의 작업비(6번째 열). 봉 kg 곱하기는 그대로
+  if (col === 'H') {
+    const fixed = `'원가표미러'!$B$2*MAX(1,`
+    if (!out.includes(fixed)) throw new Error(`H${r} 작업비 고정값 없음`)
+    out = out.replace(fixed, `${m2Lookup(`$E${r}`, 6)}*MAX(1,`)
+  }
+  // 나머지 원가표미러 셀(B3 벌크 작업비·B4 파쇄·B5 제분)은 같은 위치의 진도팜 원가표로
+  out = out.split(`'원가표미러'!`).join(`'진도팜 원가표'!`)
+  return out
+}
+
+// 마진계산·설정 등: 탭 이름만 바꾸는 변환
+function m2RenameRefs(f: string): string {
+  return f
+    .split(`'비용DB'!$A$2:$B$50`).join(`'${M2_SETTING_TAB}'!$J$2:$K$50`)
+    .split(`'채널DB'!`).join(`'${M2_SETTING_TAB}'!`)
+    .split(`'원가표미러'!`).join(`'진도팜 원가표'!`)
 }
 
 const hex = (h: string) => ({
@@ -6338,6 +6414,326 @@ export async function GET(req: Request) {
         )
       )
       return NextResponse.json({ ok: true, 수식: f.data.values || [], 값: v.data.values || [] })
+    }
+
+    // ── m2: 나무_마스터 2단계 — 단가DB·마진계산·설정 이관 + 파일 간 참조 → 파일 안 참조 ──
+    //   · 원본(마진리빌드)은 values.get·copyTo 만. 쓰기 대상은 MASTER_SHEET_ID 뿐.
+    //   · 복사된 수식 원문을 읽어 참조만 바꿔 행별로 다시 기입 (새로 조립 없음, ARRAYFORMULA 없음)
+    if (action === 'm2') {
+      const sheets = getSheets()
+      const LAST = PRICE_ROWS_TO // 단가DB 300
+      const MLAST = 1 + MARGIN_ROWS // 마진계산 301
+      const metaOf = async (id: string) => {
+        const m = await sheets.spreadsheets.get({ spreadsheetId: id, fields: 'sheets(properties(sheetId,title))' })
+        return new Map((m.data.sheets || []).map((x) => [x.properties?.title || '', x.properties?.sheetId as number]))
+      }
+      // ── 0. 가드 ──────────────────────────────────────────────
+      const master0 = await metaOf(MASTER_SHEET_ID)
+      const clash = [PRICE_TAB, MARGIN_TAB, M2_SETTING_TAB].filter((t) => master0.has(t))
+      if (clash.length) {
+        return NextResponse.json({ ok: false, error: '마스터에 이미 있는 탭 — 쓰기 중단', 탭: clash }, { status: 409 })
+      }
+      const needM1 = M1_ORDER.filter((t) => !master0.has(t))
+      if (needM1.length) {
+        return NextResponse.json({ ok: false, error: '1단계 탭 누락 — 쓰기 중단', 누락: needM1 }, { status: 409 })
+      }
+      const src = await metaOf(TARGET_SHEET_ID)
+      for (const t of [PRICE_TAB, MARGIN_TAB, '채널DB', '비용DB']) {
+        if (src.get(t) == null) return NextResponse.json({ ok: false, error: `원본 탭 없음: ${t}` }, { status: 409 })
+      }
+      const driveBefore = await driveMeta([COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID])
+      const readTab = async (id: string, tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: id, range: `${quote(tab)}!A1:Z1000`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      // 원본 스냅샷 (비교용)
+      const before = {
+        price: await readTab(TARGET_SHEET_ID, PRICE_TAB, 'UNFORMATTED_VALUE'),
+        margin: await readTab(TARGET_SHEET_ID, MARGIN_TAB, 'UNFORMATTED_VALUE'),
+        marginFx: await readTab(TARGET_SHEET_ID, MARGIN_TAB, 'FORMULA'),
+      }
+      const costRows = await readTab(TARGET_SHEET_ID, '비용DB', 'UNFORMATTED_VALUE')
+
+      // ── 1. 수식 변환안 (쓰기 전에 전부 계산 — 실패하면 쓰지 않음) ─────
+      const priceFx = await readTab(TARGET_SHEET_ID, PRICE_TAB, 'FORMULA')
+      const at = (r: number, c: number) => String((priceFx[r - 1] || [])[c] ?? '')
+      const reRow = (f: string, to: number) => f.replace(/(\$[A-Z]{1,2})(\d+)/g, `$1${to}`)
+      const gTpl = at(2, 6).startsWith('=') ? at(2, 6) : at(3, 6)
+      if (!gTpl.startsWith('=')) throw new Error('단가DB G 수식 템플릿 없음')
+      const priceGJ: Cell[][] = []
+      const gRestored: string[] = []
+      for (let r = 2; r <= LAST; r++) {
+        const gSrc = at(r, 6).startsWith('=') ? at(r, 6) : reRow(gTpl, r)
+        if (!at(r, 6).startsWith('=') && at(r, 0).trim() !== '') gRestored.push(at(r, 0))
+        const row: Cell[] = [m2PriceFormula(gSrc, 'G', r)]
+        for (const [c, col] of [[7, 'H'], [8, 'I'], [9, 'J']] as const) {
+          const f = at(r, c)
+          if (!f.startsWith('=')) throw new Error(`단가DB ${col}${r} 가 수식이 아님 — 중단`)
+          row.push(m2PriceFormula(f, col, r))
+        }
+        priceGJ.push(row)
+      }
+      // 곰표 원료ID 4행
+      const eLinks: { r: number; alias: string; before: string; after: string }[] = []
+      for (let r = 2; r <= LAST; r++) {
+        const al = at(r, 0).trim()
+        if (M2_GOMPYO_LINK[al]) {
+          if (!isGompyo(at(r, 2))) throw new Error(`${al} 발송거래처가 곰표가 아님 — 중단`)
+          eLinks.push({ r, alias: al, before: at(r, 4), after: M2_GOMPYO_LINK[al] })
+        }
+      }
+      if (eLinks.length !== Object.keys(M2_GOMPYO_LINK).length) throw new Error('곰표 연결 대상 4행을 모두 찾지 못함 — 중단')
+      // 마진계산: 원가표미러·채널DB·비용DB 참조 셀만
+      const marginFx = before.marginFx
+      const marginCells: { r: number; c: number; f: string }[] = []
+      marginFx.forEach((row, ri) =>
+        (row || []).forEach((c, ci) => {
+          const f = String(c ?? '')
+          if (f.startsWith('=') && /원가표미러|채널DB|비용DB/.test(f)) marginCells.push({ r: ri + 1, c: ci, f: m2RenameRefs(f) })
+        })
+      )
+      // 설정: 채널DB A~H (그대로) + 비용DB 2줄
+      const chFx = await readTab(TARGET_SHEET_ID, '채널DB', 'FORMULA')
+      const costKeep = costRows.filter((r) => M2_COST_KEEP.includes(String(r?.[0] ?? '').trim()))
+      if (costKeep.length !== M2_COST_KEEP.length) throw new Error('비용DB 봉투 단가·경고 기준 마진율 행 없음 — 중단')
+
+      // ── 2. 복사 (단가DB → 마진계산 → 채널DB=설정) ───────────────
+      const newIds = new Map<string, number>()
+      for (const [tab, title] of [[PRICE_TAB, PRICE_TAB], [MARGIN_TAB, MARGIN_TAB], ['채널DB', M2_SETTING_TAB]] as const) {
+        const res = await sheets.spreadsheets.sheets.copyTo({
+          spreadsheetId: TARGET_SHEET_ID,
+          sheetId: src.get(tab)!,
+          requestBody: { destinationSpreadsheetId: MASTER_SHEET_ID },
+        })
+        const nid = res.data.sheetId as number
+        newIds.set(title, nid)
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: { requests: [{ updateSheetProperties: { properties: { sheetId: nid, title }, fields: 'title' } }] },
+        })
+      }
+      const master = await metaOf(MASTER_SHEET_ID)
+      const jinId = master.get('진도팜 원가표')
+
+      // ── 3. 수식·값 기입 ───────────────────────────────────────
+      const colRuns = (cells: { r: number; c: number; f: string }[], tab: string) => {
+        const byCol = new Map<number, typeof cells>()
+        for (const x of cells) {
+          if (!byCol.has(x.c)) byCol.set(x.c, [])
+          byCol.get(x.c)!.push(x)
+        }
+        const data: { range: string; values: Cell[][] }[] = []
+        for (const [c, list] of Array.from(byCol.entries())) {
+          list.sort((a, b) => a.r - b.r)
+          let run: typeof cells = []
+          const flush = () => {
+            if (!run.length) return
+            data.push({ range: `${quote(tab)}!${colName(c)}${run[0].r}:${colName(c)}${run[run.length - 1].r}`, values: run.map((x) => [x.f]) })
+            run = []
+          }
+          for (const x of list) {
+            if (run.length && run[run.length - 1].r + 1 !== x.r) flush()
+            run.push(x)
+          }
+          flush()
+        }
+        return data
+      }
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: [
+            ...eLinks.map((x) => ({ range: `${quote(PRICE_TAB)}!E${x.r}`, values: [[x.after]] })),
+            {
+              range: `${quote(M2_SETTING_TAB)}!J1:M${1 + costKeep.length}`,
+              values: [['항목', '값', '단위', '메모'], ...costKeep.map((r) => [0, 1, 2, 3].map((i) => r[i] ?? ''))],
+            },
+          ],
+        },
+      })
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: [
+            { range: `${quote(PRICE_TAB)}!G2:J${LAST}`, values: priceGJ },
+            { range: `${quote(PRICE_TAB)}!N2`, values: [[`=HYPERLINK("#gid=${jinId}","원가표 바로가기")`]] },
+            ...colRuns(marginCells, MARGIN_TAB),
+          ],
+        },
+      })
+      // 설정: 채널DB 복사본에서 A~H 밖 열은 비움 (채널DB 는 A~H 만 사용)
+      const setFx = await readTab(MASTER_SHEET_ID, M2_SETTING_TAB, 'FORMULA')
+      const setStray = setFx.some((r) => (r || []).slice(8, 9).some((c) => String(c ?? '') !== ''))
+      // 발주매핑 I: 단가DB 가 생겼으므로 같은 수식 원문을 다시 기입해 참조 재해석
+      const mapFx = await readTab(MASTER_SHEET_ID, MAP_TAB, 'FORMULA')
+      const mapCells: { r: number; c: number; f: string }[] = []
+      mapFx.forEach((row, ri) => {
+        const f = String((row || [])[8] ?? '')
+        if (ri > 0 && f.startsWith('=')) mapCells.push({ r: ri + 1, c: 8, f })
+      })
+      if (mapCells.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: { valueInputOption: 'USER_ENTERED', data: colRuns(mapCells, MAP_TAB) },
+        })
+      }
+
+      // ── 4. 드롭다운 참조 변환 (단가DB·마진계산·설정·발주매핑) ──────
+      const dvTabs = [PRICE_TAB, MARGIN_TAB, M2_SETTING_TAB, MAP_TAB]
+      const gd = await sheets.spreadsheets.get({
+        spreadsheetId: MASTER_SHEET_ID,
+        ranges: dvTabs.map((t) => quote(t)),
+        includeGridData: true,
+        fields: 'sheets(properties(sheetId,title),data(rowData(values(dataValidation))))',
+      })
+      const dvReqs: any[] = []
+      const dvLog: string[] = []
+      for (const sh of gd.data.sheets || []) {
+        const sid = sh.properties?.sheetId as number
+        const rows = sh.data?.[0]?.rowData || []
+        rows.forEach((rd, ri) =>
+          (rd.values || []).forEach((v, ci) => {
+            const dv: any = v.dataValidation
+            const vals = dv?.condition?.values
+            if (!vals?.some((x: any) => /원가표미러|채널DB|비용DB/.test(String(x?.userEnteredValue ?? '')))) return
+            const rule = {
+              ...dv,
+              condition: {
+                ...dv.condition,
+                values: vals.map((x: any) => ({ userEnteredValue: m2RenameRefs(String(x?.userEnteredValue ?? '')).replace(/\$A\$12:\$A\$\d+/, '$A$12:$A') })),
+              },
+            }
+            dvReqs.push({ setDataValidation: { range: { sheetId: sid, startRowIndex: ri, endRowIndex: ri + 1, startColumnIndex: ci, endColumnIndex: ci + 1 }, rule } })
+            dvLog.push(`${sh.properties?.title}!${colName(ci)}`)
+          })
+        )
+      }
+
+      // ── 5. 탭 순서 + 설정 헤더 볼드 ────────────────────────────
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            ...dvReqs,
+            ...M2_ORDER.map((t, i) => ({ updateSheetProperties: { properties: { sheetId: master.get(t)!, index: i }, fields: 'index' } })),
+            {
+              repeatCell: {
+                range: { sheetId: newIds.get(M2_SETTING_TAB)!, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 9, endColumnIndex: 13 },
+                cell: { userEnteredFormat: { textFormat: { bold: true } } },
+                fields: 'userEnteredFormat.textFormat.bold',
+              },
+            },
+          ],
+        },
+      })
+
+      // ── 6. 검증 ─────────────────────────────────────────────
+      const after = {
+        price: await readTab(MASTER_SHEET_ID, PRICE_TAB, 'UNFORMATTED_VALUE'),
+        margin: await readTab(MASTER_SHEET_ID, MARGIN_TAB, 'UNFORMATTED_VALUE'),
+        marginFx: await readTab(MASTER_SHEET_ID, MARGIN_TAB, 'FORMULA'),
+      }
+      const errOf = async (tab: string) => errorCellsOf(tab, await readTab(MASTER_SHEET_ID, tab, 'UNFORMATTED_VALUE'))
+      const 오류셀: Record<string, number> = {}
+      for (const t of [PRICE_TAB, MARGIN_TAB, M2_SETTING_TAB, MAP_TAB]) 오류셀[t] = (await errOf(t)).length
+      const mapI = (await readTab(MASTER_SHEET_ID, MAP_TAB, 'UNFORMATTED_VALUE')).slice(1).filter((r) => ERR_VALUE.test(String(r?.[8] ?? ''))).length
+      // 금지 참조 전수 (마스터 전 탭 수식)
+      const allTabs = Array.from((await metaOf(MASTER_SHEET_ID)).keys())
+      const allFx = await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: MASTER_SHEET_ID,
+        ranges: allTabs.map((t) => quote(t)),
+        valueRenderOption: 'FORMULA',
+      })
+      const forbidden: string[] = []
+      ;(allFx.data.valueRanges || []).forEach((vr, ti) =>
+        ((vr.values || []) as Cell[][]).forEach((row, ri) =>
+          (row || []).forEach((c, ci) => {
+            const f = String(c ?? '')
+            if (f.startsWith('=') && M2_FORBIDDEN.some((w) => f.includes(w))) forbidden.push(`${allTabs[ti]}!${colName(ci)}${ri + 1}`)
+          })
+        )
+      )
+      // 단가DB G~J 차이 + 이유
+      const jin = await readTab(MASTER_SHEET_ID, '진도팜 원가표', 'UNFORMATTED_VALUE')
+      const laborById = new Map(jin.slice(11).map((r) => [String(r?.[0] ?? ''), r?.[5]]))
+      const B2 = Number(jin[1]?.[1])
+      const num = (x: Cell | undefined) => (typeof x === 'number' ? x : null)
+      const eq = (a: Cell | undefined, b: Cell | undefined) =>
+        typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : String(a ?? '') === String(b ?? '')
+      const priceDiff: any[] = []
+      const changedAlias = new Set<string>()
+      const nP = Math.max(before.price.length, after.price.length)
+      for (let i = 1; i < nP; i++) {
+        const b = before.price[i] || []
+        const a = after.price[i] || []
+        const al = String(a[0] ?? b[0] ?? '')
+        if (String(b[0] ?? '') !== al) {
+          priceDiff.push({ 행: i + 1, 별칭: al, 이유: '기타', 비고: `별칭 불일치 전=${b[0]}` })
+          continue
+        }
+        const cols = [6, 7, 8, 9].filter((c) => !eq(b[c], a[c]))
+        if (!cols.length) continue
+        changedAlias.add(al)
+        let why = '기타'
+        const eAfter = String(a[4] ?? '')
+        if (isGompyo(a[2])) why = M2_GOMPYO_LINK[al] ? '곰표 연결' : '곰표 분기 제거'
+        else {
+          const lab = num(laborById.get(eAfter) as Cell)
+          const g = num(a[5])
+          const onlyH = cols.length === 1 && cols[0] === 7
+          if (onlyH && lab != null && g != null && num(b[7]) != null && num(a[7]) != null &&
+              Math.abs((num(a[7])! - num(b[7])!) - (lab - B2) * Math.max(1, g / 1000)) < 1e-6) why = '작업비 행값 적용'
+        }
+        priceDiff.push({
+          행: i + 1, 별칭: al, 이유: why,
+          전: cols.map((c) => `${colName(c)}=${b[c] ?? ''}`).join(' '),
+          후: cols.map((c) => `${colName(c)}=${a[c] ?? ''}`).join(' '),
+        })
+      }
+      // 마진계산 F 원가·O 마진·Q BEP 차이 + 입력값(비수식 셀) 무변경
+      const marginDiff: any[] = []
+      const nM = Math.max(before.margin.length, after.margin.length)
+      for (let i = 1; i < nM; i++) {
+        const b = before.margin[i] || []
+        const a = after.margin[i] || []
+        const cols = [5, 14, 16].filter((c) => !eq(b[c], a[c]))
+        if (!cols.length) continue
+        const al = String(a[1] ?? '')
+        marginDiff.push({
+          행: i + 1, 채널: a[0], 별칭: al, 단가DB_변경_연쇄: changedAlias.has(al),
+          전: cols.map((c) => `${colName(c)}=${b[c] ?? ''}`).join(' '),
+          후: cols.map((c) => `${colName(c)}=${a[c] ?? ''}`).join(' '),
+        })
+      }
+      const inputDiff: string[] = []
+      for (let i = 0; i < Math.max(before.marginFx.length, after.marginFx.length); i++) {
+        const b = before.marginFx[i] || []
+        const a = after.marginFx[i] || []
+        for (let c = 0; c < 26; c++) {
+          const bs = String(b[c] ?? '')
+          if (bs.startsWith('=')) continue
+          if (bs !== String(a[c] ?? '')) inputDiff.push(`${colName(c)}${i + 1}`)
+        }
+      }
+      const gompyo = after.price
+        .slice(1)
+        .filter((r) => isGompyo(r?.[2]))
+        .map((r) => ({ 별칭: r[0], 원료ID: r[4] || '(빈칸)', 원곡가: r[6] === '' || r[6] == null ? '(빈칸)' : r[6], 소포장: r[7] === '' || r[7] == null ? '(빈칸)' : r[7] }))
+      const driveAfter = await driveMeta([COST_SHEET_ID, TARGET_SHEET_ID, B2B_SHEET_ID])
+      const mtime = (d: any) => Object.fromEntries(Object.entries(d || {}).map(([k, v]: any) => [v?.name || k, v?.modifiedTime]))
+      return NextResponse.json({
+        ok: forbidden.length === 0 && inputDiff.length === 0 && !priceDiff.some((d) => d.이유 === '기타'),
+        탭순서: allTabs.length ? (await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(title))' })).data.sheets?.map((x) => x.properties?.title) : [],
+        기입: { 단가DB_GJ_행: priceGJ.length, G_수식복구: gRestored, 곰표_원료ID: eLinks, 마진계산_셀: marginCells.length, 발주매핑_I_재기입: mapCells.length, 드롭다운: dvLog, 설정_I열_잔여: setStray },
+        오류셀, 발주매핑_I_오류: mapI,
+        금지참조_잔존: forbidden.slice(0, 20), 금지참조_수: forbidden.length,
+        단가DB_차이: priceDiff,
+        마진계산_차이: marginDiff,
+        마진계산_입력값_변경: inputDiff.slice(0, 20),
+        곰표행: gompyo,
+        원본_수정시각: { 전: mtime(driveBefore), 후: mtime(driveAfter) },
+      })
     }
 
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
