@@ -1,3 +1,4 @@
+import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server';
 import Papa from 'papaparse';
 import { parseMarginRows } from '@/lib/coupang/parsers/marginMaster';
@@ -34,7 +35,10 @@ const PCT_COLS = {
   bepRoas: ['beproas'],
 } as const;
 
-export async function GET() {
+export async function GET(req: Request) {
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 진단
+  const denied = requireRole(req, ['admin'])
+  if (denied) return denied
   try {
     const res = await fetch(CSV_URL, { cache: 'no-store' });
     if (!res.ok) {

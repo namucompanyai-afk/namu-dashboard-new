@@ -1,3 +1,4 @@
+import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server';
 import Papa from 'papaparse';
 
@@ -22,7 +23,10 @@ export const revalidate = 0;
 const CSV_URL =
   'https://docs.google.com/spreadsheets/d/e/2PACX-1vRUepV9dz4xnwYH92NoegfUVaQsTVGetYOuhHVIYZXe9mVBBD7kLf2G39Rj18bTfg/pub?gid=147741668&single=true&output=csv';
 
-export async function GET() {
+export async function GET(req: Request) {
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 진도팜 발주
+  const denied = requireRole(req, ['admin', 'staff'])
+  if (denied) return denied
   try {
     const res = await fetch(CSV_URL, { cache: 'no-store' });
     if (!res.ok) {

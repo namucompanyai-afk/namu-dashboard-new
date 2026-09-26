@@ -1,3 +1,4 @@
+import { requireRole } from "@/lib/server-auth"
 import { NextResponse } from "next/server";
 import { getData, saveData } from "@/lib/supabase";
 
@@ -36,6 +37,10 @@ function isValidType(t: string): t is DataType {
 
 /** 데이터 받기 */
 export async function GET(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·진단·데이터 관리·스스 진단
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');
@@ -60,6 +65,10 @@ export async function GET(request: Request) {
 
 /** 데이터 저장 */
 export async function POST(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·진단·데이터 관리·스스 진단
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const body = await request.json();
     const { type, data, fileName, uploadedBy } = body;
@@ -89,6 +98,10 @@ export async function POST(request: Request) {
 
 /** 데이터 삭제 */
 export async function DELETE(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·진단·데이터 관리·스스 진단
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');

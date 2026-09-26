@@ -1,3 +1,4 @@
+import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server';
 import Papa from 'papaparse';
 
@@ -21,7 +22,10 @@ const EXPECTED = ['product_name', '그룹명', '옵션명', '상품명', '판매
 // 공백 제거 + NFC 정규화 후 비교 ("판매 형태" == "판매형태" 허용).
 const norm = (s: unknown) => (typeof s === 'string' ? s.normalize('NFC') : '').replace(/\s+/g, '');
 
-export async function GET() {
+export async function GET(req: Request) {
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: Sales › 고객 분석
+  const denied = requireRole(req, ['admin', 'staff'])
+  if (denied) return denied
   try {
     const res = await fetch(CSV_URL, { cache: 'no-store' });
     if (!res.ok) {

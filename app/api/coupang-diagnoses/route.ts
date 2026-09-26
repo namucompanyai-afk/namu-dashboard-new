@@ -1,3 +1,4 @@
+import { requireRole } from "@/lib/server-auth"
 import { NextResponse } from "next/server";
 import { getData, saveData, deleteData, listByPrefix, listIdsByPrefix } from "@/lib/supabase";
 
@@ -42,6 +43,10 @@ interface DiagnosisSnapshot {
 
 /** GET — 마지막 분석 또는 목록 */
 export async function GET(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·쿠팡 진단
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type') || 'last';
@@ -113,6 +118,10 @@ export async function GET(request: Request) {
 
 /** POST — 자동 저장(last) / 명시 저장(explicit, 메인 row만) / raw(별도 row, raw 만) / summary 부분 머지(patch-summary) */
 export async function POST(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·쿠팡 진단
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const body = await request.json();
     const { type } = body as { type: 'last' | 'explicit' | 'raw' | 'patch-summary' };
@@ -214,6 +223,10 @@ export async function POST(request: Request) {
 /** DELETE — 명시 저장 삭제. ?purgeLegacyBundle=1 이면 옛 묶음 row 통째 폐기.
  *  ?purgeAll=1 이면 모든 진단 데이터 (개별 키 + 옛 묶음 + last 슬롯) 일괄 폐기 — 새 저장 포맷 마이그레이션용. */
 export async function DELETE(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·쿠팡 진단
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

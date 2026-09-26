@@ -1,3 +1,4 @@
+import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import * as XLSX from 'xlsx'
@@ -199,6 +200,10 @@ const nowKstMonth = () => {
 }
 
 export async function GET(req: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 진도팜 정산
+  const denied = requireRole(req, ['admin', 'staff'])
+  if (denied) return denied
   const { searchParams } = new URL(req.url)
   const action = searchParams.get('action') || 'data'
   const month = searchParams.get('month') || ''

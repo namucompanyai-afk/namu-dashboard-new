@@ -1,3 +1,4 @@
+import { requireRole } from "@/lib/server-auth"
 import { NextResponse } from "next/server";
 import { getData, saveData } from "@/lib/supabase";
 
@@ -33,7 +34,10 @@ function makeId(): string {
 }
 
 /** 메모 전체 조회 */
-export async function GET() {
+export async function GET(req: Request) {
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석
+  const denied = requireRole(req, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const items = await loadItems();
     return NextResponse.json({ items });
@@ -44,6 +48,10 @@ export async function GET() {
 
 /** 메모 추가 */
 export async function POST(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const body = await request.json();
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
@@ -72,6 +80,10 @@ export async function POST(request: Request) {
 
 /** 메모 삭제 */
 export async function DELETE(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

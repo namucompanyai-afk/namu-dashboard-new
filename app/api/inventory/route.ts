@@ -8,9 +8,9 @@ const SAFETY_DAYS = 14;
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
   const url = new URL(request.url);
+  const secret = process.env.CRON_SECRET;
   const isCron =
-    authHeader === `Bearer ${process.env.CRON_SECRET}` ||
-    url.searchParams.get("secret") === "namu2024";
+    !!secret && (authHeader === `Bearer ${secret}` || url.searchParams.get("secret") === secret);
 
   if (isCron) {
     try {

@@ -16,9 +16,10 @@ export type RoleCode = 'admin' | 'staff' | 'jindo' | 'guest'
 export const AUTH_COOKIE = 'nd_auth'
 const MAX_AGE_SEC = 60 * 60 * 24 * 30 // 로그인 유지 30일 (nd_role 과 동일)
 
+// 로그인 서명 전용 키 — CRON_SECRET 등 다른 값으로 대체하지 않는다 (없으면 서버 오류)
 function secret(): string {
-  const s = process.env.AUTH_SECRET || process.env.CRON_SECRET
-  if (!s) throw new Error('AUTH_SECRET(또는 CRON_SECRET) 환경변수가 설정되지 않았습니다.')
+  const s = process.env.AUTH_SECRET
+  if (!s) throw new Error('AUTH_SECRET 환경변수가 설정되지 않았습니다.')
   return s
 }
 

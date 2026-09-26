@@ -10,7 +10,8 @@ const SAFETY_DAYS = 14;
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
   const url = new URL(request.url);
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}` && url.searchParams.get("secret") !== "namu2024") {
+  const secret = process.env.CRON_SECRET;
+  if (!secret || (authHeader !== `Bearer ${secret}` && url.searchParams.get("secret") !== secret)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

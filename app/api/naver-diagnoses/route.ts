@@ -1,3 +1,4 @@
+import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server'
 import { getData, saveData, deleteData, listByPrefix } from '@/lib/supabase'
 
@@ -66,6 +67,10 @@ interface NaverSnapshot {
 }
 
 export async function GET(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 스마트스토어 진단
+  const denied = requireRole(request, ['admin'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url)
     const type = searchParams.get('type') || 'last'
@@ -104,6 +109,10 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 스마트스토어 진단
+  const denied = requireRole(request, ['admin'])
+  if (denied) return denied
   try {
     const body = await request.json()
     const { type } = body as { type: 'last' | 'explicit' }
@@ -138,6 +147,10 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 스마트스토어 진단
+  const denied = requireRole(request, ['admin'])
+  if (denied) return denied
   try {
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')

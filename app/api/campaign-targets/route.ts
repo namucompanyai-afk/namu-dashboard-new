@@ -1,3 +1,4 @@
+import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server'
 import { getData, saveData } from '@/lib/supabase'
 
@@ -29,7 +30,10 @@ async function loadTargets(): Promise<Targets> {
   return {}
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석
+  const denied = requireRole(req, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const targets = await loadTargets()
     return NextResponse.json({ targets })
@@ -39,6 +43,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석
+  const denied = requireRole(request, ['admin', 'guest'])
+  if (denied) return denied
   try {
     const body = await request.json()
     const key: string | undefined = body?.key

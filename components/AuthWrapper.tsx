@@ -11,7 +11,13 @@ const GUEST_ALLOWED = ['/coupang-tools/ad-analysis'];
 const inAllowed = (pathname: string, allowed: string[]) =>
   allowed.some((p) => pathname === p || pathname.startsWith(p + '/'));
 // 서버 로그인 확인(nd_auth 쿠키) 대상 API — 401 이면 로그인 쿠키가 없거나 만료된 것
-const AUTH_APIS = ['/api/b2b/sheets', '/api/b2b/history', '/api/jindopam/cost'];
+const AUTH_APIS = [
+  '/api/b2b/sheets', '/api/b2b/history', '/api/jindopam/cost',
+  '/api/campaign-targets', '/api/coupang-ad-history', '/api/coupang-diagnoses',
+  '/api/coupang-margin-master', '/api/coupang-master', '/api/influencer',
+  '/api/jindopam-mapping', '/api/jindopam/settlement', '/api/meta',
+  '/api/naver-diagnoses', '/api/ss-product-mapping',
+];
 
 // 보호 API 가 401 을 주면 localStorage 로그인만 남은 상태 → 로그아웃 처리 후 재로그인 (1회 설치)
 function installAuthExpiryHandler() {
