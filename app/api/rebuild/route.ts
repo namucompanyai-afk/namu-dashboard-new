@@ -449,6 +449,29 @@ const M5_ROWS: [string, string, number][] = [
   ['', '67166778', 1], ['', '70439507', 1], ['', '79665140', 1], ['', '79933349', 1],
   ['', '79911593', 1], ['', '80677477', 1], ['', '54146619', 1],
 ]
+// m8: 마진계산 보정 — [행, 기대 B(별칭), 바꿀 값]
+const M8_SPEC: [number, string][] = [
+  [89, '[보배마을] 강황가루 100g'], [102, '[보배마을] 오트밀 350g'], [112, '[보배마을] 오트밀 350g'],
+  [118, '[보배마을] 강황가루 100g'], [125, '[보배마을] 강황가루 100g'], [127, '[보배마을] 강황가루 100g'],
+  [134, '[보배마을] 깬서리태 500g'], [136, '[보배마을] 강황가루 100g'], [138, '[보배마을] 차조 500g'],
+  [153, '[보배마을] 어린이 혼합곡 800g'], [181, '[토지랑] 호라산칩 50g'], [183, '[토지랑] 호라산칩 50g'],
+  [211, '[보배마을] 매실청 300g'], [212, '[보배마을] 매실청 300g'], [220, '[보배마을] 오트밀 350g'],
+  [221, '[토지랑] 호라산칩 50g'], [222, '[토지랑] 호라산칩 50g'],
+]
+const M8_BONG: [number, string, number, string?][] = [
+  [4, '[보배마을] 백태 1kg', 1], [5, '[보배마을] 파로 1kg', 1], [7, '[보배마을] 즉석밥 6개', 1],
+  [8, '[보배마을] 바나듐쌀 찰흑미 2kg', 1], [9, '[보배마을] 바나듐쌀 백미 2kg', 1], [10, '[보배마을] 즉석밥 24개', 1],
+  [13, '[보배마을] 찰현미 2kg', 1], [14, '[보배마을] 즉석밥 24개', 2], [15, '[보배마을] 즉석밥 24개', 1],
+  [16, '[보배마을] 즉석밥 6개', 3], [18, '[보배마을] 즉석밥 6개', 1],
+  [17, '[100% 국산 유기농] 현미 귀리 잡곡 즉석 밥 180g, 12개', 2, '[보배마을] 즉석밥 6개'],
+  [19, '[보배마을] 어린이 혼합곡 800g', 1], [20, '[보배마을] 깬서리태 500g', 1], [25, '매실액 300ml', 1],
+  [27, '유기농 계란 10구', 1], [28, '[보배마을] 강황가루 100g', 2], [29, '[보배마을] 강황가루 300g', 1],
+  [32, '[보배마을] 강황가루 100g', 1], [33, '[보배마을] 저속노화쌀 1kg', 2], [34, '[보배마을] 오곡밥 500g', 1],
+  [35, '[보배마을] 저속노화쌀 1kg', 1], [37, '[보배마을] 현미 2kg', 2], [38, '[보배마을] 고춧가루 100g', 2],
+  [40, '[보배마을] 백미 2kg', 2],
+]
+const M8_FEE_ROWS = [89, 118, 125, 127, 136, 181, 183, 211, 212, 221, 222]
+const M8_FEE = 11.66 // 식품 기본 10.6% × 1.1 (부가포함)
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -7568,6 +7591,49 @@ export async function GET(req: Request) {
         마진_마이너스_미달: rowsA.filter(({ r }) => (typeof r[15] === 'number' && r[15] < 0) || r[19] === '마진 미달')
           .map(({ r }) => `${r[0]} | ${r[1]} | ${r[2]} | ${r[3]} | ${pct(r[15])}`),
         가공식품_행: rowsA.filter(({ r }) => PROC.test(String(r[1])) && r[0] !== '쿠팡 1P').map(({ r }) => `${r[0]} | ${r[1]} | 수수료율 ${r[10]}`),
+      })
+    }
+
+    // ── m8: 마진계산 보정 — 3P 규격 소 · 스마트스토어 봉수 · 3P 가공식품 수수료 ──
+    //   · 쓰기: 지정 행의 H(규격)·C(봉수)·B(17행만)·K(수수료율) 뿐. 각 행 B 가 기대 별칭과 다르면 건너뜀
+    if (action === 'm8') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const read = async () =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(MARGIN_TAB)}!A1:AC${MLAST}`, valueRenderOption: 'UNFORMATTED_VALUE' }))
+          .data.values || []) as Cell[][]
+      const before = await read()
+      const B = (r: number) => String((before[r - 1] || [])[1] ?? '')
+      const skipped: string[] = []
+      const writes: { range: string; values: Cell[][] }[] = []
+      const touched = new Set<number>()
+      const specRows = M8_SPEC.filter(([r, al]) => (B(r) === al ? true : (skipped.push(`규격 ${r}: B=${B(r)}`), false)))
+      for (const [r] of specRows) { writes.push({ range: `${quote(MARGIN_TAB)}!H${r}`, values: [['소']] }); touched.add(r) }
+      const bongRows = M8_BONG.filter(([r, al]) => (B(r) === al ? true : (skipped.push(`봉수 ${r}: B=${B(r)}`), false)))
+      for (const [r, , n, newB] of bongRows) {
+        writes.push(newB ? { range: `${quote(MARGIN_TAB)}!B${r}:C${r}`, values: [[newB, n]] } : { range: `${quote(MARGIN_TAB)}!C${r}`, values: [[n]] })
+        touched.add(r)
+      }
+      const feeAlias = new Map(M8_SPEC)
+      const feeRows = M8_FEE_ROWS.filter((r) => (B(r) === feeAlias.get(r) ? true : (skipped.push(`수수료 ${r}: B=${B(r)}`), false)))
+      for (const r of feeRows) { writes.push({ range: `${quote(MARGIN_TAB)}!K${r}`, values: [[M8_FEE]] }); touched.add(r) }
+      if (writes.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'RAW', data: writes } })
+
+      const after = await read()
+      const eq = (a: Cell, b: Cell) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : String(a ?? '') === String(b ?? ''))
+      const others = after.map((_, i) => i + 1).filter((r) => r > 1 && !touched.has(r))
+        .filter((r) => Array.from({ length: 29 }, (_, c) => c).some((c) => !eq((before[r - 1] || [])[c] ?? '', (after[r - 1] || [])[c] ?? '')))
+      const v = (rows: Cell[][], r: number, c: number) => (rows[r - 1] || [])[c] ?? ''
+      const pct = (x: Cell) => (typeof x === 'number' ? `${(x * 100).toFixed(1)}%` : '-')
+      const n0 = (x: Cell) => (typeof x === 'number' ? Math.round(x).toLocaleString('ko-KR') : String(x || '-'))
+      return NextResponse.json({
+        ok: others.length === 0 && skipped.length === 0 && errorCellsOf(MARGIN_TAB, after).length === 0,
+        건너뜀: skipped,
+        다른행_변경: others,
+        오류셀: errorCellsOf(MARGIN_TAB, after).length,
+        규격: specRows.map(([r]) => `${r} | ${v(after, r, 1)} | ${v(after, r, 2)} | ${n0(v(after, r, 3))} | ${n0(v(after, r, 8))} | ${n0(v(after, r, 9))} | ${pct(v(before, r, 15))} → ${pct(v(after, r, 15))}`),
+        봉수: bongRows.map(([r]) => `${r} | ${v(after, r, 1)} | ${v(after, r, 2)} | ${n0(v(after, r, 3))} | ${v(after, r, 5) === '' ? '원가 없음' : n0(v(after, r, 5))} | ${pct(v(after, r, 15))}`),
+        수수료: feeRows.map((r) => `${r} | ${v(after, r, 1)} | ${v(before, r, 10)} → ${v(after, r, 10)} | ${pct(v(before, r, 15))} → ${pct(v(after, r, 15))}`),
       })
     }
 
