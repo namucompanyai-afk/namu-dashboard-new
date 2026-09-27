@@ -11,7 +11,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { getDefaultConstants } from '@/lib/coupang/costBook'
 import { build1PView, isRetailRow, augmentMasterWith1P, type OnePView } from '@/lib/coupang/onePAnalysis'
-import * as XLSX from 'xlsx'
+import { downloadFormattedXlsx, type XlsxCol } from '@/lib/xlsxExport'
 import { useConfirm } from '@/components/ui/useConfirm'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -901,52 +901,22 @@ function PairWarnings({ view, master }: { view: ReturnType<typeof buildAdAnalysi
       alert('내보낼 중복 키워드 데이터가 없습니다.')
       return
     }
-    const header = [
-      '수동 캠페인명', '키워드', '제안 입찰가 (VAT 별도)', 'AI 캠페인명',
-      '광고비 (VAT 포함)', '광고 매출', 'ROAS', 'BEP', '노출', '클릭', '전환율',
+    const cols: XlsxCol<(typeof rows)[number]>[] = [
+      { header: '수동 캠페인명', kind: 'text', get: (r) => r.manualCampaignName },
+      { header: '키워드', kind: 'text', get: (r) => r.keyword },
+      { header: '제안 입찰가 (VAT 별도)', kind: 'won', get: (r) => (r.recommendedBidVatExcl != null ? ceilToTen(r.recommendedBidVatExcl) : null) },
+      { header: 'AI 캠페인명', kind: 'text', get: (r) => r.aiCampaignName },
+      { header: '광고비 (VAT 포함)', kind: 'won', get: (r) => r.adCostVat },
+      { header: '광고 매출', kind: 'won', get: (r) => r.revenue },
+      { header: 'ROAS', kind: 'roas', get: (r) => r.roasPct },
+      { header: 'BEP', kind: 'roas', get: (r) => r.bepPct },
+      { header: '노출', kind: 'count', get: (r) => r.impressions },
+      { header: '클릭', kind: 'count', get: (r) => r.clicks },
+      { header: '전환율', kind: 'pct', get: (r) => r.cvrPct },
     ]
-    // ROAS/BEP/CVR 은 ratio 로 저장 (Excel '0%' 포맷이 ×100 표시). bid 은 정수 KRW.
-    const aoa: (string | number | null)[][] = [header]
-    for (const r of rows) {
-      const bid = r.recommendedBidVatExcl != null ? ceilToTen(r.recommendedBidVatExcl) : null
-      aoa.push([
-        r.manualCampaignName,
-        r.keyword,
-        bid,
-        r.aiCampaignName,
-        Math.round(r.adCostVat),
-        Math.round(r.revenue),
-        r.roasPct != null ? r.roasPct / 100 : null,
-        r.bepPct != null ? r.bepPct / 100 : null,
-        r.impressions,
-        r.clicks,
-        r.cvrPct != null ? r.cvrPct / 100 : null,
-      ])
-    }
-    const ws = XLSX.utils.aoa_to_sheet(aoa)
-    ws['!cols'] = [
-      { wch: 38 }, { wch: 18 }, { wch: 14 }, { wch: 38 },
-      { wch: 16 }, { wch: 14 }, { wch: 11 }, { wch: 11 },
-      { wch: 10 }, { wch: 9 }, { wch: 11 },
-    ]
-    // 셀별 number format (z) — col idx 기준: C(2)/E(4)/F(5)/I(8)/J(9) = #,##0, G(6)/H(7) = 0%, K(10) = 0.0%
-    const fmtByCol: Record<number, string> = {
-      2: '#,##0', 4: '#,##0', 5: '#,##0', 8: '#,##0', 9: '#,##0',
-      6: '0%', 7: '0%', 10: '0.0%',
-    }
-    for (let row = 1; row < aoa.length; row++) {
-      for (const colStr of Object.keys(fmtByCol)) {
-        const col = Number(colStr)
-        const addr = XLSX.utils.encode_cell({ r: row, c: col })
-        const cell = ws[addr]
-        if (cell && cell.t === 'n') cell.z = fmtByCol[col]
-      }
-    }
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'AI수동 중복키워드')
     const d = new Date()
     const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    XLSX.writeFile(wb, `중복키워드_AI수동_${ymd}.xlsx`)
+    void downloadFormattedXlsx(cols, rows, `중복키워드_AI수동_${ymd}.xlsx`, 'AI수동 중복키워드')
   }
 
   const Card = ({ kind, count, color, title, desc }: { kind: PairKind; count: number; color: string; title: string; desc: string }) => {
@@ -2544,29 +2514,21 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
       alert(scope === 'selected' ? '선택된 키워드가 없습니다.' : '내보낼 키워드가 없습니다.')
       return
     }
-    const data = target.map((r) => ({
-      '키워드': r.keyword,
-      '추천 입찰가 (5% 안전마진, VAT 별도)':
-        r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
-          ? null
-          : r.bidSource === 'fixed_100'
-            ? 100
-            : ceilToTen(r.recommendedBidVatExcl),
-      '노출': r.impressions,
-      '클릭': r.clicks,
-      '클릭율(%)': r.ctrPct,
-      '광고 판매수': r.orders,
-      '전환율(%)': r.cvrPct,
-      'ROAS(%)': r.roasPct,
-      '현재 CPC (+VAT)': r.currentCpcVatIncl,
-      '광고비 (+VAT)': r.adCostVat,
-      '광고 매출': r.revenue,
-      '추천 액션': ACTION_LABEL[r.action],
-    }))
+    const cols: XlsxCol<(typeof target)[number]>[] = [
+      { header: '키워드', kind: 'text', get: (r) => r.keyword },
+      { header: '추천 입찰가 (5% 안전마진, VAT 별도)', kind: 'won', get: (r) =>
+          r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
+            ? null
+            : r.bidSource === 'fixed_100'
+              ? 100
+              : ceilToTen(r.recommendedBidVatExcl) },
+      ...KW_METRIC_COLS,
+      { header: '추천 액션', kind: 'text', get: (r) => ACTION_LABEL[r.action] },
+    ]
     // 파일명: 옵션 필터 적용 시 옵션명, 미적용 시 캠페인명
     const fileLabel = selectedOptionName ? selectedOptionName : campaignName
     const filename = `광고분석_검색키워드_${sanitizeFile(fileLabel)}_${periodLabel}.xlsx`
-    exportXlsx(data, filename, '검색키워드')
+    void downloadFormattedXlsx(cols, target, filename, '검색키워드')
   }
 
   return (
@@ -2845,20 +2807,12 @@ function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignNam
       alert(scope === 'selected' ? '선택된 항목이 없습니다.' : '내보낼 항목이 없습니다.')
       return
     }
-    const data = target.map((r) => ({
-      '지면': r.keyword,
-      '노출': r.impressions,
-      '클릭': r.clicks,
-      '클릭율(%)': r.ctrPct,
-      '광고 판매수': r.orders,
-      '전환율(%)': r.cvrPct,
-      'ROAS(%)': r.roasPct,
-      '현재 CPC (+VAT)': r.currentCpcVatIncl,
-      '광고비 (+VAT)': r.adCostVat,
-      '광고 매출': r.revenue,
-    }))
+    const cols: XlsxCol<(typeof target)[number]>[] = [
+      { header: '지면', kind: 'text', get: (r) => r.keyword },
+      ...KW_METRIC_COLS,
+    ]
     const filename = `광고분석_비검색키워드_${sanitizeFile(campaignName)}_${periodLabel}.xlsx`
-    exportXlsx(data, filename, '비검색키워드')
+    void downloadFormattedXlsx(cols, target, filename, '비검색키워드')
   }
 
   return (
@@ -2930,12 +2884,21 @@ function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignNam
 }
 
 // ── xlsx export 헬퍼 ──────────────────────────────────────────
-function exportXlsx(data: Record<string, any>[], filename: string, sheetName: string) {
-  const ws = XLSX.utils.json_to_sheet(data)
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31))
-  XLSX.writeFile(wb, filename)
-}
+/** 검색·비검색·수동 키워드 공통 지표 열 (서식: lib/xlsxExport) */
+const KW_METRIC_COLS: XlsxCol<{
+  impressions: number; clicks: number; ctrPct: number | null; orders: number; cvrPct: number | null
+  roasPct: number | null; currentCpcVatIncl: number | null; adCostVat: number; revenue: number
+}>[] = [
+  { header: '노출', kind: 'count', get: (r) => r.impressions },
+  { header: '클릭', kind: 'count', get: (r) => r.clicks },
+  { header: '클릭율', kind: 'pct', get: (r) => r.ctrPct },
+  { header: '광고 판매수', kind: 'count', get: (r) => r.orders },
+  { header: '전환율', kind: 'pct', get: (r) => r.cvrPct },
+  { header: 'ROAS', kind: 'roas', get: (r) => r.roasPct },
+  { header: '현재 CPC (+VAT)', kind: 'won', get: (r) => r.currentCpcVatIncl },
+  { header: '광고비 (+VAT)', kind: 'won', get: (r) => r.adCostVat },
+  { header: '광고 매출', kind: 'won', get: (r) => r.revenue },
+]
 function sanitizeFile(s: string): string {
   return (s || 'unnamed').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '_').slice(0, 80)
 }
@@ -3044,35 +3007,23 @@ function ManualSection({ campaign, master, marginOff = false, hideBep = false, m
       alert(scope === 'selected' ? '선택된 키워드가 없습니다.' : '내보낼 키워드가 없습니다.')
       return
     }
-    const data = target.map((r) => {
-      const effective = r.currentBidVatExcl ?? r.avgCpcVatExcl
-      const stars = r.confidence === 3 ? '⭐⭐⭐' : r.confidence === 2 ? '⭐⭐' : '⭐'
-      return {
-        '키워드': r.keyword,
-        '추천 입찰가 (5% 안전마진, VAT 별도)':
+    const cols: XlsxCol<(typeof target)[number]>[] = [
+      { header: '키워드', kind: 'text', get: (r) => r.keyword },
+      { header: '추천 입찰가 (5% 안전마진, VAT 별도)', kind: 'won', get: (r) =>
           r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null
             ? null
             : r.bidSource === 'fixed_100'
               ? 100
-              : ceilToTen(r.recommendedBidVatExcl),
-        '노출': r.impressions,
-        '클릭': r.clicks,
-        '클릭율(%)': r.ctrPct,
-        '광고 판매수': r.orders,
-        '전환율(%)': r.cvrPct,
-        'ROAS(%)': r.roasPct,
-        '현재 CPC (+VAT)': r.currentCpcVatIncl,
-        '광고비 (+VAT)': r.adCostVat,
-        '광고 매출': r.revenue,
-        '현재 입찰가 (VAT 별도)': effective,
-        '차이': r.bidDiff != null ? Math.round(r.bidDiff) : null,
-        '신뢰도': stars,
-        '점검': VERDICT_LABEL[r.bidVerdict],
-      }
-    })
+              : ceilToTen(r.recommendedBidVatExcl) },
+      ...KW_METRIC_COLS,
+      { header: '현재 입찰가 (VAT 별도)', kind: 'won', get: (r) => r.currentBidVatExcl ?? r.avgCpcVatExcl },
+      { header: '차이', kind: 'won', get: (r) => r.bidDiff },
+      { header: '신뢰도', kind: 'text', get: (r) => (r.confidence === 3 ? '⭐⭐⭐' : r.confidence === 2 ? '⭐⭐' : '⭐') },
+      { header: '점검', kind: 'text', get: (r) => VERDICT_LABEL[r.bidVerdict] },
+    ]
     const fileLabel = selectedOptionName ? selectedOptionName : campaign.campaignName
     const filename = `광고분석_수동키워드_${sanitizeFile(fileLabel)}_${periodLabel}.xlsx`
-    exportXlsx(data, filename, '수동키워드')
+    void downloadFormattedXlsx(cols, target, filename, '수동키워드')
   }
 
   // 수기 BEP도 없을 때만 안내. 수기 BEP 입력 시 정상 렌더(추천입찰가·판정).
