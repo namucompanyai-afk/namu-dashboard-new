@@ -90,6 +90,8 @@ export type PalletPlan = {
 // '[보배마을] 오트현미한끼 잡곡밥 180g*6입' → '잡곡밥 *6'
 export function shortSkuName(raw: string): string {
   let s = String(raw || '').trim()
+  // 예외: 새 별칭 '[쌀쌀쌀] 저속노화 잡곡 2kg 캐귀리' 는 마지막 단어(캐귀리) 대신 기존 라벨 유지
+  if (s.includes('저속노화 잡곡')) return '저속식단'
   s = s.replace(/\[[^\]]*\]/g, ' ') // [보배마을] 등 브랜드 대괄호 제거
   // 밥 계열은 6입/24입이 별개 품목이라 묶음 수를 떼지 않고 붙여 쓴다
   // (용량 토큰 정규식의 \b 는 한글 뒤에서 안 걸려 '*6입' 이 남으므로 여기서 먼저 처리)
