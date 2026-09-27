@@ -531,12 +531,10 @@ export default function AdAnalysisPage() {
           onSelectOption={openCampaignAndOption}
           targets={targets}
           onTargetChange={setTargetForKey}
+          renderDetail={(c) => c.type === 'manual'
+            ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />}
         />
-        {openCampaign && (
-          openCampaign.type === 'manual'
-            ? <ManualSection campaign={openCampaign} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-            : <AiSection campaign={openCampaign} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />
-        )}
       </>)}
     </>
   )
@@ -1865,7 +1863,7 @@ function HistoryNotesSection() {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange }: {
+function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange, renderDetail }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
   marginOff?: boolean
@@ -1877,17 +1875,10 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
   onSelectOption: (campaignId: string, optionId: string | null) => void
   targets: Record<string, number>
   onTargetChange: (key: string, value: number | null) => void
+  /** 펼친 캠페인의 키워드 분석(AI)·입찰가 점검(수동) — 옵션 행 바로 아래 표 안에 표시 */
+  renderDetail?: (c: CampaignDiag) => React.ReactNode
 }) {
   const { sorted, key, dir, toggle } = useSort(view.campaigns, 'adCostVat' as keyof CampaignDiag, 'desc')
-  const [expandedCampIds, setExpandedCampIds] = useState<Set<string>>(new Set())
-
-  function toggleExpand(id: string) {
-    setExpandedCampIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
-  }
 
   const bepMap = useMemo(() => marginOff ? (manualBep ?? new Map<string, number>()) : buildBepMap(master), [marginOff, manualBep, master])
   const priceMap = useMemo(() => buildActualPriceMapById(master), [master])
@@ -1914,10 +1905,11 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
       <div className="aa-section-header">
         <div>
           <div className="aa-section-title">캠페인 진단</div>
-          <div className="aa-section-desc">▸ 클릭 → 옵션 펼침 · 캠페인명 클릭 → 키워드 분석 · 옵션 클릭 → 키워드 옵션 필터</div>
+          <div className="aa-section-desc">캠페인 클릭 → 옵션·키워드(AI) / 입찰가 점검(수동) 함께 펼침 · 옵션 클릭 → 그 옵션만 · 다시 클릭 → 닫기</div>
         </div>
       </div>
-      <div className="aa-table-wrap">
+      {/* 캠페인을 펼치면 표 높이 제한을 풀어 펼친 키워드 표가 표 안에서 잘리지 않게 (키워드 표는 자체 900px 스크롤) */}
+      <div className="aa-table-wrap" style={openCampId && renderDetail ? { maxHeight: 'none' } : undefined}>
         <table>
           <thead>
             <tr>
@@ -1935,7 +1927,7 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
           <tbody>
             {sorted.map((c) => {
               const isOpen = c.campaignId === openCampId
-              const isExpanded = expandedCampIds.has(c.campaignId)
+              const isExpanded = isOpen
               const opts = !marginOff && isExpanded
                 ? computeOptions(c.rows, bepMap, priceMap, rowMap, exposureMap)
                 : []
@@ -1948,12 +1940,13 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
                   isOpen={isOpen}
                   isExpanded={isExpanded}
                   onToggle={() => onOpen(c.campaignId)}
-                  onToggleExpand={() => toggleExpand(c.campaignId)}
+                  onToggleExpand={() => onOpen(c.campaignId)}
                   options={opts}
                   selectedOptionId={isOpen ? selectedOptionId : null}
                   onSelectOption={(optId) => onSelectOption(c.campaignId, optId)}
                   targets={targets}
                   onTargetChange={onTargetChange}
+                  detail={isOpen && renderDetail ? renderDetail(c) : null}
                 />
               )
             })}
@@ -1964,7 +1957,8 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
   )
 }
 
-function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange }: {
+function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange, detail }: {
+  detail?: React.ReactNode
   c: CampaignDiag
   marginOff?: boolean
   hideBep?: boolean
@@ -2038,6 +2032,13 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
           <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
         </tr>
       )}
+      {detail && (
+        <tr className="aa-detail-row">
+          <td colSpan={hideBep ? 7 : 9} style={{ padding: 0, background: '#fff', whiteSpace: 'normal' }}>
+            <div style={{ maxHeight: 900, overflowY: 'auto', padding: '4px 8px 12px' }}>{detail}</div>
+          </td>
+        </tr>
+      )}
       {marginOff && isExpanded && (
         <tr className="aa-option-row">
           <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP 입력값 기준)</td>
@@ -2081,7 +2082,8 @@ function OptionInlineRow({ o, isSelected, onClick, hideBep = false }: { o: Optio
 }
 
 // ── AI Section ────────────────────────────────────────────────
-function AiSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose, targets, onTargetChange }: {
+function AiSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose, targets, onTargetChange, onSelectOption }: {
+  onSelectOption?: (optionId: string | null) => void
   targets?: Record<string, number>
   onTargetChange?: (key: string, v: number | null) => void
   campaign: CampaignDiag
@@ -2190,7 +2192,7 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
-        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={onClearOption} />}
+        <OptionChips options={options} selectedOptionId={selectedOptionId} onSelect={(id) => (id == null ? onClearOption() : onSelectOption?.(id))} />
         <KeywordTable
           rows={search}
           campaignRows={campaign.rows}
@@ -2321,19 +2323,21 @@ function computeOptions(
   return out
 }
 
-function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
+// 키워드 표 위 옵션 칩 — 전체 옵션 | 옵션A | 옵션B … (같은 칩 다시 누르면 전체로)
+function OptionChips({ options, selectedOptionId, onSelect }: { options: OptionDiag[]; selectedOptionId: string | null; onSelect: (id: string | null) => void }) {
+  if (options.length <= 1) return null
+  const chip = (active: boolean): React.CSSProperties => ({
+    padding: '4px 10px', borderRadius: 999, fontSize: 12, cursor: 'pointer',
+    border: '1px solid ' + (active ? '#2563EB' : '#CBD5E1'), background: active ? '#EFF6FF' : '#fff', color: active ? '#1D4ED8' : '#334155',
+  })
   return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6,
-      background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 14,
-      padding: '4px 10px', fontSize: 12, color: '#1E40AF', margin: '8px 0',
-    }}>
-      <span>옵션 필터: <strong>{label}</strong></span>
-      <button
-        onClick={onClear}
-        style={{ background: 'transparent', border: 'none', color: '#1E40AF', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0 }}
-        title="필터 해제"
-      >✕</button>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '8px 0' }}>
+      <button style={chip(selectedOptionId == null)} onClick={() => onSelect(null)}>전체 옵션</button>
+      {options.map((o) => (
+        <button key={o.optionId} style={chip(selectedOptionId === o.optionId)} onClick={() => onSelect(o.optionId)} title={o.optionName}>
+          {o.optionName.length > 28 ? `${o.optionName.slice(0, 28)}…` : o.optionName} · {fmtMan(o.adCostVat)}
+        </button>
+      ))}
     </div>
   )
 }
@@ -2956,7 +2960,8 @@ function ActionLegend() {
 }
 
 // ── Manual Section ────────────────────────────────────────────
-function ManualSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose }: {
+function ManualSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose, onSelectOption }: {
+  onSelectOption?: (optionId: string | null) => void
   campaign: CampaignDiag
   master: any
   marginOff?: boolean
@@ -3100,7 +3105,7 @@ function ManualSection({ campaign, master, marginOff = false, hideBep = false, m
         <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
       </div>
       <div className="aa-section-body">
-        {selectedOptionName && <FilterChip label={selectedOptionName} onClear={onClearOption} />}
+        <OptionChips options={options} selectedOptionId={selectedOptionId} onSelect={(id) => (id == null ? onClearOption() : onSelectOption?.(id))} />
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
