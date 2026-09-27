@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import { requireRole } from '@/lib/server-auth'
+import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 
 /**
  * 진도팜 원가표 write API (서비스 계정)
  *
  * 진도팜/나무 담당자는 대시보드 계정만 사용하고 구글시트를 직접 열지 않는다.
  * read(GET)·write(POST) 모두 이 라우트가 서비스 계정으로 처리한다 (원가표 링크 공개 불필요).
+ * 대상 파일: 나무_마스터(MASTER_SHEET_ID) 의 '진도팜 원가표' 탭. 변동 기록은 합친 탭 '원가 변동 로그'.
  *
  * GET: 화면용 두 범위만 고정 반환 — values('진도팜 원가표'!A11:Q) · ref('진도팜 원가표'!A1:F8)
  *
@@ -21,10 +23,15 @@ import { requireRole } from '@/lib/server-auth'
 export const runtime = 'nodejs'
 export const revalidate = 0
 
-const SHEET_ID = '1L5FDCyvGfULZ4lyjfzcs2W3N1todfEltmWG-tUzMcWg'
+const SHEET_ID = MASTER_SHEET_ID
 const COST_TAB = '진도팜 원가표'
 const LOG_TAB = '단가 변동 로그'
 const REFLOG_TAB = '가공비 변동 로그' // 가공비·배송비 참고표 변동 (원료용 LOG_TAB과 별개)
+// 나무_마스터: 두 로그를 합친 탭 (A1 헤더, 2행부터 기록)
+const COST_LOG_TAB = '원가 변동 로그'
+const COST_LOG_HEADERS = ['일시', '종류', '원료ID·항목', '구분', '품목', '변경 전', '변경 후', '적용 시작일', '변경자']
+// 화면에서 쓰는 액션만 허용 — 나머지(initN·admin-del-log)는 옛 원가표 파일 구조 전용 일회성 액션
+const LIVE_ACTIONS = new Set(['init', 'update-ref', 'update-proc', 'update', 'create'])
 const HEADER_ROW = 11 // R11 헤더, R12~ 데이터 (init12 레이아웃: 상단 참고표 A1:F8)
 
 const LOG_HEADERS = [
@@ -154,17 +161,27 @@ export async function POST(req: Request) {
     if (denied) return denied
     const body = await req.json()
     const action = body?.action as string
+    if (!LIVE_ACTIONS.has(action)) {
+      return NextResponse.json(
+        { ok: false, error: `${action}: 옛 원가표 파일 구조 전용 — 나무_마스터 전환 후 실행 금지` },
+        { status: 410 }
+      )
+    }
     const sheets = getSheets()
 
     // ── 변동로그 헤더 세팅 (멱등) ────────────────────────────────
     if (action === 'init') {
+      const cur = await sheets.spreadsheets.values.get({ spreadsheetId: SHEET_ID, range: `${quote(COST_LOG_TAB)}!A1:I1` })
+      if ((cur.data.values?.[0] || []).some((c) => String(c ?? '').trim() !== '')) {
+        return NextResponse.json({ ok: true, message: '원가 변동 로그 헤더 이미 있음 — 변경 없음' })
+      }
       await sheets.spreadsheets.values.update({
         spreadsheetId: SHEET_ID,
-        range: `${quote(LOG_TAB)}!A${HEADER_ROW}:H${HEADER_ROW}`,
+        range: `${quote(COST_LOG_TAB)}!A1:I1`,
         valueInputOption: 'RAW',
-        requestBody: { values: [LOG_HEADERS] },
+        requestBody: { values: [COST_LOG_HEADERS] },
       })
-      return NextResponse.json({ ok: true, message: '변동로그 헤더 세팅 완료' })
+      return NextResponse.json({ ok: true, message: '원가 변동 로그 헤더 세팅 완료' })
     }
 
     // ── 원가표 원곡가 중심 재구성 (수동 1회) ─────────────────────
@@ -548,10 +565,10 @@ export async function POST(req: Request) {
         requestBody: { values: [[newValue]] },
       })
 
-      // 가공비 변동 로그 append (원료용 LOG_TAB과 별개)
+      // 원가 변동 로그 append — 가공비·배송비 (원료ID·항목 = 항목, 구분·품목 빈칸)
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID,
-        range: `${quote(REFLOG_TAB)}!A:G`,
+        range: `${quote(COST_LOG_TAB)}!A:I`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
         requestBody: {
@@ -560,6 +577,8 @@ export async function POST(req: Request) {
               nowKst(),
               kind === 'cost' ? '가공비' : '배송비',
               item,
+              '',
+              '',
               oldValue ?? '',
               newValue ?? '',
               applyFrom || '',
@@ -1138,13 +1157,14 @@ export async function POST(req: Request) {
       // 변동로그 append (원곡가와 동일 로그탭, 변경전/후에 가공옵션 요약)
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID,
-        range: `${quote(LOG_TAB)}!A:H`,
+        range: `${quote(COST_LOG_TAB)}!A:I`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
         requestBody: {
           values: [
             [
               nowKst(),
+              '단가',
               makeRawId(gubun, item, variety || ''),
               gubun,
               item,
@@ -1208,13 +1228,14 @@ export async function POST(req: Request) {
       // 변동로그 append
       await sheets.spreadsheets.values.append({
         spreadsheetId: SHEET_ID,
-        range: `${quote(LOG_TAB)}!A:H`,
+        range: `${quote(COST_LOG_TAB)}!A:I`,
         valueInputOption: 'USER_ENTERED',
         insertDataOption: 'INSERT_ROWS',
         requestBody: {
           values: [
             [
               nowKst(),
+              '단가',
               makeRawId(gubun, item, variety || ''),
               gubun,
               item,

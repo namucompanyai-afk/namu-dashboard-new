@@ -5,6 +5,7 @@ import aliasData from './alias-data.json'
 import mappingData from './mapping-data.json'
 import migrationData from './migration-data.json'
 import m7Data from './m7-data.json'
+import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 
 /**
  * 나무_마진리빌드 구글시트 초기 세팅 API (서비스 계정 · 일회성)
@@ -350,7 +351,6 @@ const GOMPYO_COST_ROWS: Cell[][] = [
   ['곰표 작업비 2kg', 600, '원', '곰표 제조 1봉당 소포장 작업비'],
 ]
 // ── 나무_마스터 통합 (m 계열 액션) — 대상 MASTER_SHEET_ID, 원본 3개 파일은 읽기·copyTo 만 ──
-const MASTER_SHEET_ID = '1yryYZabPHf_4dD_ywyvrFx0iSqMZR8YVgYGm8mvAu3M'
 const B2B_SHEET_ID = '1nujXWT95QWnYBX1LpSAL1hLL3Uv8MBt7kJDz8i6WbFU'
 // m1: 그대로 복사하는 탭 (원본 파일 · 탭 이름) — 복사 순서 = 참조 먼저
 const M1_COPIES: { src: string; file: string; tab: string }[] = [
