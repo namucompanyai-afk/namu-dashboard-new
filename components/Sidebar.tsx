@@ -180,7 +180,7 @@ export default function Sidebar() {
                       <div className="ml-4 mt-1 space-y-1">
                         <Link href="/coupang-tools/diagnosis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/diagnosis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                           <span>🎯</span>
-                          <span>수익 진단</span>
+                          <span>쿠팡 손익</span>
                         </Link>
                         <Link href="/coupang-tools/ad-analysis" className={'flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ' + (isActive('/coupang-tools/ad-analysis') ? 'bg-gray-700 text-white' : 'text-gray-300 hover:bg-gray-700')}>
                           <span>📈</span>

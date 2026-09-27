@@ -1,7 +1,7 @@
 'use client'
 
 /**
- * 쿠팡 수익 진단 페이지
+ * 쿠팡 손익 페이지 (구 쿠팡 수익 진단) — 맨 위 월별 손익(CoupangPnlPanel) + 기존 수익 진단
  *
  * 핵심 표시:
  *   1) 마진 마스터 미로드 시 → "데이터 관리"로 이동 안내
@@ -20,6 +20,7 @@ import { useConfirm } from '@/components/ui/useConfirm'
 import type { ProductDiagnosis, VerdictCode, DiagnosisResult, OptionDiagnosis } from '@/lib/coupang/diagnosis'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
+import CoupangPnlPanel from '@/components/coupang/CoupangPnlPanel'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import MasterDiagnosisView from '@/components/coupang/MasterDiagnosisView'
 import KpiCard from '@/components/pnl/KpiCard'
@@ -510,7 +511,7 @@ export default function DiagnosisPage() {
         {/* 헤더 */}
         <div className="mb-6 flex items-end justify-between border-b pb-5">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">쿠팡 수익 진단</h1>
+            <h1 className="text-2xl font-bold tracking-tight">쿠팡 손익</h1>
             <p className="text-sm text-gray-500 mt-1">
               광고 · 오가닉 · 전체 3중 손익 분석 · 함정 탐지
             </p>
@@ -651,6 +652,19 @@ export default function DiagnosisPage() {
               데이터 관리 페이지로 이동 →
             </a>
           </div>
+        )}
+
+        {/* 쿠팡 손익 — 월 선택 · 파일 6종 · 순이익 · 매출 구조 (기존 수익 진단 위에 추가) */}
+        {!loadedSnapshot && (
+          <CoupangPnlPanel
+            summary3P={rawSalesInsight.length > 0 && diagnosisResult ? diagnosisResult.summary : null}
+            storeAdRows={rawAdCampaign}
+            storeHasSeller={rawSalesInsight.length > 0}
+            onePRows={(marginMaster as any)?.onePRows}
+            marginRows={marginMaster?.marginRows}
+            onAd={(rows, meta, period) => { setLoadedSnapshot(null); setAdCampaign(rows, meta, period) }}
+            onSeller={(rows, meta) => { setLoadedSnapshot(null); setSalesInsight(rows as any, meta) }}
+          />
         )}
 
         {/* 마진 마스터 출처 배지 (나무_마스터 마진계산 vs 엑셀 업로드 저장본 폴백) */}

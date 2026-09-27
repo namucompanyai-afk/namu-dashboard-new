@@ -25,14 +25,21 @@ const VALID_TYPES = [
   'naver_margin',
   'naver_cpm',
 ] as const;
-type DataType = typeof VALID_TYPES[number];
+// 쿠팡 손익 월별 저장본 — pnl_{종류}_{YYYY-MM} (광고 요약·3P 판매·1P 판매·발주서·밀크런 정산·접수 내역). 관리자만.
+const PNL_TYPE = /^pnl_(ad|seller|onep_sales|po|mr_settle|mr_list)_\d{4}-\d{2}$/;
+type DataType = typeof VALID_TYPES[number] | `pnl_${string}`;
 
 function getKey(type: DataType): string {
   return `coupang_${type}`;
 }
 
 function isValidType(t: string): t is DataType {
-  return VALID_TYPES.includes(t as DataType);
+  return VALID_TYPES.includes(t as typeof VALID_TYPES[number]) || PNL_TYPE.test(t);
+}
+
+/** pnl_ 월별 손익 데이터는 관리자만 */
+function pnlDenied(request: Request, type: string) {
+  return type.startsWith('pnl_') ? requireRole(request, ['admin']) : null;
 }
 
 /** 데이터 받기 */
@@ -52,6 +59,8 @@ export async function GET(request: Request) {
       );
     }
 
+    const pd = pnlDenied(request, type);
+    if (pd) return pd;
     const saved = await getData(getKey(type));
     if (!saved) {
       return NextResponse.json({ data: null, fileName: null, savedAt: null });
@@ -82,6 +91,8 @@ export async function POST(request: Request) {
     if (!data) {
       return NextResponse.json({ error: 'data 필요' }, { status: 400 });
     }
+    const pd = pnlDenied(request, type);
+    if (pd) return pd;
 
     await saveData(getKey(type), {
       data,
@@ -113,6 +124,8 @@ export async function DELETE(request: Request) {
       );
     }
 
+    const pd = pnlDenied(request, type);
+    if (pd) return pd;
     // 빈 객체로 덮어쓰기 (saveData가 upsert임)
     await saveData(getKey(type), {
       data: null,
