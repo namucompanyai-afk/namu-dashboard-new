@@ -144,6 +144,8 @@ export interface ProductDiagnosis {
 export interface OptionDiagnosis {
   optionId: string
   optionName: string
+  /** 쿠팡 옵션명 (표시용 · 없으면 optionName 표시) */
+  coupangOptionName?: string
   /** 옵션명에서 파싱한 봉투 개수 (정렬용) */
   bagCount: number
   /** 채널 — marginMaster 의 최종채널 ('윙'/'그로스'). 빈 문자열이면 미상. */
@@ -317,6 +319,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   type GroupOptionAccum = {
     optionId: string
     optionName: string
+    coupangOptionName?: string
     channel: string
     netProfitPerUnit: number
     revenue: number
@@ -400,6 +403,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       g.optionMap.set(optId, {
         optionId: optId,
         optionName: marginRow.optionName || optId,
+        coupangOptionName: marginRow.coupangOptionName,
         channel: getOptionChannel(optId) || marginRow.channel || '',
         netProfitPerUnit: marginRow.netProfit ?? 0,
         revenue: 0,
@@ -535,6 +539,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
       return {
         optionId: o.optionId,
         optionName: o.optionName,
+        coupangOptionName: o.coupangOptionName,
         bagCount,
         channel: o.channel || '',
         priceBand: mr?.priceBand,

@@ -2213,7 +2213,7 @@ function computeOptions(
   rows: AdCampaignRow[],
   bepMap: Map<string, number>,
   priceMap: Map<string, number>,
-  rowMap: Map<string, { optionName?: string; alias?: string; channel?: string }>,
+  rowMap: Map<string, { optionName?: string; coupangOptionName?: string; alias?: string; channel?: string }>,
   exposureByOptionId: Map<string, string>,
 ): OptionDiag[] {
   const grp = new Map<string, AdCampaignRow[]>()
@@ -2247,7 +2247,8 @@ function computeOptions(
     const gapPct = roasPct != null && bepPct != null ? roasPct - bepPct : null
     const mr = rowMap.get(optId)
     const matched = !!mr
-    const optionName = mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`
+    // 표시명: 쿠팡 옵션명(나무_마스터 AD) 우선, 없으면 기존 옵션명
+    const optionName = mr?.coupangOptionName || mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`
     const cvrPct = clicks > 0 ? (sold / clicks) * 100 : null
     out.push({
       optionId: optId,
@@ -2360,7 +2361,7 @@ function computeKeywordOptions(
     }
     out.push({
       optionId: optId,
-      optionName: mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`,
+      optionName: mr?.coupangOptionName || mr?.optionName || `미매칭 (${optId.slice(-8) || '없음'})`,
       alias: mr?.alias || '',
       channel: mr?.channel || '',
       matched,

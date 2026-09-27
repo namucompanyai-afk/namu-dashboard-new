@@ -6,6 +6,7 @@ import mappingData from './mapping-data.json'
 import migrationData from './migration-data.json'
 import m7Data from './m7-data.json'
 import m11Data from './m11-data.json'
+import m12Data from './m12-data.json'
 import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 
 /**
@@ -7556,6 +7557,8 @@ export async function GET(req: Request) {
         raw.push({ range: `${quote(MARGIN_TAB)}!A${r}:D${r}`, values: [['쿠팡 3P', a.alias, a.bong, a.price]] })
         raw.push({ range: `${quote(MARGIN_TAB)}!H${r}`, values: [[a.spec]] })
         raw.push({ range: `${quote(MARGIN_TAB)}!W${r}:X${r}`, values: [[a.pid, a.oid]] })
+        const name = (a as { name?: string }).name
+        if (name) raw.push({ range: `${quote(MARGIN_TAB)}!AD${r}`, values: [[name]] }) // 쿠팡 옵션명
         fx.push({ range: `${quote(MARGIN_TAB)}!K${r}`, values: [[`=IF($A${r}="","",IFERROR(VLOOKUP($A${r},'${M2_SETTING_TAB}'!$A$2:$C$19,3,FALSE),""))`]] })
       })
       for (let i = 0; i < raw.length; i += 400) {
@@ -7781,6 +7784,7 @@ export async function GET(req: Request) {
         raw.push({ range: `${quote(MARGIN_TAB)}!A${r}:D${r}`, values: [['쿠팡 3P', a.alias, a.bong, a.price]] })
         raw.push({ range: `${quote(MARGIN_TAB)}!H${r}`, values: [[a.spec]] })
         raw.push({ range: `${quote(MARGIN_TAB)}!W${r}:X${r}`, values: [[a.pid, a.oid]] })
+        if (a.name) raw.push({ range: `${quote(MARGIN_TAB)}!AD${r}`, values: [[a.name]] }) // 쿠팡 옵션명
         fx.push({ range: `${quote(MARGIN_TAB)}!K${r}`, values: [[`=IF($A${r}="","",IFERROR(VLOOKUP($A${r},'${M2_SETTING_TAB}'!$A$2:$C$19,3,FALSE),""))`]] })
       })
       if (raw.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'RAW', data: raw } })
@@ -7799,6 +7803,90 @@ export async function GET(req: Request) {
           const bep = typeof r[14] === 'number' && r[14] > 0 && typeof r[3] === 'number' ? (r[3] / r[14]).toFixed(2) : '-'
           return `${r[23]} | ${a?.name ?? ''} | ${r[1]} | ${r[2]} | ${r[3]} | ${r[7]} | ${pct(r[15])} | ${bep}`
         }),
+      })
+    }
+
+    // ── m12: 마진계산 AD '쿠팡 옵션명' — 3P 는 price_inventory 옵션명(값), 1P 는 상품마스터 상품명(수식) ──
+    //   · A~AC 쓰기 없음. AD 가 이미 차 있는 행은 건너뜀
+    if (action === 'm12') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const names = m12Data as Record<string, string>
+      const read = async (opt: 'FORMULA' | 'UNFORMATTED_VALUE') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(MARGIN_TAB)}!A1:AD${MLAST}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title,gridProperties(columnCount)))' })
+      const prop = (meta.data.sheets || []).find((x) => x.properties?.title === MARGIN_TAB)?.properties
+      if (!prop) throw new Error('마진계산 탭 없음')
+      const bFx = await read('FORMULA')
+      const bVal = await read('UNFORMATTED_VALUE')
+      const pm = (r: number) =>
+        `=IF($Y${r}="","",IFERROR(INDEX('${M5_PM_TAB}'!$C:$C,IFERROR(MATCH(TO_TEXT($Y${r}),'${M5_PM_TAB}'!$F:$F,0),MATCH(VALUE($Y${r}),'${M5_PM_TAB}'!$F:$F,0))),""))`
+      const raw: { range: string; values: Cell[][] }[] = []
+      const fx: { range: string; values: Cell[][] }[] = []
+      const rows3P: number[] = []
+      const rows1P: number[] = []
+      const missing: string[] = []
+      let skipped = 0
+      bFx.forEach((row, i) => {
+        if (i === 0) return
+        const r = i + 1
+        const ch = String(row?.[0] ?? '')
+        if (ch !== '쿠팡 3P' && ch !== '쿠팡 1P') return
+        if (String(row?.[29] ?? '') !== '') { skipped++; return }
+        if (ch === '쿠팡 3P') {
+          const oid = String(row?.[23] ?? '').trim()
+          const nm = names[oid]
+          if (!nm) { missing.push(oid || `${r}행(옵션ID 없음)`); return }
+          raw.push({ range: `${quote(MARGIN_TAB)}!AD${r}`, values: [[nm]] })
+          rows3P.push(r)
+        } else {
+          fx.push({ range: `${quote(MARGIN_TAB)}!AD${r}`, values: [[pm(r)]] })
+          rows1P.push(r)
+        }
+      })
+      if ((prop.gridProperties?.columnCount ?? 0) < 30) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: { requests: [{ appendDimension: { sheetId: prop.sheetId!, dimension: 'COLUMNS', length: 30 - (prop.gridProperties?.columnCount ?? 0) } }] },
+        })
+      }
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: { valueInputOption: 'RAW', data: [{ range: `${quote(MARGIN_TAB)}!AD1`, values: [['쿠팡 옵션명']] }, ...raw] },
+      })
+      if (fx.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data: fx } })
+      // 서식: 헤더 볼드 · 3P 흰색(입력) · 1P 회색(자동)
+      const cell = (r: number, bg: any) => ({
+        repeatCell: {
+          range: { sheetId: prop.sheetId!, startRowIndex: r - 1, endRowIndex: r, startColumnIndex: 29, endColumnIndex: 30 },
+          cell: { userEnteredFormat: { backgroundColor: bg } },
+          fields: 'userEnteredFormat.backgroundColor',
+        },
+      })
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          requests: [
+            { repeatCell: { range: { sheetId: prop.sheetId!, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 29, endColumnIndex: 30 }, cell: { userEnteredFormat: { textFormat: { bold: true } } }, fields: 'userEnteredFormat.textFormat.bold' } },
+            ...rows3P.map((r) => cell(r, { red: 1, green: 1, blue: 1 })),
+            ...rows1P.map((r) => cell(r, hex(AUTO_GRAY))),
+          ],
+        },
+      })
+      const aFx = await read('FORMULA')
+      const aVal = await read('UNFORMATTED_VALUE')
+      const eq = (x: Cell, y: Cell) => (typeof x === 'number' && typeof y === 'number' ? Math.abs(x - y) < 1e-6 : String(x ?? '') === String(y ?? ''))
+      const changed = Array.from({ length: Math.max(bFx.length, aFx.length) }, (_, i) => i).filter((i) =>
+        Array.from({ length: 29 }, (_, c) => c).some((c) => !eq((bFx[i] || [])[c] ?? '', (aFx[i] || [])[c] ?? '') || !eq((bVal[i] || [])[c] ?? '', (aVal[i] || [])[c] ?? '')))
+      const filled = (rs: number[]) => rs.filter((r) => String((aVal[r - 1] || [])[29] ?? '') !== '').length
+      return NextResponse.json({
+        ok: changed.length === 0 && errorCellsOf(MARGIN_TAB, aVal).length === 0,
+        '3P': `${filled(rows3P)}/${rows3P.length + missing.length}`, '1P': `${filled(rows1P)}/${rows1P.length}`,
+        못찾은_옵션ID: missing, 이미채움_건너뜀: skipped,
+        A_AC_변경행: changed.map((i) => i + 1), 오류셀: errorCellsOf(MARGIN_TAB, aVal).length,
+        샘플: [...rows3P.slice(0, 2), ...rows1P.slice(0, 1)].map((r) => { const v = aVal[r - 1] || []; return `${v[23] || v[24]} | ${v[1]} | ${v[2]} | ${v[29]}` }),
+        '1P_빈칸': rows1P.filter((r) => String((aVal[r - 1] || [])[29] ?? '') === '').map((r) => `${r} ${(aVal[r - 1] || [])[1]}`),
       })
     }
 

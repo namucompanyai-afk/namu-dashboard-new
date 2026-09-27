@@ -1803,7 +1803,7 @@ function ProductScannerTable({ products }: { products: ProductDiagnosis[] }) {
                     return (
                       <tr key={`${p.alias}-${opt.optionId}`} className="bg-blue-50/50">
                         <td className="pl-12 pr-4 py-2 sticky left-0 z-10 bg-blue-50 min-w-[200px] border-r border-gray-200 shadow-[2px_0_4px_rgba(0,0,0,0.05)]">
-                          <div className="text-xs text-gray-700">└ {opt.optionName}</div>
+                          <div className="text-xs text-gray-700">└ {opt.coupangOptionName || opt.optionName}</div>
                           <div className="text-[10px] text-gray-400">옵션ID {opt.optionId}</div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap min-w-[120px]">

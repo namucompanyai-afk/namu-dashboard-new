@@ -90,6 +90,8 @@ export interface MarginCalcRow {
   optionId: string
   alias: string
   optionName: string
+  /** 쿠팡 옵션명 (나무_마스터 마진계산 AD) — 화면 표시용. 봉수 파싱은 optionName 을 계속 사용 */
+  coupangOptionName?: string
   totalKg: number
   bagCount: number   // F 봉수
   kgPerBag: number   // G 1봉kg

@@ -14,7 +14,8 @@ import type { MarginCalcRow } from '@/lib/coupang/parsers/marginMaster';
  * 열 대응: W 노출ID · X 옵션ID · B 별칭 · C 봉수 · D 판매가 · F 원가 · G 봉투 · H 규격 · I 박스 · J 택배 ·
  *         K 수수료율(부가포함 %, ÷100) · L 수수료 · N 총비용 · O 마진(=순이익) · P 마진율
  * BEP ROAS = D ÷ O (×1.1 없음 — 옛 마진마스터 기준). O ≤ 0 이면 null.
- * 옵션명 = "별칭, N개" · 1봉kg = 단가DB g ÷ 1000 · 최종채널 = '윙'.
+ * 옵션명 = "별칭, N개"(봉수 파싱용 — 그대로 유지) · 쿠팡 옵션명(AD) = coupangOptionName(화면 표시용)
+ * 1봉kg = 단가DB g ÷ 1000 · 최종채널 = '윙'.
  * 대응 열이 없는 필드는 parseMarginRows 의 빈값 규칙과 같게 채운다.
  *
  * 반환: { ok, marginRows } — 단위는 기존 게시 CSV 라우트 정규화 결과와 동일(수수료율·마진율 소수, BEP 배율).
@@ -53,7 +54,7 @@ export async function GET(req: Request) {
     const sheets = getSheets();
     const res = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: MASTER_SHEET_ID,
-      ranges: [`${quote(MARGIN_TAB)}!A2:AC`, `${quote(PRICE_TAB)}!A2:F`],
+      ranges: [`${quote(MARGIN_TAB)}!A2:AD`, `${quote(PRICE_TAB)}!A2:F`],
       valueRenderOption: 'UNFORMATTED_VALUE',
     });
     const margin = (res.data.valueRanges?.[0]?.values || []) as Cell[][];
@@ -82,6 +83,7 @@ export async function GET(req: Request) {
         optionId,
         alias,
         optionName: `${alias}, ${bagCount}개`,
+        coupangOptionName: str(r[29]) || undefined,
         totalKg: 0,
         bagCount,
         kgPerBag,
