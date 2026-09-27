@@ -4,6 +4,12 @@
  * 입력: parseAdCampaign 결과 (AdCampaignRow[]) + 마진 마스터 (CostMaster)
  * 출력: 캠페인 진단 row + AI 캠페인의 키워드 row + 수동 캠페인의 키워드 row
  *
+ * ROAS·BEP 기준 (2026-09 통일): 광고센터 기준 — ROAS = 매출 ÷ 광고비(VAT 별도), BEP = 옛 BEP(부가포함 기준) × 1.1.
+ *   쿠팡 광고센터 화면과 같은 숫자. 손익(원) 계산만 부가포함 광고비(×1.1, 1P 과세 ×1.0) 사용.
+ *   추천 입찰가·BEP CPC 공식은 BEP 가 이미 ×1.1 이므로 VAT 환산(×1.1)을 빼서 결과는 전과 동일.
+ * 1P(판매방식 Retail) 행: 매출 = 광고센터 전환매출(revenue14d), 1봉 마진·필수 ROAS 는 augmentMasterWith1P 가
+ *   마진 마스터에 넣은 1P 옵션 행으로 들어온다 (onePAnalysis).
+ *
  * BEP 가중평균 (캠페인/키워드):
  *   BEP = Σ(rev_i × bep_i) / Σ(rev_i)
  *   - 옵션 BEP 는 마진 마스터 marginRows 의 bepRoas 필드 (이미 캐시값)
@@ -25,6 +31,7 @@
 
 import type { AdCampaignRow } from './parsers/adCampaign'
 import type { CostMaster, MarginCalcRow } from './parsers/marginMaster'
+import { isRetailRow } from './onePAnalysis'
 
 export type CampaignType = 'ai' | 'manual' | 'unknown'
 /** 추천 액션 6단:
@@ -87,7 +94,11 @@ export function splitRowRevenue(
   r: AdCampaignRow,
   priceMap: Map<string, number>,
   exposureByOptionId: Map<string, string>,
+  /** false 면 1P(Retail) 행도 3P 방식(판매수 × 실판매가) — 수익 진단은 기존 계산 유지용 */
+  retailAsAdCenter = true,
 ): { self: number; other: number } {
+  // 1P(Retail) 행 매출 = 광고센터 전환매출 그대로 (소비자가 · 판매수 = 봉)
+  if (retailAsAdCenter && isRetailRow(r)) return { self: r.revenue14d || 0, other: 0 }
   const convId = String(r.convOptionId || '').trim()
   if (!convId) return { self: 0, other: 0 }
   const price = priceMap.get(convId)
@@ -137,14 +148,14 @@ function weightedBep(
 const MIN_BID_VAT_EXCL = 100
 
 /** 추천 입찰가 (VAT 별도). 클릭 < 20 또는 BEP 없음이면 null.
- *  공식: 매출 ÷ (클릭수 × BEP × 1.05 × 1.1) — BEP 대비 5% 여유 + VAT 환산.
+ *  공식: 매출 ÷ (클릭수 × BEP × 1.05) — BEP(광고센터 기준, 이미 VAT 환산) 대비 5% 여유.
  *  최소 100원 floor 적용 (쿠팡 광고센터 정책). BEP 매우 낮은 광범위 키워드도 100원 보장. */
 export function recommendedBid(revenue: number, clicks: number, bepPct: number | null): number | null {
   if (!bepPct || bepPct <= 0) return null
   if (clicks < 20) return null
   if (revenue <= 0) return null
-  // BEP 는 % 단위 (예: 433 → 4.33). 1.155 = 1.05 (5% 여유) × 1.1 (VAT)
-  const bid = revenue / (clicks * (bepPct / 100) * 1.155)
+  // BEP 는 % 단위 광고센터 기준 (예: 476 → 4.76, 옛 부가포함 BEP × 1.1). 1.05 = 5% 여유
+  const bid = revenue / (clicks * (bepPct / 100) * 1.05)
   if (!Number.isFinite(bid) || bid <= 0) return null
   return Math.max(bid, MIN_BID_VAT_EXCL)
 }
@@ -155,7 +166,7 @@ export function recommendedBid(revenue: number, clicks: number, bepPct: number |
  *    bid        — 추천 입찰가 (VAT 별도). null = 노출 안 함 ("—")
  *    bidSource  — 입찰가 산출 근거 ('revenue' | 'fixed_100' | 'low_sample' | null)
  *
- *  매출 역산 공식: 매출 ÷ (클릭수 × BEP × 1.155) — BEP 5% 여유 + VAT 환산
+ *  매출 역산 공식: 매출 ÷ (클릭수 × BEP × 1.05) — BEP(광고센터 기준) 5% 여유
  *  ※ 'growing' 케이스는 클릭 <20 이라도 매출 역산 입찰가를 노출 (참고용 라벨은 페이지에서)
  */
 export function classifyKeyword(
@@ -170,7 +181,7 @@ export function classifyKeyword(
     if (!bepPct || bepPct <= 0) return null
     if (clicks <= 0) return null
     if (revenue <= 0) return null
-    const v = revenue / (clicks * (bepPct / 100) * 1.155)
+    const v = revenue / (clicks * (bepPct / 100) * 1.05)
     if (!Number.isFinite(v) || v <= 0) return null
     return Math.max(v, MIN_BID_VAT_EXCL)
   }
@@ -212,8 +223,16 @@ export interface CampaignDiag {
   revenue: number
   /** 타상품 매출 — 다른 노출ID 로 전환된 분량 (참고용, ROAS 산출 제외) */
   otherProductRevenue: number
-  /** ROAS = revenue / adCostVat × 100 (%) */
+  /** ROAS (광고센터 기준) = revenue / adCostRaw × 100 (%) */
   roasPct: number | null
+  /** 채널 — 3P / 1P(판매방식 Retail) */
+  channel: '3P' | '1P'
+  /** 광고 마진 합 = Σ 판매수 × 옵션 마진 (1P: 판매 봉수 × 1봉 마진) */
+  marginSum: number
+  /** 손익 계산용 광고비 (부가포함 ×1.1, 1P 과세 ×1.0) */
+  adCostForProfit: number
+  /** 광고 손익 (원) = marginSum − adCostForProfit */
+  adProfit: number
   /** 가중 BEP (%) */
   bepPct: number | null
   /** ROAS - BEP (음수면 미달) */
@@ -278,6 +297,8 @@ export interface ManualKeywordRow extends KeywordRow {
   bidVerdict: 'ok' | 'high' | 'too_high' | 'unknown'
   /** 신뢰도 (별 갯수 1~3) */
   confidence: 1 | 2 | 3
+  /** 삭제 후보 — 클릭 20 이상인데 판매 0, 또는 ROAS 가 BEP(필수 ROAS)의 절반 미만 */
+  deleteCandidate: boolean
 }
 
 /** 마진M 미매칭 옵션 집계 — KPI/표 산출에서 제외된 분량 안내용 */
@@ -313,7 +334,7 @@ export function buildBepMap(master: CostMaster | null): Map<string, number> {
   for (const r of master.marginRows) {
     if (!r.optionId) continue
     if (r.bepRoas == null || !Number.isFinite(r.bepRoas) || r.bepRoas <= 0) continue
-    m.set(String(r.optionId).trim(), r.bepRoas * 100)
+    m.set(String(r.optionId).trim(), r.bepRoas * 100 * 1.1) // 광고센터 기준 (부가포함 BEP × 1.1)
   }
   return m
 }
@@ -324,6 +345,8 @@ export function buildActualPriceMapById(master: CostMaster | null): Map<string, 
   if (!master) return m
   for (const r of master.marginRows) {
     if (!r.optionId || !r.actualPrice || r.actualPrice <= 0) continue
+    // 1P 합성 행 제외 — 3P 행 매출은 3P 옵션 가격으로만 (1P 행 매출은 광고센터 전환매출 직접 사용)
+    if (r.saleChannel === '1P') continue
     m.set(String(r.optionId).trim(), r.actualPrice)
   }
   return m
@@ -381,6 +404,7 @@ export function buildAdAnalysisView(
   const bepMap = bepOverride ?? buildBepMap(master)
   const priceMap = buildActualPriceMapById(master)
   const exposureMap = buildExposureMapByOptionId(master)
+  const rowMapAll = buildMarginRowMap(master)
 
   // 마진마스터 없으면(master=null) 매출은 광고 엑셀 revenue14d(총전환매출 14일)로 대체.
   // self 만 사용하고 타상품 분리는 하지 않음. 마진 있으면 기존 실판매가 경로 그대로.
@@ -402,6 +426,8 @@ export function buildAdAnalysisView(
       const key = convId || adId
       if (!key) continue
       if (convId && priceMap.has(convId)) continue
+      // 1P 행: 전환·광고 옵션이 1P 합성 행으로 연결돼 있으면 매칭된 것
+      if (isRetailRow(r) && (rowMapAll.has(convId) || rowMapAll.has(adId))) continue
       unmatchedAdCostRaw += r.adCost || 0
       unmatchedSold += r.sold14d || 0
       unmatchedOptIds.add(key)
@@ -456,12 +482,28 @@ export function buildAdAnalysisView(
     const searchAdCostVat = searchRaw * 1.1
     const nonSearchAdCostVat = nonSearchRaw * 1.1
 
-    const roasPct = safeDiv(revenue, adCostVat)
+    // 광고 손익 — 판매수 × 전환 옵션 마진 − 광고비(부가포함, 1P 과세 ×1.0)
+    const channel: '3P' | '1P' = rows.some(isRetailRow) ? '1P' : '3P'
+    let marginSum = 0
+    let adCostForProfit = 0
+    for (const r of rows) {
+      const conv = String(r.convOptionId || '').trim()
+      const mrRaw = conv ? rowMapAll.get(conv) : undefined
+      // 3P 행은 3P 옵션 마진만 (1P 합성 행 제외) · 1P 행은 3P 전환이면 3P 마진, 1P 면 1봉 마진
+      const mr = mrRaw && (isRetailRow(r) || mrRaw.saleChannel !== '1P') ? mrRaw : undefined
+      if (mr && mr.netProfit != null) marginSum += (r.sold14d || 0) * mr.netProfit
+      const adRow = rowMapAll.get(String(r.adOptionId || '').trim())
+      const taxable = isRetailRow(r) && !!(adRow?.taxable ?? mr?.taxable)
+      adCostForProfit += (r.adCost || 0) * (taxable ? 1.0 : 1.1)
+    }
+
+    // ROAS 광고센터 기준 (VAT 별도 광고비)
+    const roasPct = safeDiv(revenue, adCostRaw)
     const bepPct = weightedBep(rows, bepMap, priceMap, exposureMap, marginOff)
     const gapPct = roasPct != null && bepPct != null ? roasPct * 100 - bepPct : null
 
-    const searchRoas = safeDiv(searchRev, searchAdCostVat)
-    const nonSearchRoas = safeDiv(nonSearchRev, nonSearchAdCostVat)
+    const searchRoas = safeDiv(searchRev, searchRaw)
+    const nonSearchRoas = safeDiv(nonSearchRev, nonSearchRaw)
 
     campaigns.push({
       campaignId: first.campaignId,
@@ -472,6 +514,10 @@ export function buildAdAnalysisView(
       revenue,
       otherProductRevenue,
       roasPct: roasPct != null ? roasPct * 100 : null,
+      channel,
+      marginSum,
+      adCostForProfit,
+      adProfit: marginSum - adCostForProfit,
       bepPct,
       gapPct,
       orders,
@@ -492,7 +538,8 @@ export function buildAdAnalysisView(
   const totalAdCostVat = campaigns.reduce((s, c) => s + c.adCostVat, 0)
   const totalRevenue = campaigns.reduce((s, c) => s + c.revenue, 0)
   const totalOrders = campaigns.reduce((s, c) => s + c.orders, 0)
-  const avgRoasPct = totalAdCostVat > 0 ? (totalRevenue / totalAdCostVat) * 100 : null
+  const totalAdCostRaw = campaigns.reduce((s, c) => s + c.adCostRaw, 0)
+  const avgRoasPct = totalAdCostRaw > 0 ? (totalRevenue / totalAdCostRaw) * 100 : null // 광고센터 기준
   // 평균 BEP — 매출 가중
   let bepNum = 0, bepDen = 0
   for (const c of campaigns) {
@@ -550,8 +597,9 @@ export function buildKeywordRows(
       : rows.reduce((s, r) => s + rowRevenue(r, priceMap, exposureByOptionId), 0)
     const ctr = safeDiv(clicks, impressions)
     const cvr = safeDiv(orders, clicks)
-    const roas = safeDiv(revenue, adCostVat)
-    const roasRaw = safeDiv(revenue, adCostRaw)
+    // ROAS 광고센터 기준 (VAT 별도) — 분류·표시 모두 이 값
+    const roas = safeDiv(revenue, adCostRaw)
+    const roasRaw = roas
     const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId, marginOff)
     const roasPct = roas != null ? roas * 100 : null
     const cls = classifyKeyword(clicks, revenue, roasPct, bep)
@@ -633,6 +681,7 @@ export function buildManualReviewRows(
       bidDiff: bidCeiled != null && effective != null ? bidCeiled - effective : null,
       bidVerdict: verdict,
       confidence: conf,
+      deleteCandidate: k.clicks >= 20 && (k.orders === 0 || (k.roasPct != null && k.bepPct != null && k.roasPct < k.bepPct / 2)),
     }
   })
 }
@@ -687,11 +736,11 @@ export function buildBepCpcForCampaign(
   }
   const groups = new Map<string, LabelGroup>()
   for (const optId of adCostByOpt.keys()) {
-    const price = priceMap.get(optId)
-    const bep = bepMap.get(optId)
     const row = rowMap.get(optId)
+    const price = priceMap.get(optId) ?? (row?.saleChannel === '1P' ? row.actualPrice : undefined)
+    const bep = bepMap.get(optId)
     if (!price || !bep || !row) continue
-    const cpc = (price * avgCvr) / ((bep / 100) * 1.21)
+    const cpc = (price * avgCvr) / ((bep / 100) * 1.1) // BEP 광고센터 기준 (옛 ×1.21 = ×1.1 VAT + ×1.1 환산)
     if (!Number.isFinite(cpc) || cpc <= 0) continue
     const label =
       row.bagCount > 0 && row.kgPerBag > 0
@@ -926,7 +975,8 @@ export function buildDuplicateKeywordExportRows(
       }
       const adCostVat = adCostRaw * 1.1
       const bepPct = bepDen > 0 ? bepNum / bepDen : null
-      const roasPct = adCostVat > 0 ? (revenue / adCostVat) * 100 : null
+      const roasPct = adCostRaw > 0 ? (revenue / adCostRaw) * 100 : null // 광고센터 기준
+      void adCostVat
       const cvrPct = clicks > 0 ? (orders / clicks) * 100 : null
       const bid = recommendedBid(revenue, clicks, bepPct)
 

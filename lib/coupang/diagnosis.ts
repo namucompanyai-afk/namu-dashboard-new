@@ -674,7 +674,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   const _exposureMap = buildExposureMapByOptionId(_master)
   let totalAdRevenueSelf = 0
   for (const r of adRows) {
-    totalAdRevenueSelf += splitRowRevenue(r, _priceMap, _exposureMap).self
+    totalAdRevenueSelf += splitRowRevenue(r, _priceMap, _exposureMap, false).self
   }
   const adRoasAttrSelfOverall = totalAdCost > 0 ? (totalAdRevenueSelf / totalAdCost) * 100 : null
 

@@ -1,7 +1,8 @@
 /**
  * 쿠팡 1P(로켓 직매입, 광고 판매방식 'Retail') 광고 분석.
  *
- * 3P 계산(adAnalysis.buildAdAnalysisView)과 완전히 분리 — 3P 결과는 그대로 두고 Retail 행만 여기서 계산한다.
+ * 광고 분석 화면은 augmentMasterWith1P 로 1P 옵션을 마진 마스터에 붙여 3P 와 같은 표·키워드·입찰가 흐름에 태운다.
+ * build1PView 는 1P 합계·미연결 목록·쿠팡 손익(onePPnl)용 집계로 계속 쓴다.
  *
  * 규칙 (9월 광고 파일로 검증):
  *   - 판매수 = 봉 단위 (옵션 봉수와 무관하게 1건당 매출이 1봉 소비자가로 일정)
@@ -18,7 +19,7 @@
  */
 
 import type { AdCampaignRow } from './parsers/adCampaign'
-import type { MarginCalcRow, OnePMarginRow } from './parsers/marginMaster'
+import type { CostMaster, MarginCalcRow, OnePMarginRow } from './parsers/marginMaster'
 
 /** 쿠팡 1P 광고 행인지 — 판매방식 'Retail'. 판매방식이 없는 옛 데이터는 캠페인명 '_1P_' 로 판정 */
 export function isRetailRow(r: AdCampaignRow): boolean {
@@ -84,14 +85,8 @@ const EMPTY: OnePView = {
   unlinked: [],
 }
 
-export function build1PView(
-  rows: AdCampaignRow[] | null,
-  onePRows: OnePMarginRow[] | undefined,
-  marginRows3P: MarginCalcRow[] | undefined,
-): OnePView {
-  const retail = (rows || []).filter(isRetailRow)
-  if (!retail.length) return EMPTY
-  const one = onePRows || []
+/** Retail 광고 행 ↔ 1P 마진 연결기 (광고 분석·쿠팡 손익 공통) */
+export function make1PLinker(retail: AdCampaignRow[], one: OnePMarginRow[], marginRows3P: MarginCalcRow[] | undefined) {
   const byOpt = new Map(one.filter((x) => x.optionId).map((x) => [x.optionId, x]))
   const bySku = new Map<string, OnePMarginRow>()
   for (const x of one) if (x.sku && (!bySku.has(x.sku) || x.bagCount === 1)) bySku.set(x.sku, x)
@@ -129,6 +124,19 @@ export function build1PView(
   }
 
   // _invW = Σ 매출 × (1.1 또는 1) ÷ 1봉당 마진, _revW = Σ 매출 (연결된 1P 행) → 필수 ROAS 매출 가중용
+  return { byOpt, bySku, skuLink, linkOf }
+}
+
+export function build1PView(
+  rows: AdCampaignRow[] | null,
+  onePRows: OnePMarginRow[] | undefined,
+  marginRows3P: MarginCalcRow[] | undefined,
+): OnePView {
+  const retail = (rows || []).filter(isRetailRow)
+  if (!retail.length) return EMPTY
+  const one = onePRows || []
+  const { byOpt, skuLink, linkOf } = make1PLinker(retail, one, marginRows3P)
+
   type Acc = OnePAgg & { _invW: number; _revW: number }
   const newAcc = (key: string, label: string): Acc => ({
     key, label, alias: '', adCostRaw: 0, adCostVat: 0, adCostForProfit: 0, revenue: 0, sold: 0, marginSum: 0, profit: 0,
@@ -225,4 +233,65 @@ export function build1PView(
     options,
     unlinked: Array.from(unlinked.values()).sort((x, y) => y.adCostVat - x.adCostVat),
   }
+}
+
+/**
+ * 광고 분석 통합용 — 마진 마스터에 1P 옵션 합성 행을 붙인다 (3P 행은 그대로).
+ * 기존 3P 파이프라인(buildBepMap·buildActualPriceMapById·buildMarginRowMap)이 1P 옵션도 같은 방식으로 처리하게 하려는 것.
+ *   - actualPrice = 1봉 소비자가 (전환 옵션별 Σ전환매출 ÷ Σ판매수, 판매 없는 광고 옵션은 SKU 평균)
+ *   - netProfit   = 1봉 마진
+ *   - bepRoas     = 필수 ROAS(광고센터 기준) ÷ 1.1  → buildBepMap 이 ×1.1 해서 광고센터 기준 필수 ROAS 가 됨
+ *                   필수 ROAS = 1봉 소비자가 ÷ (1봉 마진 ÷ 1.1), 과세는 ÷ 1봉 마진
+ */
+export function augmentMasterWith1P(master: CostMaster | null, rows: AdCampaignRow[] | null): CostMaster | null {
+  if (!master) return master
+  const retail = (rows || []).filter(isRetailRow)
+  const one = master.onePRows || []
+  if (!retail.length || !one.length) return master
+  const has3P = new Set(master.marginRows.map((r) => String(r.optionId).trim()))
+  const L = make1PLinker(retail, one, master.marginRows)
+  const conv = new Map<string, { rev: number; sold: number; link: Link; name: string }>()
+  const skuPrice = new Map<string, { rev: number; sold: number }>()
+  for (const r of retail) {
+    const link = L.linkOf(r)
+    const c = String(r.convOptionId || '').trim()
+    if (link.kind !== '1P' || !c || (r.sold14d || 0) <= 0) continue
+    const e = conv.get(c) || { rev: 0, sold: 0, link, name: r.convProductName }
+    e.rev += r.revenue14d || 0
+    e.sold += r.sold14d || 0
+    conv.set(c, e)
+    const sp = skuPrice.get(link.sku) || { rev: 0, sold: 0 }
+    sp.rev += r.revenue14d || 0
+    sp.sold += r.sold14d || 0
+    skuPrice.set(link.sku, sp)
+  }
+  const extra: MarginCalcRow[] = []
+  const added = new Set<string>()
+  const add = (optionId: string, link: Link, price: number, name: string) => {
+    if (!optionId || has3P.has(optionId) || added.has(optionId) || link.kind !== '1P' || !(price > 0)) return
+    added.add(optionId)
+    const f = link.taxable ? 1 : 1.1
+    const unit = link.unitMargin
+    const requiredAc = unit > 0 ? price / (unit / f) : null
+    extra.push({
+      exposureId: '', optionId, alias: link.alias, optionName: `${link.alias}, 1개`, coupangOptionName: name || undefined,
+      totalKg: 0, bagCount: 1, kgPerBag: 1, listPrice: price, actualPrice: price, perUnitPrice: price,
+      priceBand: '', autoChannel: '', manualChannel: '', channel: '1P', size: '',
+      costPrice: 0, bagFee: 0, boxFee: 0, shipFee: 0, warehouseFee: 0, grossShipFee: 0, inoutFee: 0,
+      feeRate: 0, packagingFee: 0, coupangFee: 0, totalCost: 0,
+      netProfit: unit, marginRate: price > 0 ? unit / price : null,
+      bepRoas: requiredAc != null ? requiredAc / 1.1 : null,
+      taxable: link.taxable, saleChannel: '1P',
+    })
+  }
+  for (const [c, e] of conv) add(c, e.link, e.rev / e.sold, e.name)
+  for (const r of retail) {
+    const ad = String(r.adOptionId || '').trim()
+    if (!ad || added.has(ad)) continue
+    const link = L.byOpt.has(ad) ? L.skuLink(L.byOpt.get(ad)) : L.linkOf(r)
+    if (link.kind !== '1P') continue
+    const sp = skuPrice.get(link.sku)
+    add(ad, link, sp && sp.sold > 0 ? sp.rev / sp.sold : 0, r.adProductName)
+  }
+  return { ...master, marginRows: [...master.marginRows, ...extra] }
 }

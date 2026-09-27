@@ -125,6 +125,10 @@ export interface MarginCalcRow {
   netProfit: number | null  // AA 순이익 (옛 Z)
   marginRate: number | null  // AB 마진율 (옛 AA)
   bepRoas: number | null     // AC BEP ROAS (옛 AB)
+  /** 과세 여부 — 1P 합성 행만 (광고 손익 계산 시 과세면 광고비 ×1.0) */
+  taxable?: boolean
+  /** 판매 채널 — 1P 합성 행은 '1P' */
+  saleChannel?: '3P' | '1P'
 }
 
 /** 윙 박스/택배 분류 */
