@@ -5,7 +5,6 @@
  *
  * 자주 안 바뀌는 마스터 데이터를 등록·관리:
  *   - 마진 마스터 엑셀 (마진분석.xlsx) — 네이버 진단용 3종만 저장. 쿠팡 마진은 나무_마스터에서 자동으로 읽음
- *   - 그로스 정산 (WAREHOUSING_SHIPPING)
  *   - 가격/재고 (price_inventory)
  *
  * 저장: Supabase (dashboard_data 테이블, key=coupang_xxx)
@@ -15,7 +14,6 @@
 import { useEffect, useState } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parsePriceInventory } from '@/lib/coupang/parsers/priceInventory'
-import { parseSettlement } from '@/lib/coupang/parsers/settlement'
 import { parseNaverProductMatch } from '@/lib/naver/parsers/productMatch'
 import { parseNaverMarginMaster, parseNaverCpmConfig } from '@/lib/naver/marginNaver'
 
@@ -24,7 +22,7 @@ type LoadingState = 'idle' | 'loading' | 'saving' | 'success' | 'error'
 export default function DataManagementPage() {
   const {
     uploads,
-    setPriceInventory, setSettlement,
+    setPriceInventory,
   } = useMarginStore()
 
   const [initialLoading, setInitialLoading] = useState(true)
@@ -39,16 +37,7 @@ export default function DataManagementPage() {
     try {
       // 쿠팡 마진(margin_master)은 불러오지 않는다 — 나무_마스터 마진계산이 유일한 출처.
       // (옛 저장본으로 저장소를 덮어쓰면 수익 진단·광고 분석이 옛 마진으로 계산되던 문제)
-      const settleRes = await fetch('/api/coupang-master?type=settlement')
-      const settleJson = await settleRes.json()
-      if (settleJson.data?.rows) {
-        setSettlement(settleJson.data.rows, {
-          fileName: settleJson.fileName || '저장된 데이터',
-          uploadedAt: settleJson.savedAt || new Date().toISOString(),
-          rowCount: settleJson.data.rows.length,
-        })
-      }
-
+      // 그로스 정산은 이 화면에서 다루지 않음 (그로스 미운영)
       const priceRes = await fetch('/api/coupang-master?type=price_inventory')
       const priceJson = await priceRes.json()
       if (priceJson.data?.rows) {
@@ -131,24 +120,6 @@ export default function DataManagementPage() {
     }
   }
 
-  const handleSettle = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    try {
-      const buf = await file.arrayBuffer()
-      const r = parseSettlement(buf)
-
-      setSettlement(r.rows, {
-        fileName: file.name,
-        uploadedAt: new Date().toISOString(),
-        rowCount: r.rows.length,
-      })
-
-      await saveToSupabase('settlement', { rows: r.rows }, file.name)
-    } catch (err: any) {
-      alert('파싱 에러: ' + (err?.message || err))
-    }
-  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-8">
@@ -190,19 +161,9 @@ export default function DataManagementPage() {
               description="쿠팡 마진은 나무_마스터에서 자동으로 읽습니다. 이 엑셀은 네이버 진단용 3종(상품매칭·마진·CPM 단가)만 저장합니다."
             />
 
-            <DataCard
-              number="2"
-              title="그로스 정산"
-              subtitle="WAREHOUSING_SHIPPING.xlsx (쿠팡 → 정산 → 입출고/배송)"
-              loaded={!!uploads.settlement}
-              status={uploads.settlement}
-              savingState={savingState.settlement || 'idle'}
-              onChange={handleSettle}
-              description="옵션별 그로스 비용 (배송비, 입출고비) 자동 매칭에 사용. 월 1회 다운로드 권장."
-            />
 
             <DataCard
-              number="3"
+              number="2"
               title="가격/재고"
               subtitle="price_inventory.xlsx (쿠팡 → 상품관리 → 상품/가격 관리)"
               loaded={!!uploads.priceInventory}

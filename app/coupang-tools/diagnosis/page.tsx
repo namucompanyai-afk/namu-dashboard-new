@@ -653,10 +653,10 @@ export default function DiagnosisPage() {
           </div>
         )}
 
-        {/* 마진 마스터 출처 배지 (구글시트 게시 CSV vs 엑셀 업로드 폴백) */}
+        {/* 마진 마스터 출처 배지 (나무_마스터 마진계산 vs 엑셀 업로드 저장본 폴백) */}
         {marginMaster && (() => {
           const fn = uploads.marginMaster?.fileName || ''
-          const isCsv = fn.includes('게시 CSV')
+          const isCsv = fn.startsWith('나무_마스터')
           const at = uploads.marginMaster?.uploadedAt
           const atStr = at ? new Date(at).toLocaleString('ko-KR') : ''
           return (
@@ -667,7 +667,7 @@ export default function DiagnosisPage() {
                   (isCsv ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-100 text-gray-600 border border-gray-200')
                 }
               >
-                {isCsv ? '🟢 출처: 구글시트 (게시 CSV)' : `⬆ 출처: 엑셀 업로드${atStr ? ' · ' + atStr : ''}`}
+                {isCsv ? '🟢 출처: 나무_마스터 마진계산' : `⬆ 출처: 엑셀 업로드${atStr ? ' · ' + atStr : ''}`}
               </span>
             </div>
           )
@@ -720,7 +720,10 @@ export default function DiagnosisPage() {
         {/* 마스터 통계 */}
         {marginMaster && (
           <div className="mb-6 grid grid-cols-3 gap-4">
-            <StatCard label="원가표 상품" value={`${marginMasterStats.costBookRows}개`} />
+            {/* 나무_마스터 소스엔 원가표(costBook)가 없어 0개로 보이므로 별칭 수로 대체 */}
+            {String(uploads.marginMaster?.fileName || '').startsWith('나무_마스터')
+              ? <StatCard label="별칭" value={`${new Set(marginMaster.marginRows.map((r) => r.alias).filter(Boolean)).size}개`} />
+              : <StatCard label="원가표 상품" value={`${marginMasterStats.costBookRows}개`} />}
             <StatCard label="옵션" value={`${marginMasterStats.marginRows}개`} />
             <StatCard label="실판매가 등록" value={`${marginMasterStats.optionsWithActualPrice}개`} />
           </div>
