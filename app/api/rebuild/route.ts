@@ -4,6 +4,7 @@ import { createHash } from 'crypto'
 import aliasData from './alias-data.json'
 import mappingData from './mapping-data.json'
 import migrationData from './migration-data.json'
+import m7Data from './m7-data.json'
 
 /**
  * 나무_마진리빌드 구글시트 초기 세팅 API (서비스 계정 · 일회성)
@@ -7463,6 +7464,110 @@ export async function GET(req: Request) {
         드롭다운_재설정: reqs.length,
         목록밖_값: { 전: dvBefore.invalid, 후: dvAfter.invalid },
         오류셀: { 마진계산: await errs(MARGIN_TAB), 단가DB: await errs(PRICE_TAB), 발주매핑: await errs(MAP_TAB) },
+      })
+    }
+
+    // ── m7: 검수 결과 반영 — 스마트스토어 행 별칭 수정·삭제 + 쿠팡 3P 윙 옵션 행 추가 ──
+    //   · 입력: m7-data.json (마진계산_검수_260927.xlsx 에서 확정분만 추출)
+    //   · 쓰기: 마진계산의 대상 행 B·C (수정), 대상 행 삭제, 새 행 A·B·C·D·H·K·W·X. 단가DB 쓰기 없음
+    if (action === 'm7') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const data = m7Data as {
+        edits: { row: number; curB: string; alias: string; bong: number }[]
+        deletes: { row: number; curB: string }[]
+        adds: { pid: string; oid: string; alias: string; bong: number; price: number; spec: string }[]
+      }
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range: string) =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title))' })
+      const marginId = (meta.data.sheets || []).find((x) => x.properties?.title === MARGIN_TAB)?.properties?.sheetId as number
+      const price = await read(PRICE_TAB, 'UNFORMATTED_VALUE', 'A1:M1000')
+      const aliasSet = new Set(price.slice(1).map((r) => String(r?.[0] ?? '')).filter(Boolean))
+      const mFx = await read(MARGIN_TAB, 'FORMULA', `A1:AC${MLAST}`)
+      const mBefore = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const B = (r: number) => String((mBefore[r - 1] || [])[1] ?? '')
+
+      // ── 0. 가드·걸러내기 ─────────────────────────────────────
+      const skip: Record<string, string[]> = {}
+      const note = (k: string, v: string) => ((skip[k] = skip[k] || []).push(v))
+      const edits = data.edits.filter((e) => {
+        if (B(e.row) !== e.curB) return note('수정: B값 불일치', `${e.row}`), false
+        if (!aliasSet.has(e.alias)) return note('수정: 단가DB에 없는 별칭', `${e.row} ${e.alias}`), false
+        return true
+      })
+      const deletes = data.deletes.filter((d) => (B(d.row) === d.curB ? true : (note('삭제: B값 불일치', `${d.row}`), false)))
+      const haveOid = new Set(mBefore.slice(1).map((r) => String(r?.[23] ?? '').trim()).filter(Boolean))
+      const adds = data.adds.filter((a) => {
+        if (haveOid.has(a.oid)) return note('추가: 옵션ID 이미 있음', a.oid), false
+        if (!aliasSet.has(a.alias)) return note('추가: 단가DB에 없는 별칭', `${a.oid} ${a.alias}`), false
+        haveOid.add(a.oid)
+        return true
+      })
+      let last = 1
+      mBefore.forEach((r, i) => { if (i > 0 && (String(r?.[0] ?? '').trim() || String(r?.[1] ?? '').trim())) last = i + 1 })
+      if (last + adds.length > MLAST) throw new Error(`마진계산 ${MLAST}행 초과`)
+      const noTpl = adds.map((_, i) => last + 1 + i).filter((r) => !String((mFx[r - 1] || [])[5] ?? '').startsWith('='))
+      if (noTpl.length) return NextResponse.json({ ok: false, error: '추가 행에 기존 수식이 없음 — 쓰기 중단', 행: noTpl.slice(0, 10) }, { status: 409 })
+
+      // ── 1. 수정 + 추가 (삭제 전, 행번호 고정 상태) ─────────────────
+      const raw: { range: string; values: Cell[][] }[] = []
+      const fx: { range: string; values: Cell[][] }[] = []
+      for (const e of edits) raw.push({ range: `${quote(MARGIN_TAB)}!B${e.row}:C${e.row}`, values: [[e.alias, e.bong]] })
+      adds.forEach((a, i) => {
+        const r = last + 1 + i
+        raw.push({ range: `${quote(MARGIN_TAB)}!A${r}:D${r}`, values: [['쿠팡 3P', a.alias, a.bong, a.price]] })
+        raw.push({ range: `${quote(MARGIN_TAB)}!H${r}`, values: [[a.spec]] })
+        raw.push({ range: `${quote(MARGIN_TAB)}!W${r}:X${r}`, values: [[a.pid, a.oid]] })
+        fx.push({ range: `${quote(MARGIN_TAB)}!K${r}`, values: [[`=IF($A${r}="","",IFERROR(VLOOKUP($A${r},'${M2_SETTING_TAB}'!$A$2:$C$19,3,FALSE),""))`]] })
+      })
+      for (let i = 0; i < raw.length; i += 400) {
+        await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'RAW', data: raw.slice(i, i + 400) } })
+      }
+      if (fx.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data: fx } })
+      // ── 2. 삭제 (아래 행부터) ─────────────────────────────────
+      if (deletes.length) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: {
+            requests: [...deletes].sort((a, b) => b.row - a.row).map((d) => ({
+              deleteDimension: { range: { sheetId: marginId, dimension: 'ROWS', startIndex: d.row - 1, endIndex: d.row } },
+            })),
+          },
+        })
+      }
+
+      // ── 3. 검증 ─────────────────────────────────────────────
+      const mAfter = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      // 손대지 않은 행 A~X 값 무변경 (삭제·수정·추가 행 제외, 순서 대응)
+      const touched = new Set([...edits.map((e) => e.row), ...deletes.map((d) => d.row)])
+      const keepBefore = mBefore.slice(1, last).map((r, i) => ({ r, row: i + 2 })).filter((x) => !touched.has(x.row))
+      const delSet = new Set(deletes.map((d) => d.row))
+      const mapRow = (row: number) => row - deletes.filter((d) => d.row < row).length
+      const untouchedChanged = keepBefore.filter(({ r, row }) => {
+        if (delSet.has(row)) return false
+        const a = mAfter[mapRow(row) - 1] || []
+        return Array.from({ length: 24 }, (_, c) => c).some((c) => {
+          const x = r?.[c] ?? '', y = a[c] ?? ''
+          return typeof x === 'number' && typeof y === 'number' ? Math.abs(x - y) > 1e-6 : String(x) !== String(y)
+        })
+      }).map((x) => x.row)
+      const rowsA = mAfter.slice(1).map((r, i) => ({ r, row: i + 2 })).filter(({ r }) => String(r?.[1] ?? '').trim())
+      const pct = (v: Cell) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : String(v ?? ''))
+      const PROC = /가루|즉석밥|매실|식초|강황|칩|즙|빵|순대|오곡밥|새우장|표고|계란|오트밀/
+      return NextResponse.json({
+        ok: untouchedChanged.length === 0 && errorCellsOf(MARGIN_TAB, mAfter).length === 0,
+        반영: { 수정: edits.length, 삭제: deletes.length, 추가: adds.length, 추가_시작행: last + 1 - deletes.length },
+        건너뜀: Object.fromEntries(Object.entries(skip).map(([k, v]) => [k, { 수: v.length, 예: v.slice(0, 5) }])),
+        규격_없음: adds.filter((a) => a.spec === '없음').map((a) => `${a.alias} ×${a.bong}`),
+        손대지않은행_변경: untouchedChanged,
+        B_단가DB없음: rowsA.filter(({ r }) => !aliasSet.has(String(r[1]))).map(({ r, row }) => `${row} ${r[1]}`),
+        오류셀: errorCellsOf(MARGIN_TAB, mAfter).length,
+        원가_빈칸: rowsA.filter(({ r }) => String(r[5] ?? '') === '').map(({ r, row }) => `${row} ${r[0]} ${r[1]}`),
+        마진_마이너스_미달: rowsA.filter(({ r }) => (typeof r[15] === 'number' && r[15] < 0) || r[19] === '마진 미달')
+          .map(({ r }) => `${r[0]} | ${r[1]} | ${r[2]} | ${r[3]} | ${pct(r[15])}`),
+        가공식품_행: rowsA.filter(({ r }) => PROC.test(String(r[1])) && r[0] !== '쿠팡 1P').map(({ r }) => `${r[0]} | ${r[1]} | 수수료율 ${r[10]}`),
       })
     }
 
