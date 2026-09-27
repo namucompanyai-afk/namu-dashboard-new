@@ -1878,8 +1878,8 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
           <div className="aa-section-desc">캠페인 클릭 → 옵션·키워드(AI) / 입찰가 점검(수동) 함께 펼침 · 옵션 클릭 → 그 옵션만 · 다시 클릭 → 닫기</div>
         </div>
       </div>
-      {/* 캠페인을 펼치면 표 높이 제한을 풀어 펼친 키워드 표가 표 안에서 잘리지 않게 (키워드 표는 자체 900px 스크롤) */}
-      <div className="aa-table-wrap" style={openCampId && renderDetail ? { maxHeight: 'none' } : undefined}>
+      {/* 캠페인을 펼치면 표 높이 제한·자체 스크롤을 풀어 제목 행이 페이지 스크롤 기준으로 고정 (키워드 표는 자체 박스 안에서 고정) */}
+      <div className={`aa-table-wrap aa-camp-wrap${openCampId && renderDetail ? ' expanded' : ''}`}>
         <table>
           <thead>
             <tr>
@@ -2790,9 +2790,9 @@ function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignNam
       return next
     })
 
-  const TH = ({ label, k, num, minWidth }: any) => (
+  const TH = ({ label, k, num, minWidth, sticky2 }: any) => (
     <th
-      className={['sortable', num ? 'num' : '', key === k ? (dir === 'asc' ? 'sorted-asc' : 'sorted-desc') : ''].filter(Boolean).join(' ')}
+      className={['sortable', num ? 'num' : '', sticky2 ? 'sticky-left-2' : '', key === k ? (dir === 'asc' ? 'sorted-asc' : 'sorted-desc') : ''].filter(Boolean).join(' ')}
       style={minWidth ? { minWidth } : undefined}
       onClick={() => toggle(k)}
     >{label}</th>
@@ -2839,7 +2839,7 @@ function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignNam
           <thead>
             <tr>
               <th className="sticky-left" style={{ width: 32 }}></th>
-              <TH label="지면" k="keyword" minWidth={140} />
+              <TH label="지면" k="keyword" sticky2 minWidth={140} />
               <TH label="노출" k="impressions" num />
               <TH label="클릭" k="clicks" num />
               <TH label="클릭율" k="ctrPct" num />
@@ -2860,7 +2860,7 @@ function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignNam
               return (
                 <tr key={r.keyword}>
                   <td className="sticky-left"><input type="checkbox" checked={checked.has(r.keyword)} onChange={() => onToggle(r.keyword)} /></td>
-                  <td><strong>{r.keyword}</strong></td>
+                  <td className="sticky-left-2"><strong>{r.keyword}</strong></td>
                   <td className="num">{fmtNum(r.impressions)}</td>
                   <td className="num">{fmtNum(r.clicks)}</td>
                   <td className="num">{fmtPctVal(r.ctrPct, 2)}</td>
@@ -3191,7 +3191,7 @@ function Style() {
       .aa-desc { color: #64748B; font-size: 13px; margin-top: 4px; }
       .mono { font-family: 'JetBrains Mono', monospace; }
       .aa-vat-tag { display: inline-block; font-size: 10px; background: #F1F5F9; color: #94A3B8; padding: 1px 5px; border-radius: 3px; font-weight: 500; }
-      .aa-section { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
+      .aa-section { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 20px; overflow: clip; }
       .aa-section-header { padding: 16px 20px; border-bottom: 1px solid #E2E8F0; display: flex; justify-content: space-between; align-items: center; }
       .aa-section-title { font-size: 15px; font-weight: 600; }
       .aa-section-desc { font-size: 12px; color: #64748B; margin-top: 2px; }
@@ -3206,6 +3206,9 @@ function Style() {
       .aa-period-btn.active { background: #FFFFFF; color: #1F2937; box-shadow: 0 0 0 1px #E2E8F0; }
       .aa-table-wrap { position: relative; overflow: auto; max-height: 480px; border-top: 1px solid #E2E8F0; }
       .aa-table-wrap.shorter { max-height: 380px; }
+      .aa-table-wrap.aa-camp-wrap.expanded { max-height: none; overflow: visible; }
+      .aa-camp-wrap > table > thead th { z-index: 6; }
+      .aa-camp-wrap > table > thead th.sticky-left { z-index: 7; }
       .aa-table-wrap table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
       .aa-table-wrap thead th { position: sticky; top: 0; z-index: 3; background: #F8FAFC; }
       .aa-table-wrap th.sticky-left, .aa-table-wrap td.sticky-left { position: sticky; left: 0; background: #FFFFFF; z-index: 1; border-right: 1px solid #E2E8F0; }
