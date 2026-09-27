@@ -4,7 +4,7 @@
  * 쿠팡 데이터 관리 페이지 (v4 - Supabase 연동)
  *
  * 자주 안 바뀌는 마스터 데이터를 등록·관리:
- *   - 마진 마스터 (마진분석.xlsx)
+ *   - 마진 마스터 엑셀 (마진분석.xlsx) — 네이버 진단용 3종만 저장. 쿠팡 마진은 나무_마스터에서 자동으로 읽음
  *   - 그로스 정산 (WAREHOUSING_SHIPPING)
  *   - 가격/재고 (price_inventory)
  *
@@ -14,7 +14,6 @@
 
 import { useEffect, useState } from 'react'
 import { useMarginStore } from '@/lib/coupang/store'
-import { parseMarginMaster } from '@/lib/coupang/parsers/marginMaster'
 import { parsePriceInventory } from '@/lib/coupang/parsers/priceInventory'
 import { parseSettlement } from '@/lib/coupang/parsers/settlement'
 import { parseNaverProductMatch } from '@/lib/naver/parsers/productMatch'
@@ -24,8 +23,8 @@ type LoadingState = 'idle' | 'loading' | 'saving' | 'success' | 'error'
 
 export default function DataManagementPage() {
   const {
-    marginMaster, marginMasterStats, uploads,
-    setMarginMaster, setPriceInventory, setSettlement,
+    uploads,
+    setPriceInventory, setSettlement,
   } = useMarginStore()
 
   const [initialLoading, setInitialLoading] = useState(true)
@@ -38,16 +37,8 @@ export default function DataManagementPage() {
   async function loadAllFromSupabase() {
     setInitialLoading(true)
     try {
-      const masterRes = await fetch('/api/coupang-master?type=margin_master')
-      const masterJson = await masterRes.json()
-      if (masterJson.data) {
-        setMarginMaster(masterJson.data, {
-          fileName: masterJson.fileName || '저장된 데이터',
-          uploadedAt: masterJson.savedAt || new Date().toISOString(),
-          rowCount: masterJson.data?.marginRows?.length || 0,
-        })
-      }
-
+      // 쿠팡 마진(margin_master)은 불러오지 않는다 — 나무_마스터 마진계산이 유일한 출처.
+      // (옛 저장본으로 저장소를 덮어쓰면 수익 진단·광고 분석이 옛 마진으로 계산되던 문제)
       const settleRes = await fetch('/api/coupang-master?type=settlement')
       const settleJson = await settleRes.json()
       if (settleJson.data?.rows) {
@@ -99,17 +90,7 @@ export default function DataManagementPage() {
     if (!file) return
     try {
       const buf = await file.arrayBuffer()
-      const r = parseMarginMaster(buf)
-      if (r.error || !r.master) { alert('마진 마스터 파싱 실패: ' + r.error); return }
-
-      setMarginMaster(r.master, {
-        fileName: file.name,
-        uploadedAt: new Date().toISOString(),
-        rowCount: r.master.marginRows.length,
-      })
-
-      await saveToSupabase('margin_master', r.master, file.name)
-
+      // 쿠팡 마진(margin_master)은 저장하지 않음 — 나무_마스터에서 자동으로 읽는다.
       // 네이버 시트 2개 + CPM 단가 동시 파싱+저장 (Map → object 직렬화)
       try {
         const [naverMatch, naverMargin, cpmConfig] = await Promise.all([
@@ -199,19 +180,14 @@ export default function DataManagementPage() {
           <>
             <DataCard
               number="1"
-              title="마진 마스터"
-              subtitle="마진분석.xlsx (3시트: 원가표 · 비용테이블 · 마진계산)"
-              required
-              loaded={!!marginMaster}
-              status={uploads.marginMaster}
-              savingState={savingState.margin_master || 'idle'}
+              title="마진 마스터 (네이버용)"
+              subtitle="마진분석.xlsx (네이버상품매칭 · 마진계산_네이버 · 비용테이블)"
+              loaded={savingState.naver_margin === 'success'}
+              status={null}
+              savingState={savingState.naver_margin || 'idle'}
               onChange={handleMaster}
-              stats={marginMaster ? [
-                { label: '원가표 상품', value: `${marginMasterStats.costBookRows}개` },
-                { label: '옵션', value: `${marginMasterStats.marginRows}개` },
-                { label: '실판매가 등록', value: `${marginMasterStats.optionsWithActualPrice}개` },
-              ] : null}
-              description="모든 상품의 원가, 실판매가, 순이익이 이 엑셀에서 옵니다. 새 상품 추가/원가 변경 시 갱신하세요."
+              stats={null}
+              description="쿠팡 마진은 나무_마스터에서 자동으로 읽습니다. 이 엑셀은 네이버 진단용 3종(상품매칭·마진·CPM 단가)만 저장합니다."
             />
 
             <DataCard

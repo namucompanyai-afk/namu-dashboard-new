@@ -165,6 +165,8 @@ function TargetRoasInput({
 // ── Page ──────────────────────────────────────────────────────
 export default function AdAnalysisPage() {
   const marginMaster = useMarginStore((s) => s.marginMaster)
+  // 마진 출처 — 나무_마스터가 아니면(예비 경로: Supabase 옛 저장본) 경고
+  const marginMeta = useMarginStore((s) => s.uploads.marginMaster)
   const rawAdCampaign = useMarginStore((s) => s.rawAdCampaign)
   const adPeriod = useMarginStore((s) => s.adPeriod)
   const adAnalysisLive = useMarginStore((s) => s.adAnalysisLive)
@@ -564,6 +566,11 @@ export default function AdAnalysisPage() {
     }}>
       <Style />
       {headerNode}
+      {marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
+        <div style={{ margin: '8px 0', padding: '8px 14px', borderRadius: 8, border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', fontSize: 13 }}>
+          ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
+        </div>
+      )}
       {marginOffBanner}
       {optionBepNode}
       <KpiSection view={view} hideBep={hideBep} />

@@ -56,6 +56,8 @@ export default function DiagnosisPage() {
     setMarginMaster, setSettlement, setPriceInventory,
     reset, resetExceptMargin,
   } = useMarginStore()
+  // 마진 출처 — 나무_마스터가 아니면(예비 경로: Supabase 옛 저장본) 경고
+  const marginMeta = useMarginStore((st) => st.uploads.marginMaster)
 
   const [verdictFilter, setVerdictFilter] = useState<VerdictCode | 'all'>('all')
   const [selectedAlias, setSelectedAlias] = useState<string>('__ALL__')
@@ -500,6 +502,11 @@ export default function DiagnosisPage() {
     <div className="min-h-screen bg-gray-50 p-8">
       {confirmModal}
       <div className="max-w-7xl mx-auto">
+        {!loadedSnapshot && marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
+          </div>
+        )}
         {/* 헤더 */}
         <div className="mb-6 flex items-end justify-between border-b pb-5">
           <div>
