@@ -58,7 +58,19 @@ export interface CampaignNameParse {
 export function parseCampaignName(name: string): CampaignNameParse {
   const trimmed = (name || '').trim()
   const m = trimmed.match(CAMPAIGN_NAME_RE)
-  if (!m) return { prefix: trimmed, campaignType: 'unknown', optionIdsRaw: '' }
+  if (!m) {
+    // 보조 규칙: 이름에 'AI'·'수동' 토큰(앞뒤가 _ · 공백 · 끝)이 있으면 그 타입. prefix = 토큰 앞부분
+    // 예: '[보배마을]_오색현미_1P_AI' → ai / prefix '[보배마을]_오색현미_1P', '스마트캠페인_ai' → ai
+    const t = trimmed.match(/^(.*?)(?:^|[_\s])(AI|수동)(?=$|[_\s])/i)
+    if (t) {
+      return {
+        prefix: (t[1] || '').replace(/[_\s]+$/, '').trim() || trimmed,
+        campaignType: /^ai$/i.test(t[2]) ? 'ai' : 'manual',
+        optionIdsRaw: '',
+      }
+    }
+    return { prefix: trimmed, campaignType: 'unknown', optionIdsRaw: '' }
+  }
   const [, prefix, typeTok, optionIdsRaw] = m
   return {
     prefix: prefix.trim(),

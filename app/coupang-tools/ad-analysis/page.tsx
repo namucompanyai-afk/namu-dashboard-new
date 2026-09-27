@@ -99,7 +99,7 @@ function useSort<T extends Record<string, any>>(rows: T[], defaultKey: keyof T, 
 const TARGET_KEY_RE = /^(.+)_(AI|수동|스마트|smart)_(.+)$/i
 
 function parseCampaignTargetKey(name: string): { key: string; kind: 'AI' | '수동' | '스마트' } | null {
-  const m = (name || '').trim().match(TARGET_KEY_RE)
+  const m = (name || '').trim().match(TARGET_KEY_RE) || (name || '').trim().match(/^(.+)_(AI|수동|스마트|smart)()$/i)
   if (!m) return null
   const prefix = m[1].trim()
   const tok = m[2]
@@ -535,7 +535,7 @@ export default function AdAnalysisPage() {
         {openCampaign && (
           openCampaign.type === 'manual'
             ? <ManualSection campaign={openCampaign} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-            : <AiSection campaign={openCampaign} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            : <AiSection campaign={openCampaign} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />
         )}
       </>)}
     </>
@@ -1925,15 +1925,11 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
               <TH label="타입" k={'type'} />
               <TH label="광고비 (+VAT)" k={'adCostVat'} num />
               <TH label="광고 매출" k={'revenue'} num />
-              <TH label={<>타상품 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'otherProductRevenue'} num minWidth={110} />
-              <TH label="광고 판매수" k={'orders'} num />
-              <th className="num" style={{ minWidth: 120 }} title="AI: 쿠팡 입력용 목표 ROAS = 필수 ROAS(광고센터 기준) · 수동: 키워드별 입찰가 (아래 입찰가 점검)">목표 ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(쿠팡 입력용)</span></th>
               <TH label={marginOff ? <>ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(쿠팡표기)</span></> : <>ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(광고센터)</span></>} k={'roasPct'} num />
-              {!hideBep && <TH label={<>BEP<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(필수 ROAS)</span></>} k={'bepPct'} num />}
-              {!hideBep && <TH label="갭" k={'gapPct'} num />}
+              {!hideBep && <TH label={<>필수 ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 400 }}>AI 캠페인은 쿠팡 목표 ROAS 에 이 값 입력</span></>} k={'bepPct'} num minWidth={130} />}
               {!hideBep && <TH label={<>광고 손익<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(원)</span></>} k={'adProfit'} num />}
-              <TH label="전환율" k={'clicks'} num />
-              <TH label="검색/비검색" k={'searchShare'} minWidth={200} />
+              <TH label={<>광고 판매수<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(1P = 봉)</span></>} k={'orders'} num />
+              <TH label={<>타상품 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'otherProductRevenue'} num minWidth={110} />
             </tr>
           </thead>
           <tbody>
@@ -2017,34 +2013,16 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>
         <td className="num">{fmtMan(c.revenue)}</td>
-        <td className="num text-muted">{c.otherProductRevenue > 0 ? fmtMan(c.otherProductRevenue) : '—'}</td>
-        <td className="num">{fmtNum(c.orders)}</td>
-        <td className="num" onClick={(e) => e.stopPropagation()}>
-          {isManual
-            ? <span className="text-muted" style={{ fontSize: 11 }}>키워드별 입찰가</span>
-            : (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                {!hideBep && c.bepPct != null && <strong title="쿠팡 입력용 목표 ROAS = 필수 ROAS (광고센터 기준)">{Math.round(c.bepPct)}%</strong>}
-                {targetEditable && targetInfo
-                  ? <TargetRoasInput value={targetValue} onChange={(v) => onTargetChange(targetInfo.key, v)} />
-                  : null}
-              </div>
-            )}
-        </td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
-        {!hideBep && <td className="num" style={{ fontWeight: 700 }}>{isManual ? <span className="text-muted">—</span> : (c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—')}</td>}
-        {!hideBep && <td className={`num ${gapClass}`}>{isManual ? <span className="text-muted">—</span> : (c.gapPct != null ? `${c.gapPct > 0 ? '+' : ''}${Math.round(c.gapPct)}%p` : '—')}</td>}
+        {!hideBep && (
+          <td className="num" style={{ fontWeight: 700 }}>
+            {c.bepPct != null ? `${Math.round(c.bepPct)}%` : '—'}
+            {isManual && <div style={{ fontSize: 10, fontWeight: 400, color: '#94A3B8' }}>키워드별 입찰가</div>}
+          </td>
+        )}
         {!hideBep && <td className={`num ${c.adProfit < 0 ? 'text-bad' : 'text-good'}`} style={{ fontWeight: 600 }}>{Math.round(c.adProfit).toLocaleString('ko-KR')}</td>}
-        <td className="num">{cvrPct != null ? `${cvrPct.toFixed(1)}%` : <span className="text-muted">—</span>}</td>
-        <td>
-          {c.adCostRaw > 0 ? (
-            <div className="aa-search-bar">
-              <span style={{ width: 32, color: '#3B82F6' }}>{searchPct}%</span>
-              <div className="aa-search-bar-bg"><div className="aa-search-bar-fill" style={{ width: `${searchPct}%` }} /></div>
-              <span style={{ width: 32, color: '#A855F7' }}>{100 - searchPct}%</span>
-            </div>
-          ) : <span className="text-muted">—</span>}
-        </td>
+        <td className="num">{fmtNum(c.orders)}</td>
+        <td className="num text-muted">{c.otherProductRevenue > 0 ? fmtMan(c.otherProductRevenue) : '—'}</td>
       </tr>
       {!marginOff && isExpanded && options.map((o) => (
         <OptionInlineRow
@@ -2052,23 +2030,24 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
           o={o}
           isSelected={selectedOptionId === o.optionId}
           onClick={() => onSelectOption(o.optionId)}
+          hideBep={hideBep}
         />
       ))}
       {!marginOff && isExpanded && options.length === 0 && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 10 : 13} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
+          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
         </tr>
       )}
       {marginOff && isExpanded && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 10 : 13} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP 입력값 기준)</td>
+          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP 입력값 기준)</td>
         </tr>
       )}
     </>
   )
 }
 
-function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected: boolean; onClick: () => void }) {
+function OptionInlineRow({ o, isSelected, onClick, hideBep = false }: { o: OptionDiag; isSelected: boolean; onClick: () => void; hideBep?: boolean }) {
   const roasUnder = o.roasPct != null && o.bepPct != null && o.roasPct < o.bepPct
   const roasClass = o.roasPct == null || o.bepPct == null ? '' : (roasUnder ? 'text-bad' : 'text-good')
   const gapClass = o.gapPct == null ? '' : (o.gapPct < 0 ? 'text-bad' : 'text-good')
@@ -2092,29 +2071,19 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
       <td><span className="text-muted">—</span></td>
       <td className="num">{fmtMan(o.adCostVat)}</td>
       <td className="num">{fmtMan(o.revenue)}</td>
-      <td className="num text-muted">{o.otherProductRevenue > 0 ? fmtMan(o.otherProductRevenue) : '—'}</td>
-      <td className="num">{fmtNum(o.sold)}</td>
-      <td className="num text-muted">—</td>
       <td className={`num ${roasClass}`}>{fmtRoas(o.roasPct)}</td>
-      <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>
-      <td className={`num ${gapClass}`}>{o.gapPct != null ? `${o.gapPct > 0 ? '+' : ''}${Math.round(o.gapPct)}%p` : '—'}</td>
-      <td className={`num ${o.adProfit < 0 ? 'text-bad' : 'text-good'}`}>{Math.round(o.adProfit).toLocaleString('ko-KR')}</td>
-      <td className="num">{o.cvrPct != null ? `${o.cvrPct.toFixed(1)}%` : <span className="text-muted">—</span>}</td>
-      <td>
-        {adCostRaw > 0 ? (
-          <div className="aa-search-bar">
-            <span style={{ width: 32, color: '#3B82F6' }}>{searchPct}%</span>
-            <div className="aa-search-bar-bg"><div className="aa-search-bar-fill" style={{ width: `${searchPct}%` }} /></div>
-            <span style={{ width: 32, color: '#A855F7' }}>{100 - searchPct}%</span>
-          </div>
-        ) : <span className="text-muted">—</span>}
-      </td>
+      {!hideBep && <td className="num" style={{ fontWeight: 700 }}>{o.bepPct != null ? `${Math.round(o.bepPct)}%` : '—'}</td>}
+      {!hideBep && <td className={`num ${o.adProfit < 0 ? 'text-bad' : 'text-good'}`}>{Math.round(o.adProfit).toLocaleString('ko-KR')}</td>}
+      <td className="num">{fmtNum(o.sold)}</td>
+      <td className="num text-muted">{o.otherProductRevenue > 0 ? fmtMan(o.otherProductRevenue) : '—'}</td>
     </tr>
   )
 }
 
 // ── AI Section ────────────────────────────────────────────────
-function AiSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose }: {
+function AiSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose, targets, onTargetChange }: {
+  targets?: Record<string, number>
+  onTargetChange?: (key: string, v: number | null) => void
   campaign: CampaignDiag
   master: any
   marginOff?: boolean
@@ -2141,8 +2110,25 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
 
   const { search, nonSearch } = useMemo(() => buildKeywordRows(filteredCampaign, bepMap, priceMap, exposureMap, marginOff), [filteredCampaign, bepMap, priceMap, exposureMap, marginOff])
   const cpcEntries = useMemo(() => marginOff ? [] : buildBepCpcForCampaign(campaign, master), [campaign, master, marginOff])
-  const searchSold = useMemo(() => search.reduce((s, r) => s + (r.orders || 0), 0), [search])
-  const nonSearchSold = useMemo(() => nonSearch.reduce((s, r) => s + (r.orders || 0), 0), [nonSearch])
+  // 검색/비검색 요약 — 옵션 필터가 걸리면 같은 필터 기준 (키워드 없는 검색 행 포함)
+  const areaSum = useMemo(() => {
+    const acc = { sRaw: 0, nRaw: 0, sRev: 0, nRev: 0, sSold: 0, nSold: 0 }
+    for (const r of filteredCampaign.rows) {
+      const rev = marginOff ? (r.revenue14d || 0) : splitRowRevenue(r, priceMap, exposureMap).self
+      if (isSearchPlacement(r.placement)) { acc.sRaw += r.adCost || 0; acc.sRev += rev; acc.sSold += r.sold14d || 0 }
+      else { acc.nRaw += r.adCost || 0; acc.nRev += rev; acc.nSold += r.sold14d || 0 }
+    }
+    return acc
+  }, [filteredCampaign, priceMap, exposureMap, marginOff])
+  const searchSold = areaSum.sSold
+  const nonSearchSold = areaSum.nSold
+  const soldLabel = campaign.channel === '1P' ? '판매 봉수' : '판매건수'
+  const soldUnit = campaign.channel === '1P' ? '봉' : '건'
+  const totalRaw = areaSum.sRaw + areaSum.nRaw
+  const sRoas = areaSum.sRaw > 0 ? (areaSum.sRev / areaSum.sRaw) * 100 : null
+  const nRoas = areaSum.nRaw > 0 ? (areaSum.nRev / areaSum.nRaw) * 100 : null
+  const targetInfo = parseCampaignTargetKey(campaign.campaignName)
+  const targetEditable = !!targets && !!onTargetChange && targetInfo != null && (targetInfo.kind === 'AI' || targetInfo.kind === '스마트')
 
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const toggleCheck = (k: string) =>
@@ -2163,6 +2149,13 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
         <div>
           <div className="aa-section-title">▼ {campaign.campaignName} · 키워드 분석</div>
           <div className="aa-section-desc">검색 영역만 키워드 단위 제어 가능 · 비검색은 통제 불가</div>
+          {targetEditable && targetInfo && (
+            <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
+              쿠팡에 입력한 목표 ROAS
+              <TargetRoasInput value={targets![targetInfo.key] ?? null} onChange={(v) => onTargetChange!(targetInfo.key, v)} />
+              {!hideBep && campaign.bepPct != null && <span style={{ color: '#94A3B8' }}>(필수 ROAS {Math.round(campaign.bepPct)}%)</span>}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {cpcEntries.length > 0 && (
@@ -2180,20 +2173,20 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
         <div className="aa-two-col">
           <div className="aa-metric-box search">
             <div className="aa-metric-box-label">🔍 검색 영역 (제어 가능)</div>
-            <Row label="광고비 (+VAT)" value={fmtMan(campaign.searchAdCostVat)} sub={campaign.adCostVat > 0 ? `(${Math.round(campaign.searchShare * 100)}%)` : undefined} />
-            <Row label="광고 매출" value={fmtMan(campaign.searchRevenue)} />
-            <Row label="판매건수" value={`${fmtNum(searchSold)}건`} />
-            <Row label="ROAS" value={fmtRoas(campaign.searchRoasPct)} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
-            {!hideBep && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
-            {!hideBep && <Row label="BEP 갭" value={campaign.searchRoasPct != null && campaign.bepPct != null ? `${Math.round(campaign.searchRoasPct - campaign.bepPct)}%p` : '—'} valueClass={campaign.searchRoasPct != null && campaign.bepPct != null && campaign.searchRoasPct < campaign.bepPct ? 'text-bad' : 'text-good'} />}
+            <Row label="광고비 (+VAT)" value={fmtMan(areaSum.sRaw * 1.1)} sub={totalRaw > 0 ? `(${Math.round((areaSum.sRaw / totalRaw) * 100)}%)` : undefined} />
+            <Row label="광고 매출" value={fmtMan(areaSum.sRev)} />
+            <Row label={soldLabel} value={`${fmtNum(searchSold)}${soldUnit}`} />
+            <Row label="ROAS (광고센터)" value={fmtRoas(sRoas)} valueClass={sRoas != null && campaign.bepPct != null && sRoas < campaign.bepPct ? 'text-bad' : ''} />
+            {!hideBep && <Row label="필수 ROAS" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            {!hideBep && <Row label="갭" value={sRoas != null && campaign.bepPct != null ? `${Math.round(sRoas - campaign.bepPct)}%p` : '—'} valueClass={sRoas != null && campaign.bepPct != null && sRoas < campaign.bepPct ? 'text-bad' : 'text-good'} />}
           </div>
           <div className="aa-metric-box nonsearch">
             <div className="aa-metric-box-label">🎯 비검색 영역 (통제 불가)</div>
-            <Row label="광고비 (+VAT)" value={fmtMan(campaign.nonSearchAdCostVat)} sub={campaign.adCostVat > 0 ? `(${100 - Math.round(campaign.searchShare * 100)}%)` : undefined} />
-            <Row label="광고 매출" value={fmtMan(campaign.nonSearchRevenue)} />
-            <Row label="판매건수" value={`${fmtNum(nonSearchSold)}건`} />
-            <Row label="ROAS" value={fmtRoas(campaign.nonSearchRoasPct)} valueClass={campaign.nonSearchRoasPct != null && campaign.bepPct != null && campaign.nonSearchRoasPct < campaign.bepPct ? 'text-bad' : ''} />
-            {!hideBep && <Row label="BEP" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            <Row label="광고비 (+VAT)" value={fmtMan(areaSum.nRaw * 1.1)} sub={totalRaw > 0 ? `(${100 - Math.round((areaSum.sRaw / totalRaw) * 100)}%)` : undefined} />
+            <Row label="광고 매출" value={fmtMan(areaSum.nRev)} />
+            <Row label={soldLabel} value={`${fmtNum(nonSearchSold)}${soldUnit}`} />
+            <Row label="ROAS (광고센터)" value={fmtRoas(nRoas)} valueClass={nRoas != null && campaign.bepPct != null && nRoas < campaign.bepPct ? 'text-bad' : ''} />
+            {!hideBep && <Row label="필수 ROAS" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
