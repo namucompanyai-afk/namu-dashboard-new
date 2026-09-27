@@ -484,6 +484,51 @@ export default function AdAnalysisPage() {
     />
   )
 
+  // ── 본문 (라이브·저장 공통) — 채널 필터 · KPI(전체/3P/1P) · 1P 박스 · 3P 섹션 ──
+  const renderBody = (openCampaign: ReturnType<typeof buildAdAnalysisView>['campaigns'][number] | null, showTrend: boolean) => (
+    <>
+      {marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
+        <div style={{ margin: '8px 0', padding: '8px 14px', borderRadius: 8, border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', fontSize: 13 }}>
+          ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
+        </div>
+      )}
+      <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
+      {chFilter !== '1P' && marginOffBanner}
+      {chFilter !== '1P' && optionBepNode}
+      <TopKpi view={view} oneP={onePView} filter={chFilter} hideBep={hideBep} />
+      {chFilter !== '3P' && (onePView.loaded
+        ? <OnePSection view={onePView} />
+        : <div style={{ ...noticeBoxOrange, padding: 12, fontSize: 13, margin: '12px 0' }}>이 광고 데이터에는 1P(판매방식 Retail) 광고 행이 없습니다.</div>)}
+      {chFilter !== '1P' && (<>
+        <HintBanner />
+        <PairWarnings view={view} master={marginMaster as any} />
+        {showTrend && <WeeklyTrendChart onPointClick={handleTrendPointClick} />}
+        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
+        {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
+        <PairRoasComparisonChart view={view} />
+        <HistoryNotesSection />
+        <CampaignSection
+          view={view}
+          master={marginMaster as any}
+          marginOff={marginOff}
+          hideBep={hideBep}
+          manualBep={manualBepMap}
+          openCampId={openCampId}
+          onOpen={toggleCampaign}
+          selectedOptionId={selectedOptionId}
+          onSelectOption={openCampaignAndOption}
+          targets={targets}
+          onTargetChange={setTargetForKey}
+        />
+        {openCampaign && (
+          openCampaign.type === 'manual'
+            ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+            : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+        )}
+      </>)}
+    </>
+  )
+
   // ── 라이브 모드 ──
   if (mode === 'live') {
     if (!adAnalysisLive) {
@@ -510,41 +555,14 @@ export default function AdAnalysisPage() {
           onClear={() => { clearAdAnalysisLive(); setUploadError(null) }}
         />
         {uploadError && <div style={errorBox}>{uploadError}</div>}
-        {marginOffBanner}
-        {optionBepNode}
-        <KpiSection view={view} hideBep={hideBep} />
-        <HintBanner />
-        <PairWarnings view={view} master={marginMaster as any} />
         {/* 게스트: 저장 히스토리 기반 추세차트 숨김(회사 저장데이터) */}
-        {!isGuest && <WeeklyTrendChart onPointClick={handleTrendPointClick} />}
-        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
-        {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
-        <PairRoasComparisonChart view={view} />
-        <HistoryNotesSection />
-        <CampaignSection
-          view={view}
-          master={marginMaster as any}
-          marginOff={marginOff}
-          hideBep={hideBep}
-          manualBep={manualBepMap}
-          openCampId={openCampId}
-          onOpen={toggleCampaign}
-          selectedOptionId={selectedOptionId}
-          onSelectOption={openCampaignAndOption}
-          targets={targets}
-          onTargetChange={setTargetForKey}
-        />
-        {openCampaign && (
-          openCampaign.type === 'manual'
-            ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-            : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-        )}
+        {renderBody(openCampaign, !isGuest)}
       </div>
     )
   }
 
   // ── 저장 모드 ──
-  if (autoLoading && !view.loaded) {
+  if (autoLoading && !view.loaded && !onePView.loaded) {
     return (
       <div style={pageWrap}>
         <Style />
@@ -554,7 +572,7 @@ export default function AdAnalysisPage() {
     )
   }
 
-  if (!view.loaded) {
+  if (!view.loaded && !onePView.loaded) {
     return (
       <div style={pageWrap}>
         <Style />
@@ -575,43 +593,7 @@ export default function AdAnalysisPage() {
     }}>
       <Style />
       {headerNode}
-      {marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
-        <div style={{ margin: '8px 0', padding: '8px 14px', borderRadius: 8, border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', fontSize: 13 }}>
-          ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
-        </div>
-      )}
-      <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
-      {chFilter !== '3P' && onePView.loaded && <OnePSection view={onePView} />}
-      {chFilter !== '1P' && (<>
-      {marginOffBanner}
-      {optionBepNode}
-      <KpiSection view={view} hideBep={hideBep} />
-      <HintBanner />
-      <PairWarnings view={view} master={marginMaster as any} />
-      <WeeklyTrendChart onPointClick={handleTrendPointClick} />
-      <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
-      {!marginOff && <KeywordParetoChart view={view} master={marginMaster as any} />}
-      <PairRoasComparisonChart view={view} />
-      <HistoryNotesSection />
-      <CampaignSection
-        view={view}
-        master={marginMaster as any}
-        marginOff={marginOff}
-        hideBep={hideBep}
-        manualBep={manualBepMap}
-        openCampId={openCampId}
-        onOpen={toggleCampaign}
-        selectedOptionId={selectedOptionId}
-        onSelectOption={openCampaignAndOption}
-        targets={targets}
-        onTargetChange={setTargetForKey}
-      />
-      {openCampaign && (
-        openCampaign.type === 'manual'
-          ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-          : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-      )}
-      </>)}
+      {renderBody(openCampaign, true)}
     </div>
   )
 }
@@ -684,7 +666,7 @@ function OnePSection({ view }: { view: OnePView }) {
       <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
         광고 매출 = 광고센터 전환매출(소비자가) · 판매수 = 봉 · 광고 이익 = 판매 봉수 × 1봉당 마진 − 광고비(면세 ×1.1 · 과세 ×1.0) · 필수 ROAS = 쿠팡 입력용 목표 ROAS
       </div>
-      {!view.hasMargin && <div style={{ ...errorBox }}>1P 마진 데이터가 없습니다 (나무_마스터 연결 실패 또는 옛 저장본) — 이익·필수 ROAS 는 계산되지 않습니다.</div>}
+      {!view.hasMargin && <div style={{ ...errorBox, fontSize: 13 }}>1P 마진 데이터 없음 — 나무_마스터 연결 확인 (이익·필수 ROAS 계산 불가)</div>}
       <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 10, fontSize: 13 }}>
         <div>광고비(부가포함) <b>{won(t.adCostVat)}</b></div>
         <div>광고 매출 <b>{won(t.revenue)}</b></div>
@@ -900,6 +882,44 @@ function OptionBepInputCard({ options, manualBep, onChange }: {
 }
 
 // ── KPI ───────────────────────────────────────────────────────
+// ── 맨 위 KPI — 필터별: 전체(3P+1P 합) / 3P(기존 그대로) / 1P ──
+// ROAS 는 3P KPI 와 같은 기준(매출 ÷ 광고비 부가포함). 1P 매출 = 광고센터 전환매출, 판매수 = 봉.
+function TopKpi({ view, oneP, filter, hideBep = false }: {
+  view: ReturnType<typeof buildAdAnalysisView>; oneP: OnePView; filter: 'all' | '3P' | '1P'; hideBep?: boolean
+}) {
+  if (filter === '3P' || (filter === 'all' && !oneP.loaded)) return <KpiSection view={view} hideBep={hideBep} />
+  const t = oneP.totals
+  const roas = (rev: number, cost: number) => (cost > 0 ? (rev / cost) * 100 : null)
+  if (filter === '1P') {
+    return (
+      <div className="aa-kpi-grid">
+        <KpiCard label="광고비 (+VAT)" value={fmtMan(t.adCostVat)} sub={`1P 캠페인 ${oneP.campaigns.length}개`} />
+        <KpiCard label="광고 매출" value={fmtMan(t.revenue)} sub="광고센터 전환매출(소비자가)" />
+        <KpiCard label="평균 ROAS" value={fmtRoas(roas(t.revenue, t.adCostVat))} sub={`광고센터 기준 ${fmtRoas(t.roasPct)}`} />
+        <KpiCard label="광고 판매수" value={`${fmtNum(t.sold)}봉`} sub="판매수 = 봉 기준" />
+      </div>
+    )
+  }
+  const cost = view.totalAdCostVat + t.adCostVat
+  const rev = view.totalRevenue + t.revenue
+  const u = view.unmatched
+  return (
+    <>
+      <div className="aa-kpi-grid">
+        <KpiCard label="광고비 (+VAT)" value={fmtMan(cost)} sub={`3P ${fmtMan(view.totalAdCostVat)} · 1P ${fmtMan(t.adCostVat)}`} />
+        <KpiCard label="광고 매출" value={fmtMan(rev)} sub={`3P ${fmtMan(view.totalRevenue)} · 1P ${fmtMan(t.revenue)} (1P=광고센터 전환매출)`} />
+        <KpiCard label="평균 ROAS" value={fmtRoas(roas(rev, cost))} sub={`3P ${fmtRoas(view.avgRoasPct)} · 1P ${fmtRoas(roas(t.revenue, t.adCostVat))} (광고비 부가포함 기준)`} />
+        <KpiCard label="광고 판매수" value={`${fmtNum(view.totalOrders + t.sold)}`} sub={`3P ${fmtNum(view.totalOrders)}건 · 1P ${fmtNum(t.sold)}봉`} />
+      </div>
+      {!hideBep && u.adCount > 0 && (
+        <div style={{ margin: '8px 0 16px', padding: '8px 12px', background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6, fontSize: 12, color: '#92400E' }}>
+          ⚠️ (3P) 마진마스터 미등록 옵션 <strong>{u.adCount}개</strong>의 광고비 <strong>{fmtMan(u.adCostVat)}원</strong>이 매출/주문 KPI 및 표 산출에서 제외됨 (실판매가 매칭 불가)
+        </div>
+      )}
+    </>
+  )
+}
+
 function KpiSection({ view, hideBep = false }: { view: ReturnType<typeof buildAdAnalysisView>; hideBep?: boolean }) {
   const roasUnder = !hideBep && view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
   const u = view.unmatched
