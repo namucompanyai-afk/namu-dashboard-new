@@ -5,6 +5,7 @@ import aliasData from './alias-data.json'
 import mappingData from './mapping-data.json'
 import migrationData from './migration-data.json'
 import m7Data from './m7-data.json'
+import m11Data from './m11-data.json'
 import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 
 /**
@@ -7745,6 +7746,59 @@ export async function GET(req: Request) {
           .map(({ r, i }) => `${i + 1} | ${r[0]} | ${r[1]} | ${r[2]} | ${n0(r[3])} | ${n0(r[5])} | ${pct(r[15])}`),
         단가DB_다른행_변경: priceOther, 마진계산_무관행_변경: marginOther,
         오류셀: { 단가DB: errorCellsOf(PRICE_TAB, pAfter).length, 마진계산: errorCellsOf(MARGIN_TAB, mAfter).length },
+      })
+    }
+
+    // ── m11: 검수 추가분 — 쿠팡 3P 윙 광고 옵션 행 추가 (m7 추가 규칙과 동일, 기존 행 수정 없음) ──
+    if (action === 'm11') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const data = m11Data as { adds: { pid: string; oid: string; name: string; alias: string; bong: number; price: number; spec: string }[] }
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range: string) =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const price = await read(PRICE_TAB, 'UNFORMATTED_VALUE', 'A1:M1000')
+      const aliasSet = new Set(price.slice(1).map((r) => String(r?.[0] ?? '')).filter(Boolean))
+      const mFx = await read(MARGIN_TAB, 'FORMULA', `A1:AC${MLAST}`)
+      const mBefore = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const skip: string[] = []
+      const haveOid = new Set(mBefore.slice(1).map((r) => String(r?.[23] ?? '').trim()).filter(Boolean))
+      const adds = data.adds.filter((a) => {
+        if (haveOid.has(a.oid)) return skip.push(`${a.oid} 이미 있음`), false
+        if (!aliasSet.has(a.alias)) return skip.push(`${a.oid} 단가DB에 없는 별칭 ${a.alias}`), false
+        haveOid.add(a.oid)
+        return true
+      })
+      let last = 1
+      mBefore.forEach((r, i) => { if (i > 0 && (String(r?.[0] ?? '').trim() || String(r?.[1] ?? '').trim())) last = i + 1 })
+      if (last + adds.length > MLAST) throw new Error(`마진계산 ${MLAST}행 초과`)
+      const noTpl = adds.map((_, i) => last + 1 + i).filter((r) => !String((mFx[r - 1] || [])[5] ?? '').startsWith('='))
+      if (noTpl.length) return NextResponse.json({ ok: false, error: '추가 행에 기존 수식이 없음 — 쓰기 중단', 행: noTpl.slice(0, 10) }, { status: 409 })
+      const raw: { range: string; values: Cell[][] }[] = []
+      const fx: { range: string; values: Cell[][] }[] = []
+      adds.forEach((a, i) => {
+        const r = last + 1 + i
+        raw.push({ range: `${quote(MARGIN_TAB)}!A${r}:D${r}`, values: [['쿠팡 3P', a.alias, a.bong, a.price]] })
+        raw.push({ range: `${quote(MARGIN_TAB)}!H${r}`, values: [[a.spec]] })
+        raw.push({ range: `${quote(MARGIN_TAB)}!W${r}:X${r}`, values: [[a.pid, a.oid]] })
+        fx.push({ range: `${quote(MARGIN_TAB)}!K${r}`, values: [[`=IF($A${r}="","",IFERROR(VLOOKUP($A${r},'${M2_SETTING_TAB}'!$A$2:$C$19,3,FALSE),""))`]] })
+      })
+      if (raw.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'RAW', data: raw } })
+      if (fx.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data: fx } })
+      const mAfter = await read(MARGIN_TAB, 'UNFORMATTED_VALUE', `A1:AC${MLAST}`)
+      const eq = (x: Cell, y: Cell) => (typeof x === 'number' && typeof y === 'number' ? Math.abs(x - y) < 1e-6 : String(x ?? '') === String(y ?? ''))
+      const changed = Array.from({ length: last - 1 }, (_, i) => i + 2)
+        .filter((r) => Array.from({ length: 29 }, (_, c) => c).some((c) => !eq((mBefore[r - 1] || [])[c] ?? '', (mAfter[r - 1] || [])[c] ?? '')))
+      const pct = (v: Cell) => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : '-')
+      const byOid = new Map(adds.map((a) => [a.oid, a]))
+      return NextResponse.json({
+        ok: changed.length === 0 && errorCellsOf(MARGIN_TAB, mAfter).length === 0,
+        추가: adds.length, 시작행: last + 1, 건너뜀: skip, 기존행_변경: changed, 오류셀: errorCellsOf(MARGIN_TAB, mAfter).length,
+        행: mAfter.slice(last, last + adds.length).map((r) => {
+          const a = byOid.get(String(r[23] ?? ''))
+          const bep = typeof r[14] === 'number' && r[14] > 0 && typeof r[3] === 'number' ? (r[3] / r[14]).toFixed(2) : '-'
+          return `${r[23]} | ${a?.name ?? ''} | ${r[1]} | ${r[2]} | ${r[3]} | ${r[7]} | ${pct(r[15])} | ${bep}`
+        }),
       })
     }
 
