@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import { requireRole } from '@/lib/server-auth'
+import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 import { parseProductMaster, parseMilkrunPrices } from '@/lib/b2b/kurly'
 import { parseCenters } from '@/lib/b2b/coupang'
 import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
@@ -19,7 +20,7 @@ import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
 export const runtime = 'nodejs'
 export const revalidate = 0
 
-const SHEET_ID = '1nujXWT95QWnYBX1LpSAL1hLL3Uv8MBt7kJDz8i6WbFU'
+const SHEET_ID = MASTER_SHEET_ID // 나무_마스터 (옛 b2b 파일에서 이관)
 const TAB_PRODUCT = '상품마스터'
 const TAB_PRICE = '컬리 밀크런 가격표'
 const TAB_CENTER = '쿠팡 센터 주소록'

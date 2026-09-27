@@ -113,11 +113,12 @@ const COLORS = [
   '#BA68C8', '#4DB6AC', '#FFB74D', '#90A4AE',
 ]
 
-/** '[보배마을] 현미 귀리 즉석밥 180g * 6' → '즉석밥' */
+/** '[보배마을] 즉석밥 6개' → '즉석밥' (옛 표기 '… 180g * 6' 도 동일) */
 export function shortName(raw: string): string {
   let s = String(raw || '').trim()
   s = s.replace(/\[[^\]]*\]/g, ' ') // 브랜드 대괄호
   s = s.replace(/[*x×]\s*\d+\s*$/i, ' ') // 낱개 묶음 표기 (* 6)
+  s = s.replace(/\d+\s*(개|입|팩|봉|포)(?=\s|$)/g, ' ') // 한글 단위 수량 (6개) — \b 는 한글 뒤에서 안 걸림
   s = s.replace(/\b\d+(\.\d+)?\s*(kg|g|ml|l|개|입|팩|봉|포)\b/gi, ' ') // 용량 토큰
   s = s.replace(/\s+/g, ' ').trim()
   let core = s.split(' ').filter(Boolean).pop() || s

@@ -10,8 +10,8 @@ import { groupByPo } from './coupangDiagram'
 
 /** 박스에 필수 항목이 기표기로 인쇄돼 나오는 상품 — 라벨 생성 제외 */
 export const PREPRINTED_BARCODES = [
-  { code: '8800295820794', label: '즉석밥' }, // 현미 귀리 즉석밥 180g * 6
-  { code: '8800295820800', label: '즉석밥' }, // 현미 귀리 즉석밥 180g * 24
+  { code: '8800295820794', label: '즉석밥' }, // [보배마을] 즉석밥 6개
+  { code: '8800295820800', label: '즉석밥' }, // [보배마을] 즉석밥 24개
 ]
 
 const SUPPLIER = '농업회사법인(주) 나무컴퍼니'

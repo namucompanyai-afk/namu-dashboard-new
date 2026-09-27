@@ -86,7 +86,7 @@ export type PalletPlan = {
 
 // ── 표시명 축약 ──────────────────────────────────────────────────
 // '[보배마을] 농부가 만든 무농약 고춧가루 100g' → '고춧'
-// '[보배마을] 현미 귀리 즉석밥 180g * 6' → '즉석밥 *6' (묶음 수가 곧 품목 구분)
+// '[보배마을] 즉석밥 6개' → '즉석밥 *6' (묶음 수가 곧 품목 구분 · 옛 표기 '… 180g * 6' 도 동일)
 // '[보배마을] 오트현미한끼 잡곡밥 180g*6입' → '잡곡밥 *6'
 export function shortSkuName(raw: string): string {
   let s = String(raw || '').trim()
@@ -95,7 +95,7 @@ export function shortSkuName(raw: string): string {
   // (용량 토큰 정규식의 \b 는 한글 뒤에서 안 걸려 '*6입' 이 남으므로 여기서 먼저 처리)
   const rice = /즉석밥|잡곡밥/.exec(s)?.[0]
   if (rice) {
-    const pack = s.match(/[*x×]\s*(\d+)/i)?.[1] ?? ''
+    const pack = s.match(/[*x×]\s*(\d+)/i)?.[1] ?? s.match(/(\d+)\s*(?:개|입)/)?.[1] ?? ''
     return pack ? `${rice} *${pack}` : rice
   }
   s = s.replace(/\b\d+(\.\d+)?\s*(kg|g|ml|l|개|입|팩|봉|포)\b/gi, ' ') // 용량·수량 토큰

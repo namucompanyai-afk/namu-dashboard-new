@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { google } from 'googleapis'
 import { requireRole } from '@/lib/server-auth'
+import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 import {
   HISTORY_COL_COUNT,
   HISTORY_HEADERS,
@@ -24,7 +25,7 @@ import {
 export const runtime = 'nodejs'
 export const revalidate = 0
 
-const SHEET_ID = '1nujXWT95QWnYBX1LpSAL1hLL3Uv8MBt7kJDz8i6WbFU'
+const SHEET_ID = MASTER_SHEET_ID // 나무_마스터 (옛 b2b 파일에서 이관)
 const MAX_ROWS = 5000 // 한 번에 받는 행 상한(폭주 방지)
 
 const quote = (tab: string) => `'${tab.replace(/'/g, "''")}'`
