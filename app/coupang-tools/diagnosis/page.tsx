@@ -75,7 +75,7 @@ export default function DiagnosisPage() {
     }
     ;(async () => {
       try {
-        // 1차: 구글시트 게시 CSV(마진계산 시트). 성공 시 업로드 불필요.
+        // 1차: 나무_마스터 마진계산(쿠팡 3P 행). 성공 시 업로드 불필요.
         let marginLoaded = false
         try {
           const csvRes = await fetch('/api/coupang-margin-master')
@@ -84,7 +84,7 @@ export default function DiagnosisPage() {
             setMarginMaster(
               { costBook: [], marginRows: csvJson.marginRows, constants: getDefaultConstants() },
               {
-                fileName: '구글시트 마진계산(게시 CSV)',
+                fileName: '나무_마스터 마진계산(쿠팡 3P)',
                 uploadedAt: new Date().toISOString(),
                 rowCount: csvJson.marginRows.length,
               },
@@ -92,10 +92,10 @@ export default function DiagnosisPage() {
             marginLoaded = true
           }
         } catch (csvErr) {
-          console.error('마진계산 CSV 로드 실패, 업로드 저장본으로 폴백:', csvErr)
+          console.error('나무_마스터 마진계산 로드 실패, 업로드 저장본으로 폴백:', csvErr)
         }
 
-        // 2차(폴백): CSV 실패 시 기존 엑셀 업로드 저장본.
+        // 2차(폴백): 실패 시 기존 엑셀 업로드 저장본(Supabase).
         if (!marginLoaded) {
           const masterRes = await fetch('/api/coupang-master?type=margin_master')
           const masterJson = await masterRes.json()

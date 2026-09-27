@@ -9,6 +9,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { getDefaultConstants } from '@/lib/coupang/costBook'
 import * as XLSX from 'xlsx'
 import { useConfirm } from '@/components/ui/useConfirm'
 import {
@@ -262,14 +263,35 @@ export default function AdAnalysisPage() {
     ;(async () => {
       try {
         if (needMaster) {
-          const masterRes = await fetch('/api/coupang-master?type=margin_master')
-          const masterJson = await masterRes.json()
-          if (!cancelled && masterJson?.data) {
-            setMarginMaster(masterJson.data, {
-              fileName: masterJson.fileName || '저장된 데이터',
-              uploadedAt: masterJson.savedAt || new Date().toISOString(),
-              rowCount: masterJson.data?.marginRows?.length || 0,
-            })
+          // 1차: 나무_마스터 마진계산(쿠팡 3P 행) · 2차(폴백): 엑셀 업로드 저장본(Supabase)
+          let marginLoaded = false
+          try {
+            const res = await fetch('/api/coupang-margin-master')
+            const json = await res.json()
+            if (!cancelled && json?.ok && Array.isArray(json.marginRows) && json.marginRows.length > 0) {
+              setMarginMaster(
+                { costBook: [], marginRows: json.marginRows, constants: getDefaultConstants() },
+                {
+                  fileName: '나무_마스터 마진계산(쿠팡 3P)',
+                  uploadedAt: new Date().toISOString(),
+                  rowCount: json.marginRows.length,
+                },
+              )
+              marginLoaded = true
+            }
+          } catch (err) {
+            console.error('나무_마스터 마진계산 로드 실패, 업로드 저장본으로 폴백:', err)
+          }
+          if (!marginLoaded && !cancelled) {
+            const masterRes = await fetch('/api/coupang-master?type=margin_master')
+            const masterJson = await masterRes.json()
+            if (!cancelled && masterJson?.data) {
+              setMarginMaster(masterJson.data, {
+                fileName: masterJson.fileName || '저장된 데이터',
+                uploadedAt: masterJson.savedAt || new Date().toISOString(),
+                rowCount: masterJson.data?.marginRows?.length || 0,
+              })
+            }
           }
         }
 
