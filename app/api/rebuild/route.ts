@@ -472,6 +472,18 @@ const M8_BONG: [number, string, number, string?][] = [
 ]
 const M8_FEE_ROWS = [89, 118, 125, 127, 136, 181, 183, 211, 212, 221, 222]
 const M8_FEE = 11.66 // 식품 기본 10.6% × 1.1 (부가포함)
+// m10: 원료ID 없는 상품 원가·과세 (나무_마진리빌드 (1).xlsx 단가DB 에서 읽은 값) — [별칭, H 소포장 공급가, J 과세여부]
+const M10_VALUES: [string, number, string][] = [
+  ['[보배마을] 강황가루 100g', 5029, '과세'],
+  ['[보배마을] 강황가루 300g', 12400, '과세'],
+  ['[보배마을] 고춧가루 100g', 5571, '면세'],
+  ['[보배마을] 매실청 300g', 11100, '과세'],
+  ['매실액 300ml', 11100, '과세'],
+  ['유기농 계란 10구', 9960, '면세'],
+  ['[보배마을] 오곡밥 500g', 3858, '면세'],
+  ['[토지랑] 진도향미 10kg', 29800, '면세'],
+  ['[토지랑] 진도향미 20kg', 59600, '면세'],
+]
 // init18: 마진계산 Y·Z 의미 전환 — 소비자가/마진율 → 1P 상품코드/납품가
 const COUPANG_1P_YZ_OLD = ['소비자가(1P)', '쿠팡마진율(1P)']
 const COUPANG_1P_YZ_NEW = ['1P 상품코드', '1P 납품가(부가포함)']
@@ -7687,6 +7699,52 @@ export async function GET(req: Request) {
         대상: ok.length, 건너뜀: skipped, 다른행_변경: others, 오류셀: errorCellsOf(MARGIN_TAB, after).length,
         총량_없음_소: ok.filter((t) => t.tot == null).map((t) => `${t.r} ${t.alias}`),
         행: ok.map((t) => `${t.r} | ${t.alias} | ${t.bong} | ${t.tot == null ? '?' : `${+t.tot.toFixed(2)}kg`} | ${v(t.r, 7)} | ${n0(v(t.r, 3))} | ${v(t.r, 5) === '' ? '원가 없음' : n0(v(t.r, 5))} | ${pct(v(t.r, 15))}`),
+      })
+    }
+
+    // ── m10: 원료ID 없는 상품의 단가DB H·J 값 입력 (E 빈칸 행만) ──
+    if (action === 'm10') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const read = async (tab: string, range: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE' = 'UNFORMATTED_VALUE') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const pBefore = await read(PRICE_TAB, 'A1:M1000')
+      const mBefore = await read(MARGIN_TAB, `A1:AC${MLAST}`)
+      const res: string[] = []
+      const writes: { range: string; values: Cell[][] }[] = []
+      const rowsDone = new Set<number>()
+      for (const [al, h, j] of M10_VALUES) {
+        const idx = pBefore.map((r, i) => (String(r?.[0] ?? '') === al ? i + 1 : 0)).filter(Boolean)
+        if (idx.length !== 1) { res.push(`${al} | - | - | 건너뜀(마스터 ${idx.length}행)`); continue }
+        const r = idx[0]
+        if (String(pBefore[r - 1]?.[4] ?? '').trim() !== '') { res.push(`${al} | - | - | 건너뜀(원료ID 있음)`); continue }
+        writes.push({ range: `${quote(PRICE_TAB)}!H${r}`, values: [[h]] }, { range: `${quote(PRICE_TAB)}!J${r}`, values: [[j]] })
+        rowsDone.add(r)
+        res.push(`${al} | ${h} | ${j} | 반영(${r}행)`)
+      }
+      if (writes.length) {
+        await guardManualPriceHJ(sheets, MASTER_SHEET_ID, writes.map((w) => w.range))
+        await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'RAW', data: writes } })
+      }
+      const pAfter = await read(PRICE_TAB, 'A1:M1000')
+      const mAfter = await read(MARGIN_TAB, `A1:AC${MLAST}`)
+      const eq = (a: Cell, b: Cell) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : String(a ?? '') === String(b ?? ''))
+      const diffRows = (b: Cell[][], a: Cell[][], n: number) =>
+        Array.from({ length: Math.max(b.length, a.length) }, (_, i) => i).filter((i) => i > 0 &&
+          Array.from({ length: n }, (_, c) => c).some((c) => !eq((b[i] || [])[c] ?? '', (a[i] || [])[c] ?? ''))).map((i) => i + 1)
+      const aliases = new Set(M10_VALUES.map((x) => x[0]))
+      const priceOther = diffRows(pBefore, pAfter, 13).filter((r) => !rowsDone.has(r))
+      const marginOther = diffRows(mBefore, mAfter, 29).filter((r) => !aliases.has(String((mAfter[r - 1] || [])[1] ?? '')))
+      const n0 = (x: Cell) => (typeof x === 'number' ? Math.round(x).toLocaleString('ko-KR') : String(x || '-'))
+      const pct = (x: Cell) => (typeof x === 'number' ? `${(x * 100).toFixed(1)}%` : '-')
+      return NextResponse.json({
+        ok: priceOther.length === 0 && marginOther.length === 0 && errorCellsOf(PRICE_TAB, pAfter).length === 0 && errorCellsOf(MARGIN_TAB, mAfter).length === 0,
+        단가DB: res,
+        마진계산: mAfter.map((r, i) => ({ r, i })).filter(({ r, i }) => i > 0 && aliases.has(String(r?.[1] ?? '')))
+          .map(({ r, i }) => `${i + 1} | ${r[0]} | ${r[1]} | ${r[2]} | ${n0(r[3])} | ${n0(r[5])} | ${pct(r[15])}`),
+        단가DB_다른행_변경: priceOther, 마진계산_무관행_변경: marginOther,
+        오류셀: { 단가DB: errorCellsOf(PRICE_TAB, pAfter).length, 마진계산: errorCellsOf(MARGIN_TAB, mAfter).length },
       })
     }
 
