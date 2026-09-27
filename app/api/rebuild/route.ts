@@ -7637,6 +7637,59 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── m9: 스마트스토어 규격(H) 채우기 — H 가 빈 스마트스토어 행만 ──
+    //   · 총량 = 봉수 × 단가DB g (즉석밥 N개 = 180g × N). 3kg 이하 소 / ~10kg 중 / ~20kg 대, 총량 못 구하면 소
+    if (action === 'm9') {
+      const sheets = getSheets()
+      const MLAST = 1 + MARGIN_ROWS
+      const read = async (tab: string, range: string) =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: 'UNFORMATTED_VALUE' }))
+          .data.values || []) as Cell[][]
+      const price = await read(PRICE_TAB, 'A1:M1000')
+      const gOf = new Map(price.slice(1).map((r) => [String(r?.[0] ?? ''), r?.[5]]))
+      const before = await read(MARGIN_TAB, `A1:AC${MLAST}`)
+      const targets: { r: number; alias: string; bong: Cell; tot: number | null; spec: string }[] = []
+      before.forEach((row, i) => {
+        if (i === 0 || String(row?.[0] ?? '') !== '스마트스토어' || String(row?.[7] ?? '') !== '') return
+        const alias = String(row?.[1] ?? '')
+        if (!alias) return
+        const bong = row?.[2] ?? ''
+        const rice = alias.match(/즉석밥\s*(\d+)개/)
+        const g = rice ? 180 * Number(rice[1]) : gOf.get(alias)
+        const tot = typeof g === 'number' && typeof bong === 'number' ? (g * bong) / 1000 : null
+        const spec = tot == null || tot <= 3 ? '소' : tot <= 10 ? '중' : tot <= 20 ? '대' : '없음'
+        targets.push({ r: i + 1, alias, bong, tot, spec })
+      })
+      // 쓰기 직전 B 재확인
+      const live = await read(MARGIN_TAB, `A1:H${MLAST}`)
+      const skipped: string[] = []
+      const ok = targets.filter((t) => {
+        const row = live[t.r - 1] || []
+        if (String(row[1] ?? '') !== t.alias || String(row[7] ?? '') !== '') return skipped.push(`${t.r} B=${row[1]}`), false
+        return true
+      })
+      if (ok.length) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: { valueInputOption: 'RAW', data: ok.map((t) => ({ range: `${quote(MARGIN_TAB)}!H${t.r}`, values: [[t.spec]] })) },
+        })
+      }
+      const after = await read(MARGIN_TAB, `A1:AC${MLAST}`)
+      const eq = (a: Cell, b: Cell) => (typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-6 : String(a ?? '') === String(b ?? ''))
+      const touched = new Set(ok.map((t) => t.r))
+      const others = after.map((_, i) => i + 1).filter((r) => r > 1 && !touched.has(r))
+        .filter((r) => Array.from({ length: 29 }, (_, c) => c).some((c) => !eq((before[r - 1] || [])[c] ?? '', (after[r - 1] || [])[c] ?? '')))
+      const v = (r: number, c: number) => (after[r - 1] || [])[c] ?? ''
+      const n0 = (x: Cell) => (typeof x === 'number' ? Math.round(x).toLocaleString('ko-KR') : String(x || '-'))
+      const pct = (x: Cell) => (typeof x === 'number' ? `${(x * 100).toFixed(1)}%` : '-')
+      return NextResponse.json({
+        ok: others.length === 0 && skipped.length === 0 && errorCellsOf(MARGIN_TAB, after).length === 0,
+        대상: ok.length, 건너뜀: skipped, 다른행_변경: others, 오류셀: errorCellsOf(MARGIN_TAB, after).length,
+        총량_없음_소: ok.filter((t) => t.tot == null).map((t) => `${t.r} ${t.alias}`),
+        행: ok.map((t) => `${t.r} | ${t.alias} | ${t.bong} | ${t.tot == null ? '?' : `${+t.tot.toFixed(2)}kg`} | ${v(t.r, 7)} | ${n0(v(t.r, 3))} | ${v(t.r, 5) === '' ? '원가 없음' : n0(v(t.r, 5))} | ${pct(v(t.r, 15))}`),
+      })
+    }
+
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
   } catch (e: any) {
     console.error('[rebuild] error:', e?.message || e)
