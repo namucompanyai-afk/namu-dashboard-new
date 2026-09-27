@@ -2,7 +2,7 @@ import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
 import { MASTER_SHEET_ID } from '@/lib/sheet-ids';
-import type { MarginCalcRow } from '@/lib/coupang/parsers/marginMaster';
+import type { MarginCalcRow, OnePMarginRow } from '@/lib/coupang/parsers/marginMaster';
 
 /**
  * 쿠팡 마진마스터 — 나무_마스터 '마진계산' 탭 소스 (서비스 계정 · 읽기 전용)
@@ -18,7 +18,8 @@ import type { MarginCalcRow } from '@/lib/coupang/parsers/marginMaster';
  * 1봉kg = 단가DB g ÷ 1000 · 최종채널 = '윙'.
  * 대응 열이 없는 필드는 parseMarginRows 의 빈값 규칙과 같게 채운다.
  *
- * 반환: { ok, marginRows } — 단위는 기존 게시 CSV 라우트 정규화 결과와 동일(수수료율·마진율 소수, BEP 배율).
+ * 반환: { ok, marginRows, onePRows } — marginRows 단위는 기존 게시 CSV 라우트 정규화 결과와 동일(수수료율·마진율 소수, BEP 배율).
+ *       onePRows = '쿠팡 1P' 행 (옵션ID·SKU·별칭·봉수·마진·1봉당 마진·과세·쿠팡 옵션명) — 광고 분석 1P 계산용.
  */
 
 export const runtime = 'nodejs';
@@ -54,12 +55,13 @@ export async function GET(req: Request) {
     const sheets = getSheets();
     const res = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: MASTER_SHEET_ID,
-      ranges: [`${quote(MARGIN_TAB)}!A2:AD`, `${quote(PRICE_TAB)}!A2:F`],
+      ranges: [`${quote(MARGIN_TAB)}!A2:AD`, `${quote(PRICE_TAB)}!A2:J`],
       valueRenderOption: 'UNFORMATTED_VALUE',
     });
     const margin = (res.data.valueRanges?.[0]?.values || []) as Cell[][];
     const price = (res.data.valueRanges?.[1]?.values || []) as Cell[][];
     const gramOf = new Map(price.map((r) => [str(r[0]), num(r[5])]));
+    const taxOf = new Map(price.map((r) => [str(r[0]), str(r[9])]));
 
     const marginRows: MarginCalcRow[] = [];
     for (const r of margin) {
@@ -111,7 +113,33 @@ export async function GET(req: Request) {
         bepRoas: Number.isFinite(netProfit) && netProfit > 0 ? actualPrice / netProfit : null,
       });
     }
-    return NextResponse.json({ ok: true, marginRows });
+    // ── 쿠팡 1P 행 ──
+    const oneP: OnePMarginRow[] = [];
+    for (const r of margin) {
+      if (str(r[0]) !== '쿠팡 1P') continue;
+      const alias = str(r[1]);
+      const sku = str(r[24]);
+      if (!alias && !sku) continue;
+      const bagCount = num(r[2]) || 1;
+      const m = Number.isFinite(num(r[14])) && str(r[14]) !== '' ? num(r[14]) : null;
+      oneP.push({
+        optionId: /^\d+$/.test(str(r[23])) ? str(r[23]) : '',
+        sku,
+        alias,
+        bagCount,
+        margin: m,
+        perBagMargin: null,
+        taxable: taxOf.get(alias) === '과세',
+        coupangOptionName: str(r[29]),
+      });
+    }
+    // 1봉당 마진: 같은 SKU 의 1봉 행 O 우선, 없으면 O ÷ 봉수
+    const oneBagBySku = new Map<string, number>();
+    for (const x of oneP) if (x.bagCount === 1 && x.margin != null && x.sku) oneBagBySku.set(x.sku, x.margin);
+    for (const x of oneP) {
+      x.perBagMargin = (x.sku && oneBagBySku.has(x.sku)) ? oneBagBySku.get(x.sku)! : x.margin != null ? x.margin / x.bagCount : null;
+    }
+    return NextResponse.json({ ok: true, marginRows, onePRows: oneP });
   } catch (err: any) {
     return NextResponse.json({ ok: false, message: String(err), marginRows: [] }, { status: 500 });
   }

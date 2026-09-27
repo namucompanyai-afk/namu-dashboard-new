@@ -56,6 +56,7 @@ const COLUMN_ALIASES = {
   indirectRevenue14d:['간접전환매출액(14일)', '간접전환매출액14일'],
   convProductName:  ['광고전환매출발생상품명', '전환매출발생상품명', '전환상품명'],
   adProductName:    ['광고집행상품명', '집행상품명'],
+  saleMethod:       ['판매방식'],
 } as const
 
 type AliasKey = keyof typeof COLUMN_ALIASES
@@ -86,6 +87,8 @@ export interface AdCampaignRow {
   /** 광고전환매출발생 상품명 (없으면 광고집행 상품명). 포맷: "상품명,옵션,옵션,..." */
   convProductName: string
   adProductName: string
+  /** 판매방식 ('3P' | 'Retail') — Retail = 쿠팡 1P(로켓 직매입) 광고. 옛 파일·저장본엔 없을 수 있음 */
+  saleMethod?: string
 }
 
 export interface AdCampaignParseResult {
@@ -246,6 +249,7 @@ export function parseAdCampaign(
       indirectRevenue14d: toNum(r[cols.indirectRevenue14d]),
       convProductName: toStr(r[cols.convProductName]),
       adProductName: toStr(r[cols.adProductName]),
+      saleMethod: cols.saleMethod !== -1 ? toStr(r[cols.saleMethod]) : '',
     })
   }
 

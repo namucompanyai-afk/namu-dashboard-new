@@ -10,6 +10,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { getDefaultConstants } from '@/lib/coupang/costBook'
+import { build1PView, isRetailRow, type OnePAgg, type OnePView } from '@/lib/coupang/onePAnalysis'
 import * as XLSX from 'xlsx'
 import { useConfirm } from '@/components/ui/useConfirm'
 import {
@@ -272,7 +273,7 @@ export default function AdAnalysisPage() {
             const json = await res.json()
             if (!cancelled && json?.ok && Array.isArray(json.marginRows) && json.marginRows.length > 0) {
               setMarginMaster(
-                { costBook: [], marginRows: json.marginRows, constants: getDefaultConstants() },
+                { costBook: [], marginRows: json.marginRows, constants: getDefaultConstants(), onePRows: json.onePRows || [] },
                 {
                   fileName: '나무_마스터 마진계산(쿠팡 3P)',
                   uploadedAt: new Date().toISOString(),
@@ -368,16 +369,24 @@ export default function AdAnalysisPage() {
   // BEP 판정/추천입찰가를 숨길지 — 마진 없고 수기 BEP도 하나도 없을 때만 숨김
   const hideBep = marginOff && manualBepMap.size === 0
 
+  // 채널 분리 — 3P 는 기존 계산 그대로(rows3P), 쿠팡 1P(판매방식 Retail)는 별도 1P 계산
+  const rows3P = useMemo(() => (sourceRows ? sourceRows.filter((r) => !isRetailRow(r)) : null), [sourceRows])
+  const onePView: OnePView = useMemo(
+    () => build1PView(sourceRows, (marginMaster as any)?.onePRows, (marginMaster as any)?.marginRows),
+    [sourceRows, marginMaster],
+  )
+  const [chFilter, setChFilter] = useState<'all' | '3P' | '1P'>('all')
+
   const view = useMemo(
-    () => buildAdAnalysisView(sourceRows, marginMaster as any, marginOff ? manualBepMap : undefined),
-    [sourceRows, marginMaster, marginOff, manualBepMap],
+    () => buildAdAnalysisView(rows3P, marginMaster as any, marginOff ? manualBepMap : undefined),
+    [rows3P, marginMaster, marginOff, manualBepMap],
   )
 
   // 옵션 목록(수기 BEP 입력용) — raw 를 광고집행 옵션ID 로 group
   const optionList = useMemo(() => {
-    if (!marginOff || !sourceRows) return [] as { adOptionId: string; name: string; clicks: number; adCostVat: number; revenue: number }[]
+    if (!marginOff || !rows3P) return [] as { adOptionId: string; name: string; clicks: number; adCostVat: number; revenue: number }[]
     const map = new Map<string, { names: Map<string, number>; clicks: number; adCostRaw: number; revenue: number }>()
-    for (const r of sourceRows) {
+    for (const r of rows3P) {
       const id = String(r.adOptionId || '').trim()
       if (!id) continue
       let e = map.get(id)
@@ -393,7 +402,7 @@ export default function AdAnalysisPage() {
       for (const [nm, n] of e.names) if (n > bestN) { best = nm; bestN = n }
       return { adOptionId, name: best || adOptionId, clicks: e.clicks, adCostVat: e.adCostRaw * 1.1, revenue: e.revenue }
     }).sort((a, b) => b.adCostVat - a.adCostVat)
-  }, [marginOff, sourceRows])
+  }, [marginOff, rows3P])
 
   const marginOffBanner = marginOff ? (
     <div style={{ ...noticeBoxOrange, fontSize: 13 }}>
@@ -571,6 +580,9 @@ export default function AdAnalysisPage() {
           ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
         </div>
       )}
+      <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
+      {chFilter !== '3P' && onePView.loaded && <OnePSection view={onePView} />}
+      {chFilter !== '1P' && (<>
       {marginOffBanner}
       {optionBepNode}
       <KpiSection view={view} hideBep={hideBep} />
@@ -598,6 +610,94 @@ export default function AdAnalysisPage() {
         openCampaign.type === 'manual'
           ? <ManualSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
           : <AiSection campaign={openCampaign} master={marginMaster as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+      )}
+      </>)}
+    </div>
+  )
+}
+
+// ── 채널 필터 (전체 / 3P / 1P) + 배지 ─────────────────────────
+function SaleChBadge({ ch }: { ch: '3P' | '1P' }) {
+  const s: React.CSSProperties = ch === '1P'
+    ? { background: '#EDE9FE', color: '#5B21B6', border: '1px solid #C4B5FD' }
+    : { background: '#E0F2FE', color: '#075985', border: '1px solid #7DD3FC' }
+  return <span style={{ ...s, fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '1px 5px', marginRight: 6, verticalAlign: 'middle' }}>{ch}</span>
+}
+
+function ChannelFilterBar({ value, onChange, has1P }: { value: 'all' | '3P' | '1P'; onChange: (v: 'all' | '3P' | '1P') => void; has1P: boolean }) {
+  const opts: { v: 'all' | '3P' | '1P'; label: string }[] = [{ v: 'all', label: '전체' }, { v: '3P', label: '3P (윙)' }, { v: '1P', label: '1P (로켓 직매입)' }]
+  return (
+    <div style={{ display: 'flex', gap: 6, margin: '12px 0' }}>
+      {opts.map((o) => (
+        <button key={o.v} onClick={() => onChange(o.v)} disabled={o.v === '1P' && !has1P}
+          style={{ padding: '6px 14px', borderRadius: 999, fontSize: 13, cursor: 'pointer', border: '1px solid ' + (value === o.v ? '#1F2937' : '#CBD5E1'),
+            background: value === o.v ? '#1F2937' : '#fff', color: value === o.v ? '#fff' : '#334155', opacity: o.v === '1P' && !has1P ? 0.4 : 1 }}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ── 1P (판매방식 Retail) 섹션 — 광고센터 매출 기준, 판매수 = 봉 ─────────
+function OnePSection({ view }: { view: OnePView }) {
+  const won = (n: number) => Math.round(n).toLocaleString('ko-KR')
+  const pct = (n: number | null) => (n == null ? '—' : `${Math.round(n).toLocaleString('ko-KR')}%`)
+  const verdictColor: Record<string, string> = { 강화: '#047857', 흑자: '#059669', 적자: '#DC2626', '판매 없음': '#B45309', '마진 없음': '#64748B' }
+  const th: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', fontSize: 12, color: '#64748B', borderBottom: '1px solid #E2E8F0', whiteSpace: 'nowrap' }
+  const td: React.CSSProperties = { textAlign: 'right', padding: '6px 8px', fontSize: 13, borderBottom: '1px solid #F1F5F9', whiteSpace: 'nowrap' }
+  const table = (title: string, rows: OnePAgg[], nameKey: 'campaignName' | 'label') => (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{title}</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>{nameKey === 'campaignName' ? '캠페인' : '광고 옵션'}</th>
+            <th style={th}>광고비(부가포함)</th><th style={th}>광고 매출</th><th style={th} title="광고센터 기준 = 매출 ÷ 광고비(VAT 별도)">ROAS</th>
+            <th style={th} title="쿠팡 입력용 목표 ROAS = 1봉 소비자가 ÷ (1봉당 마진 ÷ 1.1), 과세는 ÷ 1봉당 마진">필수 ROAS</th>
+            <th style={th}>판매 봉수</th><th style={th}>광고 이익(원)</th><th style={th}>판정</th>
+          </tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td style={{ ...td, textAlign: 'left', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' }} title={r[nameKey] || r.label}>
+                  <SaleChBadge ch="1P" />{r[nameKey] || r.label}
+                </td>
+                <td style={td}>{won(r.adCostVat)}</td>
+                <td style={td}>{won(r.revenue)}</td>
+                <td style={td}>{pct(r.roasPct)}</td>
+                <td style={td}>{pct(r.requiredRoasPct)}</td>
+                <td style={td}>{won(r.sold)}</td>
+                <td style={{ ...td, color: r.profit >= 0 ? '#047857' : '#DC2626', fontWeight: 600 }}>{won(r.profit)}</td>
+                <td style={{ ...td, color: verdictColor[r.verdict] || '#334155', fontWeight: 600 }}>{r.verdict}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+  const t = view.totals
+  return (
+    <div style={{ border: '1px solid #DDD6FE', background: '#FAF5FF', borderRadius: 10, padding: 16, margin: '12px 0' }}>
+      <div style={{ fontWeight: 800, fontSize: 16 }}><SaleChBadge ch="1P" />쿠팡 1P 광고 (로켓 직매입)</div>
+      <div style={{ fontSize: 12, color: '#6B7280', marginTop: 4 }}>
+        광고 매출 = 광고센터 전환매출(소비자가) · 판매수 = 봉 · 광고 이익 = 판매 봉수 × 1봉당 마진 − 광고비(면세 ×1.1 · 과세 ×1.0) · 필수 ROAS = 쿠팡 입력용 목표 ROAS
+      </div>
+      {!view.hasMargin && <div style={{ ...errorBox }}>1P 마진 데이터가 없습니다 (나무_마스터 연결 실패 또는 옛 저장본) — 이익·필수 ROAS 는 계산되지 않습니다.</div>}
+      <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginTop: 10, fontSize: 13 }}>
+        <div>광고비(부가포함) <b>{won(t.adCostVat)}</b></div>
+        <div>광고 매출 <b>{won(t.revenue)}</b></div>
+        <div>ROAS(광고센터) <b>{pct(t.roasPct)}</b></div>
+        <div>판매 봉수 <b>{won(t.sold)}</b></div>
+        <div>광고 이익 <b style={{ color: t.profit >= 0 ? '#047857' : '#DC2626' }}>{won(t.profit)}</b></div>
+      </div>
+      {table('캠페인', view.campaigns, 'campaignName')}
+      {table('광고 옵션', view.options, 'label')}
+      {view.unlinked.length > 0 && (
+        <div style={{ marginTop: 12, fontSize: 12, color: '#92400E' }}>
+          1P 미연결 {view.unlinked.length}개 (광고비 {won(view.unlinked.reduce((s, u) => s + u.adCostVat, 0))}원): {view.unlinked.map((u) => `${u.name} (${won(u.adCostVat)})`).join(' · ')}
+        </div>
       )}
     </div>
   )
@@ -1981,7 +2081,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
           >
             {isExpanded ? '▾' : '▸'}
           </span>
-          <strong>{c.campaignName}</strong>
+          <strong><SaleChBadge ch="3P" />{c.campaignName}</strong>
         </td>
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>
@@ -2045,7 +2145,7 @@ function OptionInlineRow({ o, isSelected, onClick }: { o: OptionDiag; isSelected
         <span className="aa-option-prefix">└─</span>
         <span className="aa-option-text">
           {o.alias && <span className="aa-option-alias">{o.alias}</span>}
-          <span className="aa-option-name">{o.optionName}</span>
+          <span className="aa-option-name"><SaleChBadge ch="3P" />{o.optionName}</span>
           {!o.matched && <span style={{ marginLeft: 4, fontSize: 10, color: '#92400E' }}>⚠</span>}
           <ChannelBadge raw={o.channel} />
         </span>

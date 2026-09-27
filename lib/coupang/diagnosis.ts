@@ -38,6 +38,7 @@
  */
 
 import { getCostBook, getActualPrice, getMarginRow, getOptionChannel, getCostMaster } from './costBook'
+import { isRetailRow } from './onePAnalysis'
 import { splitRowRevenue, buildActualPriceMapById, buildExposureMapByOptionId } from './adAnalysis'
 import type { AdCampaignRow } from './parsers/adCampaign'
 import type { MarginCalcRow } from './parsers/marginMaster'
@@ -720,6 +721,8 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
         for (const optId of unmatchedOpts) {
           const adExec = adExecByOpt.get(optId)
           if (!adExec || adExec.cost <= 0) continue
+          // 쿠팡 1P(판매방식 Retail) 광고 옵션은 누수가 아니라 1P 광고 — 목록에서 제외 (합계는 그대로)
+          if (adRows.some((r) => r.adOptionId === optId && isRetailRow(r as AdCampaignRow))) continue
           const campaigns = new Set<string>()
           let rawProductName = ''
           for (const r of adRows) {

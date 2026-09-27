@@ -84,7 +84,7 @@ export default function DiagnosisPage() {
           const csvJson = await csvRes.json()
           if (csvJson?.ok && Array.isArray(csvJson.marginRows) && csvJson.marginRows.length > 0) {
             setMarginMaster(
-              { costBook: [], marginRows: csvJson.marginRows, constants: getDefaultConstants() },
+              { costBook: [], marginRows: csvJson.marginRows, constants: getDefaultConstants(), onePRows: csvJson.onePRows || [] },
               {
                 fileName: '나무_마스터 마진계산(쿠팡 3P)',
                 uploadedAt: new Date().toISOString(),

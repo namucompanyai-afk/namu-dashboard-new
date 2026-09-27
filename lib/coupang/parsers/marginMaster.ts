@@ -166,6 +166,22 @@ export interface CostMaster {
   costBook: CostBookRow[]
   marginRows: MarginCalcRow[]
   constants: CostTableConstants
+  /** 쿠팡 1P(로켓 직매입) 마진 — 나무_마스터 마진계산 '쿠팡 1P' 행. 옛 저장본엔 없음 */
+  onePRows?: OnePMarginRow[]
+}
+
+/** 쿠팡 1P 마진 행 (나무_마스터 마진계산). 1봉당 마진은 같은 SKU 의 1봉 행 기준 */
+export interface OnePMarginRow {
+  optionId: string
+  sku: string
+  alias: string
+  bagCount: number
+  /** O 마진 (납품가 × 봉수 기준) */
+  margin: number | null
+  /** 1봉당 마진 = 같은 SKU 1봉 행의 O (없으면 O ÷ 봉수) */
+  perBagMargin: number | null
+  taxable: boolean
+  coupangOptionName: string
 }
 
 export interface MarginMasterParseResult {
