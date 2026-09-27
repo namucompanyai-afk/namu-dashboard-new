@@ -7890,6 +7890,85 @@ export async function GET(req: Request) {
       })
     }
 
+    // ── m13: 상품마스터 과세 구분 → 단가DB 과세여부 수식 · 발주매핑 526행 발송 거래처 · 단가DB C1 '공급사' ──
+    if (action === 'm13') {
+      const sheets = getSheets()
+      const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range = 'A1:Z1000') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(tab)}!${range}`, valueRenderOption: opt }))
+          .data.values || []) as Cell[][]
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title))' })
+      const idOf = (t: string) => (meta.data.sheets || []).find((x) => x.properties?.title === t)?.properties?.sheetId as number
+      const TABS13 = [M5_PM_TAB, MAP_TAB, PRICE_TAB]
+      const before: Record<string, { fx: Cell[][]; v: Cell[][] }> = {}
+      for (const t of TABS13) before[t] = { fx: await read(t, 'FORMULA'), v: await read(t, 'UNFORMATTED_VALUE') }
+      const notes: string[] = []
+      // [1] 상품마스터 과세 구분 열
+      const pmHdr = before[M5_PM_TAB].fx[0] || []
+      const cTax = pmHdr.findIndex((h) => String(h ?? '').trim() === '과세 구분')
+      const cAlias = pmHdr.findIndex((h) => String(h ?? '').trim() === '별칭')
+      if (cTax < 0 || cAlias < 0) throw new Error('상품마스터 헤더(별칭·과세 구분) 없음')
+      const L = colName(cTax), A = colName(cAlias)
+      const taxRows: number[] = []
+      const writesFx: { range: string; values: Cell[][] }[] = []
+      before[M5_PM_TAB].fx.forEach((r, i) => {
+        if (i === 0 || String(r?.[cAlias] ?? '').trim() === '') return
+        const row = i + 1
+        taxRows.push(row)
+        writesFx.push({ range: `${quote(M5_PM_TAB)}!${L}${row}`, values: [[`=IF($${A}${row}="","",IFERROR(VLOOKUP($${A}${row},'${PRICE_TAB}'!$A:$J,10,FALSE),""))`]] })
+      })
+      // [2] 발주매핑 526행
+      const writesRaw: { range: string; values: Cell[][] }[] = []
+      const r526 = before[MAP_TAB].v[525] || []
+      if (String(r526[2] ?? '') === '[쌀쌀쌀] 캐나다산 렌틸콩 2kg' && String(r526[4] ?? '') === '진도팜') {
+        writesRaw.push({ range: `${quote(MAP_TAB)}!E526`, values: [['상훈 택배']] })
+      } else notes.push(`발주매핑 526행 건너뜀: C=${r526[2]} E=${r526[4]}`)
+      // [3] 단가DB C1
+      if (String(before[PRICE_TAB].v[0]?.[2] ?? '') === '발송거래처') writesRaw.push({ range: `${quote(PRICE_TAB)}!C1`, values: [['공급사']] })
+      else notes.push(`단가DB C1 건너뜀: ${before[PRICE_TAB].v[0]?.[2]}`)
+
+      if (writesFx.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'USER_ENTERED', data: writesFx } })
+      if (writesRaw.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: MASTER_SHEET_ID, requestBody: { valueInputOption: 'RAW', data: writesRaw } })
+      if (taxRows.length) {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: MASTER_SHEET_ID,
+          requestBody: {
+            requests: taxRows.map((r) => ({
+              repeatCell: {
+                range: { sheetId: idOf(M5_PM_TAB), startRowIndex: r - 1, endRowIndex: r, startColumnIndex: cTax, endColumnIndex: cTax + 1 },
+                cell: { userEnteredFormat: { backgroundColor: hex(AUTO_GRAY) } },
+                fields: 'userEnteredFormat.backgroundColor',
+              },
+            })),
+          },
+        })
+      }
+      // 검증: 값 전후 (허용 변경: 발주매핑 E526, 단가DB C1) · 수식 변경은 상품마스터 과세 구분 칸만
+      const allowed = new Set([`${MAP_TAB}!E526`, `${PRICE_TAB}!C1`])
+      const eq = (x: Cell, y: Cell) => (typeof x === 'number' && typeof y === 'number' ? Math.abs(x - y) < 1e-6 : String(x ?? '') === String(y ?? ''))
+      const valDiff: string[] = []
+      const fxDiff: string[] = []
+      let errs = 0
+      for (const t of TABS13) {
+        const af = await read(t, 'FORMULA'), av = await read(t, 'UNFORMATTED_VALUE')
+        errs += errorCellsOf(t, av).length
+        const n = Math.max(av.length, before[t].v.length)
+        for (let i = 0; i < n; i++) {
+          const w = Math.max((av[i] || []).length, (before[t].v[i] || []).length)
+          for (let c = 0; c < w; c++) {
+            const k = `${t}!${colName(c)}${i + 1}`
+            if (!eq((before[t].v[i] || [])[c] ?? '', (av[i] || [])[c] ?? '') && !allowed.has(k)) valDiff.push(k)
+            const isTaxCell = t === M5_PM_TAB && c === cTax && taxRows.includes(i + 1)
+            if (!eq((before[t].fx[i] || [])[c] ?? '', (af[i] || [])[c] ?? '') && !allowed.has(k) && !isTaxCell) fxDiff.push(k)
+          }
+        }
+      }
+      return NextResponse.json({
+        ok: valDiff.length === 0 && fxDiff.length === 0 && errs === 0 && notes.length === 0,
+        과세구분_수식행: taxRows.length, 기타쓰기: writesRaw.map((w) => w.range), 건너뜀: notes,
+        값변경_허용외: valDiff.slice(0, 20), 수식변경_허용외: fxDiff.slice(0, 20), 오류셀: errs,
+      })
+    }
+
     return NextResponse.json({ ok: false, error: `알 수 없는 action: ${action}` }, { status: 400 })
   } catch (e: any) {
     console.error('[rebuild] error:', e?.message || e)
