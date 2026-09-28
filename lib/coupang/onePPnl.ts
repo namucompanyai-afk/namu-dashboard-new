@@ -6,6 +6,8 @@
  *   - 1P 마진 합 = Σ 입고 봉수 × 1봉 마진 (나무_마스터 1P 1봉 행, SKU 기준)
  *   - 밀크런 운송비: 정산(밀크런번호→금액) ↔ 접수 내역(밀크런번호→발주번호) ↔ 발주서(발주번호→SKU·입고수량)
  *     밀크런 1건 금액을 그 트럭 발주들의 입고 봉수 비율로 SKU 에 배분. 선택 월 발주에 연결 안 되면 '미배분'
+ *     운송비 연결 안 된 선택 월 발주는 이번 달 평균 봉당 운송비로 '추정' (정산 파일을 다시 올리면 실제 값으로 바뀜)
+ *     접수 내역이 없으면: 정산 파일 픽업일이 선택 월인 금액 합계를 그대로 사용 (상품별 배분 없음)
  *   - 1P 광고비 = 광고 분석 1P 결과의 이익 계산용 광고비 (면세 ×1.1 · 과세 ×1.0)
  *   - 1P 순이익 = 1P 마진 합 − 밀크런 운송비(배분분) − 1P 광고비
  *
@@ -43,8 +45,14 @@ export interface OnePPnl {
     unknownSku: { sku: string; name: string; bags: number; revenue: number }[]
   } | null
   milkrun: {
+    /** list = 접수 내역으로 발주별 배분 · settle = 정산 픽업일 기준 합계만 */
+    mode: 'list' | 'settle'
     total: number
+    /** 확정 운송비 (list: 배분분 · settle: 픽업일 선택 월 합계) */
     allocated: number
+    /** 운송비 연결 안 된 선택 월 발주 — 평균 봉당 운송비 × 입고 봉수 */
+    estimated: number
+    estimatedBags: number
     unallocated: number
     unallocatedList: { milkrunNo: string; pickupDate: string; center: string; amount: number; reason: string }[]
   } | null
@@ -147,13 +155,23 @@ export function computeOnePPnl(args: {
     }
   }
 
-  // ── 밀크런 운송비 배분 ──
+  // ── 밀크런 운송비 ──
   let milkrun: OnePPnl['milkrun'] = null
-  if (args.settle && args.list && inbound) {
+  if (args.settle && inbound && !args.list) {
+    const total = args.settle.reduce((a, s) => a + s.amount, 0)
+    const inMonth = args.settle.filter((s) => monthOf(s.pickupDate) === args.month)
+    const allocated = inMonth.reduce((a, s) => a + s.amount, 0)
+    milkrun = {
+      mode: 'settle', total, allocated, estimated: 0, estimatedBags: 0, unallocated: total - allocated,
+      unallocatedList: args.settle.filter((s) => monthOf(s.pickupDate) !== args.month).map((s) => ({ ...s, reason: '픽업일이 선택 월 아님' })),
+    }
+  } else if (args.settle && args.list && inbound) {
     const listBy = new Map(args.list.filter((l) => l.status === '정상').map((l) => [l.milkrunNo, l]))
     const cancelled = new Set(args.list.filter((l) => l.status !== '정상').map((l) => l.milkrunNo))
     const skuAgg = new Map(inbound.bySku.map((x) => [x.sku, x]))
     let allocated = 0
+    let allocatedBags = 0
+    const linkedPo = new Set<string>()
     const unalloc: NonNullable<OnePPnl['milkrun']>['unallocatedList'] = []
     for (const s of args.settle) {
       const l = listBy.get(s.milkrunNo)
@@ -166,21 +184,36 @@ export function computeOnePPnl(args: {
         unalloc.push({ ...s, reason: !l.poNumbers.length ? '발주번호 없음' : anyPo ? '선택 월 입고 발주 아님 또는 입고 0' : '발주서 파일에 없음' })
         continue
       }
+      for (const po of l.poNumbers) if (poBags.has(po)) linkedPo.add(po)
       for (const [sku, b] of skuBags) {
         const a = skuAgg.get(sku)
         if (a) a.milkrun += (s.amount * b) / total
       }
       allocated += s.amount
+      allocatedBags += total
+    }
+    // 운송비 연결 안 된 선택 월 발주 → 이번 달 평균 봉당 운송비로 추정
+    const perBag = allocatedBags > 0 ? allocated / allocatedBags : 0
+    let estimated = 0
+    let estimatedBags = 0
+    for (const [po, m] of poBags) {
+      if (linkedPo.has(po)) continue
+      for (const [sku, b] of m) {
+        estimatedBags += b
+        estimated += b * perBag
+        const a = skuAgg.get(sku)
+        if (a) a.milkrun += b * perBag
+      }
     }
     const total = args.settle.reduce((a, s) => a + s.amount, 0)
-    milkrun = { total, allocated, unallocated: total - allocated, unallocatedList: unalloc }
+    milkrun = { mode: 'list', total, allocated, estimated, estimatedBags, unallocated: total - allocated, unallocatedList: unalloc }
   }
 
   // ── 광고비 (이익 계산용: 면세 ×1.1 · 과세 ×1.0) ──
   const adCost = args.adView?.loaded ? args.adView.campaigns.reduce((s, c) => s + c.adCostForProfit, 0) : null
   const adRevenue = args.adView?.loaded ? args.adView.totals.revenue : null
 
-  const netProfit = inbound && milkrun && adCost != null ? inbound.margin - milkrun.allocated - adCost : null
+  const netProfit = inbound && milkrun && adCost != null ? inbound.margin - milkrun.allocated - milkrun.estimated - adCost : null
 
   // ── 판매 기준 ──
   let sales: OnePPnl['sales'] = null

@@ -24,18 +24,26 @@ import type { OnePMarginRow, MarginCalcRow } from '@/lib/coupang/parsers/marginM
 type Kind = 'ad' | 'seller' | 'onep_sales' | 'po' | 'mr_settle' | 'mr_list'
 type Saved = { data: any; fileName: string | null; savedAt: string | null } | null
 
-const KINDS: { kind: Kind; label: string; hint: string; accept: string; multiple?: boolean }[] = [
+const KINDS: { kind: Kind; label: string; hint: string; accept: string; multiple?: boolean; optional?: boolean }[] = [
   { kind: 'ad', label: '광고', hint: 'pa_total_campaign .xlsx', accept: '.xlsx' },
   { kind: 'seller', label: '3P 판매', hint: 'SELLER_INSIGHTS .xlsx', accept: '.xlsx' },
   { kind: 'onep_sales', label: '1P 판매', hint: '로켓 판매 .csv', accept: '.csv' },
   { kind: 'po', label: '1P 발주서', hint: '발주서리스트 .zip / 여러 .xlsx', accept: '.zip,.xlsx', multiple: true },
   { kind: 'mr_settle', label: '밀크런 정산', hint: 'milkrun_sales .xls', accept: '.xls,.html,.htm' },
-  { kind: 'mr_list', label: '밀크런 접수 내역', hint: 'milkrun_list .xls', accept: '.xls,.html,.htm' },
+  { kind: 'mr_list', label: '밀크런 접수 내역', hint: 'milkrun_list .xls', accept: '.xls,.html,.htm', optional: true },
 ]
 
 const thisMonth = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 7)
 const won = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '—' : `${Math.round(n).toLocaleString('ko-KR')}원`)
 const man = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '—' : `${(n / 10000).toLocaleString('ko-KR', { maximumFractionDigits: 0 })}만`)
+const errMsg = (e: unknown) =>
+  e instanceof Error ? e.message : e && typeof e === 'object' ? ((e as any).message || JSON.stringify(e)) : String(e)
+const rowCountOf = (d: any): number | null => (Array.isArray(d?.rows) ? d.rows.length : Array.isArray(d?.orders) ? d.orders.length : null)
+const stamp = (iso: string | null) => {
+  if (!iso) return ''
+  const d = new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString()
+  return `${d.slice(5, 10)} ${d.slice(11, 16)}`
+}
 const pct = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '—' : `${(n * 100).toFixed(1)}%`)
 
 /** 광고 행 → 1P 계산에 필요한 필드만 합친 요약 (캠페인·광고옵션·전환옵션·판매방식 단위) */
@@ -64,6 +72,8 @@ export default function CoupangPnlPanel(props: {
   summary3P: any | null
   storeAdRows: AdCampaignRow[]
   storeHasSeller: boolean
+  /** 수익 진단 저장소의 3P 판매 행 — "이 데이터로 저장" 용 */
+  storeSellerRows?: any[]
   onePRows?: OnePMarginRow[]
   marginRows?: MarginCalcRow[]
   onAd: (rows: AdCampaignRow[], meta: any, period: any) => void
@@ -71,6 +81,9 @@ export default function CoupangPnlPanel(props: {
 }) {
   const [month, setMonth] = useState(thisMonth())
   const [saved, setSaved] = useState<Record<Kind, Saved>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+  // 올렸지만 월 저장 못 한 파싱 결과 (저장 실패해도 계산엔 사용) · 칸별 오류 문장
+  const [pending, setPending] = useState<Record<Kind, { data: any; fileName: string } | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+  const [errors, setErrors] = useState<Record<Kind, string | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
   const [busy, setBusy] = useState<Kind | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
 
@@ -88,6 +101,8 @@ export default function CoupangPnlPanel(props: {
       }))
       if (cancelled) return
       setSaved(next)
+      setPending({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+      setErrors({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
       // 3P 판매 저장본은 수익 진단 저장소가 비어 있을 때만 주입 (기존 흐름 우선)
       if (next.seller?.data?.rows?.length && !props.storeHasSeller) {
         props.onSeller(next.seller.data.rows, { fileName: next.seller.fileName || '저장본', uploadedAt: next.seller.savedAt, rowCount: next.seller.data.rows.length })
@@ -97,19 +112,45 @@ export default function CoupangPnlPanel(props: {
   }, [month]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async (kind: Kind, data: any, fileName: string) => {
-    const res = await fetch('/api/coupang-master', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: `pnl_${kind}_${month}`, data, fileName }),
-    })
-    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || `저장 실패 (${res.status})`)
+    setPending((p) => ({ ...p, [kind]: { data, fileName } }))
+    let res: Response
+    try {
+      res = await fetch('/api/coupang-master', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: `pnl_${kind}_${month}`, data, fileName }),
+      })
+    } catch (e) {
+      throw new Error(`월 저장 실패 — 서버 연결 안 됨 (${errMsg(e)})`)
+    }
+    if (!res.ok) {
+      const j = await res.json().catch(() => null)
+      const why = j?.error == null ? '' : typeof j.error === 'string' ? j.error : errMsg(j.error)
+      throw new Error(`월 저장 실패 (${res.status})${why ? ` — ${why}` : ''}`)
+    }
     setSaved((s) => ({ ...s, [kind]: { data, fileName, savedAt: new Date().toISOString() } }))
+    setPending((p) => ({ ...p, [kind]: null }))
   }
-
+  /** 노랑 칸 "이 데이터로 저장" — 올렸지만 저장 못 한 파일 또는 수익 진단 화면 데이터 */
+  const saveCurrent = async (kind: Kind) => {
+    setBusy(kind)
+    setErrors((e) => ({ ...e, [kind]: null }))
+    try {
+      const p = pending[kind]
+      if (p) await save(kind, p.data, p.fileName)
+      else if (kind === 'ad' && props.storeAdRows.length) await save('ad', { rows: compactAdRows(props.storeAdRows) }, '수익 진단 광고 데이터')
+      else if (kind === 'seller' && props.storeSellerRows?.length) await save('seller', { rows: props.storeSellerRows }, '수익 진단 3P 판매 데이터')
+    } catch (e) {
+      setErrors((x) => ({ ...x, [kind]: errMsg(e) }))
+    } finally {
+      setBusy(null)
+    }
+  }
   const onFiles = async (kind: Kind, files: FileList | null) => {
     if (!files || !files.length) return
     setBusy(kind)
     setMsg(null)
+    setErrors((e) => ({ ...e, [kind]: null }))
     try {
       const f = files[0]
       if (kind === 'ad') {
@@ -143,26 +184,27 @@ export default function CoupangPnlPanel(props: {
         if (r.error) throw new Error(r.error)
         await save('mr_list', { rows: r.rows }, f.name)
       }
-    } catch (e: any) {
-      setMsg(`${KINDS.find((k) => k.kind === kind)?.label}: ${e?.message || e}`)
+    } catch (e) {
+      setErrors((x) => ({ ...x, [kind]: errMsg(e) }))
     } finally {
       setBusy(null)
     }
   }
 
-  // ── 계산 ──
-  const adRows: AdCampaignRow[] | null = saved.ad?.data?.rows || (props.storeAdRows.length ? props.storeAdRows : null)
+  // ── 계산 (월 저장본 → 올렸지만 저장 못 한 파일 순) ──
+  const cur = (k: Kind): any => saved[k]?.data ?? pending[k]?.data ?? null
+  const adRows: AdCampaignRow[] | null = cur('ad')?.rows || (props.storeAdRows.length ? props.storeAdRows : null)
   const onePView = useMemo(() => (adRows ? build1PView(adRows, props.onePRows, props.marginRows) : null), [adRows, props.onePRows, props.marginRows])
   const pnl = useMemo(() => computeOnePPnl({
     month,
     onePRows: props.onePRows,
-    orders: (saved.po?.data?.orders as PurchaseOrder[]) || null,
-    settle: (saved.mr_settle?.data?.rows as MilkrunSettleRow[]) || null,
-    list: (saved.mr_list?.data?.rows as MilkrunListRow[]) || null,
+    orders: (cur('po')?.orders as PurchaseOrder[]) || null,
+    settle: (cur('mr_settle')?.rows as MilkrunSettleRow[]) || null,
+    list: (cur('mr_list')?.rows as MilkrunListRow[]) || null,
     adView: onePView,
-    sales: (saved.onep_sales?.data?.rows as OnePSalesRow[]) || null,
+    sales: (cur('onep_sales')?.rows as OnePSalesRow[]) || null,
     extraNames: (adRows || []).flatMap((r) => [{ optionId: r.convOptionId, name: r.convProductName }, { optionId: r.adOptionId, name: r.adProductName }]),
-  }), [month, props.onePRows, saved, onePView, adRows])
+  }), [month, props.onePRows, saved, pending, onePView, adRows]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const s3 = props.summary3P
   const net3P: number | null = s3 ? s3.totalNetProfit : null
@@ -174,9 +216,8 @@ export default function CoupangPnlPanel(props: {
 
   const need1P: string[] = []
   if (!props.onePRows?.length) need1P.push('1P 마진(나무_마스터)')
-  if (!saved.po) need1P.push('1P 발주서')
-  if (!saved.mr_settle) need1P.push('밀크런 정산')
-  if (!saved.mr_list) need1P.push('밀크런 접수 내역')
+  if (!cur('po')) need1P.push('1P 발주서')
+  if (!cur('mr_settle')) need1P.push('밀크런 정산')
   if (!adRows) need1P.push('광고')
   const net1P = pnl.netProfit
   const total = net3P != null && net1P != null ? net3P + net1P : null
@@ -186,7 +227,7 @@ export default function CoupangPnlPanel(props: {
   const steps = revTotal != null && margin3P != null && pnl.inbound && pnl.milkrun && ad3P != null && pnl.adCost != null ? [
     { label: '매출 합계', value: revTotal, color: '#3B82F6' },
     { label: '원가·포장·배송·수수료', value: -(revTotal - (margin3P + pnl.inbound.margin)), color: '#94A3B8' },
-    { label: '밀크런 운송비', value: -pnl.milkrun.allocated, color: '#F59E0B' },
+    { label: '밀크런 운송비', value: -(pnl.milkrun.allocated + pnl.milkrun.estimated), color: '#F59E0B' },
     { label: '광고비(부가포함)', value: -(ad3P + pnl.adCost), color: '#EF4444' },
     { label: '순이익', value: total ?? 0, color: (total ?? 0) >= 0 ? '#10B981' : '#DC2626' },
   ] : null
@@ -206,19 +247,40 @@ export default function CoupangPnlPanel(props: {
           <span className="text-xs text-gray-400">올린 파일은 이 달 기준으로 저장되고, 다시 열면 자동으로 불러옵니다</span>
         </div>
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-          {KINDS.map(({ kind, label, hint, accept, multiple }) => {
+          {KINDS.map(({ kind, label, hint, accept, multiple, optional }) => {
             const sv = saved[kind]
-            const live = (kind === 'ad' && !sv && props.storeAdRows.length > 0) || (kind === 'seller' && !sv && props.storeHasSeller)
+            const pd = pending[kind]
+            const err = errors[kind]
+            const live = !pd && ((kind === 'ad' && props.storeAdRows.length > 0) || (kind === 'seller' && props.storeHasSeller))
+            // 초록: 월 저장 완료 · 빨강: 실패 · 노랑: 저장 전(올린 파일 또는 다른 화면 데이터) · 회색: 없음
+            const state: 'green' | 'red' | 'yellow' | 'gray' = err ? 'red' : sv && !pd ? 'green' : pd || live ? 'yellow' : 'gray'
+            const box = { green: 'border-green-300 bg-green-50', red: 'border-red-400 bg-red-50', yellow: 'border-amber-300 bg-amber-50', gray: 'border-gray-200 bg-gray-50' }[state]
+            const canSave = !!pd || (kind === 'ad' && props.storeAdRows.length > 0) || (kind === 'seller' && !!props.storeSellerRows?.length)
+            const n = rowCountOf(sv?.data)
             return (
-              <label key={kind} className={`cursor-pointer rounded-lg border px-3 py-2 text-xs ${sv ? 'border-green-300 bg-green-50' : live ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'}`}>
+              <label key={kind} className={`cursor-pointer rounded-lg border px-3 py-2 text-xs ${box}`}>
                 <div className="flex items-center justify-between font-semibold text-gray-800">
-                  <span>{label}</span>
-                  <span>{busy === kind ? '…' : sv ? '✓' : live ? '·' : '＋'}</span>
+                  <span>{label}{optional && <span className="ml-1 font-normal text-gray-400">(선택)</span>}</span>
+                  <span>{busy === kind ? '…' : state === 'green' ? '✓' : state === 'red' ? '!' : state === 'yellow' ? '·' : '＋'}</span>
                 </div>
-                <div className="mt-0.5 truncate text-gray-500" title={sv?.fileName || hint}>
-                  {sv ? `${sv.fileName || ''}` : live ? '진단 데이터 사용 중 (월 저장 전)' : hint}
-                </div>
-                {sv?.savedAt && <div className="text-[10px] text-gray-400">저장 {String(sv.savedAt).slice(0, 10)}</div>}
+                {state === 'green' && sv ? (
+                  <div className="mt-0.5 truncate text-green-800" title={sv.fileName || ''}>
+                    ✓ {sv.fileName || ''}{n != null ? ` · ${n.toLocaleString('ko-KR')}행` : ''}{sv.savedAt ? ` · ${stamp(sv.savedAt)}` : ''}
+                  </div>
+                ) : (
+                  <div className="mt-0.5 truncate text-gray-500" title={pd?.fileName || sv?.fileName || hint}>
+                    {pd ? `${pd.fileName} (월 저장 전)` : live ? '수익 진단 데이터 사용 중 (월 저장 전)' : sv ? sv.fileName : hint}
+                  </div>
+                )}
+                {err && <div className="mt-1 whitespace-normal break-all text-[11px] text-red-700">{err}</div>}
+                {(state === 'yellow' || state === 'red') && canSave && (
+                  <button
+                    type="button"
+                    disabled={busy === kind}
+                    className="mt-1 rounded border border-amber-400 bg-white px-2 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); saveCurrent(kind) }}
+                  >이 데이터로 저장</button>
+                )}
                 <input type="file" accept={accept} multiple={multiple} className="hidden" onChange={(e) => { onFiles(kind, e.target.files); e.currentTarget.value = '' }} />
               </label>
             )
@@ -252,13 +314,21 @@ export default function CoupangPnlPanel(props: {
               ))}
             </div>
           )}
-          {pnl.milkrun && pnl.milkrun.unallocated > 0 && (
+          {pnl.milkrun && (
+            <div className="mt-2 text-[11px] text-gray-600">
+              {pnl.milkrun.mode === 'settle'
+                ? <>밀크런 운송비 {won(pnl.milkrun.allocated)} — 접수 내역 없음: 정산 픽업일 {monthLabel} 합계 (상품별 배분 없음)</>
+                : <>운송비 확정 {won(pnl.milkrun.allocated)} + <span className="text-amber-700">추정 {won(pnl.milkrun.estimated)}</span>
+                  {pnl.milkrun.estimated > 0 && <> (운송비 연결 안 된 발주 {pnl.milkrun.estimatedBags.toLocaleString('ko-KR')}봉 × 이번 달 평균 봉당 운송비 — 정산 파일 다시 올리면 실제 값으로 바뀜)</>}</>}
+            </div>
+          )}
+          {pnl.milkrun && pnl.milkrun.mode === 'list' && pnl.milkrun.unallocated > 0 && (
             <div className="mt-2 text-[11px] text-amber-700">
               밀크런 미배분 {won(pnl.milkrun.unallocated)} (이 달 입고 발주에 연결 안 됨 — 순이익에서 빠짐)
             </div>
           )}
-          {saved.mr_settle?.data?.headerTotal != null && Math.abs(saved.mr_settle.data.headerTotal - (saved.mr_settle.data.total || 0)) > 1 && (
-            <div className="text-[11px] text-amber-700">밀크런 정산 표 합계 {won(saved.mr_settle.data.total)} ≠ 파일 상단 총 금액 {won(saved.mr_settle.data.headerTotal)} (미확정 행 포함 추정)</div>
+          {cur('mr_settle')?.headerTotal != null && Math.abs(cur('mr_settle').headerTotal - (cur('mr_settle').total || 0)) > 1 && (
+            <div className="text-[11px] text-amber-700">밀크런 정산 표 합계 {won(cur('mr_settle').total)} ≠ 파일 상단 총 금액 {won(cur('mr_settle').headerTotal)} (미확정 행 포함 추정)</div>
           )}
           <div className="mt-3 text-[11px] text-gray-400">
             반품·쿠폰 분담·판매장려금 등 정산 차감 전 손익 · 3P = 현재 수익 진단 데이터 · 1P = 입고예정일 {monthLabel} 발주 기준

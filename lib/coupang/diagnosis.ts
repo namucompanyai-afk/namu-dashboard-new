@@ -279,7 +279,9 @@ export interface DiagnosisResult {
 // ─────────────────────────────────────────────────────────────
 
 export function diagnose(input: DiagnosisInput): DiagnosisResult {
-  const { sellerStats, adRows, periodDays } = input
+  const { sellerStats, periodDays } = input
+  // 3P 손익만 — 판매방식 Retail(1P) 광고 행은 제외 (1P 는 onePPnl 에서 따로 계산)
+  const adRows = input.adRows.filter((r) => !isRetailRow(r))
   const sellerPeriodDays = input.sellerPeriodDays ?? 30
   const sellerScale = sellerPeriodDays > 0 ? periodDays / sellerPeriodDays : 1
 

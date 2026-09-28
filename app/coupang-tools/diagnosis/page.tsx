@@ -20,6 +20,7 @@ import { useConfirm } from '@/components/ui/useConfirm'
 import type { ProductDiagnosis, VerdictCode, DiagnosisResult, OptionDiagnosis } from '@/lib/coupang/diagnosis'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
+import { isRetailRow } from '@/lib/coupang/onePAnalysis'
 import CoupangPnlPanel from '@/components/coupang/CoupangPnlPanel'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import MasterDiagnosisView from '@/components/coupang/MasterDiagnosisView'
@@ -660,6 +661,7 @@ export default function DiagnosisPage() {
             summary3P={rawSalesInsight.length > 0 && diagnosisResult ? diagnosisResult.summary : null}
             storeAdRows={rawAdCampaign}
             storeHasSeller={rawSalesInsight.length > 0}
+            storeSellerRows={rawSalesInsight}
             onePRows={(marginMaster as any)?.onePRows}
             marginRows={marginMaster?.marginRows}
             onAd={(rows, meta, period) => { setLoadedSnapshot(null); setAdCampaign(rows, meta, period) }}
@@ -695,7 +697,8 @@ export default function DiagnosisPage() {
           onSalesInsight={async (rows: any, meta: any) => {
             // 광고 매출과 SELLER 매출 비율 즉시 검증
             if (rawAdCampaign.length > 0 && rows.length > 0) {
-              const adRevenue = rawAdCampaign.reduce((sum: number, r: any) => sum + (r.revenue14d || 0), 0)
+              // 1P(Retail) 광고 행은 3P 판매 파일과 비교 대상이 아님
+              const adRevenue = rawAdCampaign.filter((r: any) => !isRetailRow(r)).reduce((sum: number, r: any) => sum + (r.revenue14d || 0), 0)
               const sellerRevenue = rows.reduce((sum: number, r: any) => sum + (r.revenue90d || 0), 0)
               const ratio = sellerRevenue > 0 ? adRevenue / sellerRevenue : 0
 
