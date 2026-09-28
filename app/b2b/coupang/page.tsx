@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 import type { ProductMaster } from '@/lib/b2b/kurly'
 import {
   buildRocketRows,
@@ -137,6 +138,48 @@ export default function CoupangB2BPage() {
   const wikeep = useMemo(() => routed.filter((r) => r.shipFrom === '위킵'), [routed])
   const gompyo = useMemo(() => routed.filter((r) => r.shipFrom === '곰표'), [routed])
   const unknown = useMemo(() => routed.filter((r) => r.shipFrom === '미분류'), [routed])
+  // 상품마스터 미등록 (바코드·쿠팡 SKU ID 둘 다 없음) — 관리자 "상품마스터에 추가" 대상
+  const unregistered = useMemo(() => {
+    const bc = new Set(products.map((p) => p.barcode.replace(/\s+/g, '')).filter(Boolean))
+    const sku = new Set(products.map((p) => p.coupangSkuId.replace(/\s+/g, '')).filter(Boolean))
+    const seen = new Set<string>()
+    const out: { name: string; skuId: string; supply: number; barcode: string }[] = []
+    for (const it of items) {
+      const b = it.barcode.replace(/\s+/g, '')
+      const k = (it.skuId || '').replace(/\s+/g, '')
+      if ((!b && !k) || (b && bc.has(b)) || (k && sku.has(k))) continue
+      const key = b || k
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ name: it.productName, skuId: it.skuId || '', supply: it.unitPrice, barcode: it.barcode })
+    }
+    return out
+  }, [items, products])
+  const [isAdmin, setIsAdmin] = useState(false)
+  useEffect(() => {
+    try { setIsAdmin(JSON.parse(localStorage.getItem('user') || '{}')?.role === '관리자') } catch { /* 무시 */ }
+  }, [])
+  const [pmBusy, setPmBusy] = useState(false)
+  const [pmMsg, setPmMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const addToProductMaster = async () => {
+    setPmBusy(true)
+    setPmMsg(null)
+    try {
+      const res = await fetch('/api/b2b/product-master', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: unregistered }),
+      })
+      const j = await res.json().catch(() => null)
+      if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`)
+      setPmMsg({ ok: true, text: j.added > 0 ? `상품마스터에 ${j.added}개 추가됨 — 별칭·출고지·박스입수 입력 필요` : '추가할 상품 없음 (이미 등록됨)' })
+      await loadSheets()
+    } catch (e: unknown) {
+      setPmMsg({ ok: false, text: '상품마스터 추가 실패: ' + (e instanceof Error ? e.message : String(e)) })
+    } finally {
+      setPmBusy(false)
+    }
+  }
   // 납품가능 미확정 — 확정 전/구버전 발주서 업로드 방어 (있으면 이력 저장 차단)
   const unconfirmed = useMemo(() => routed.filter((r) => r.qtyUnconfirmed), [routed])
   // 발주서 매입가 미확인 — 잘못된 매출을 이력에 남기지 않도록 저장 차단
@@ -461,6 +504,32 @@ export default function CoupangB2BPage() {
       {skipped.length > 0 && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 text-amber-800 p-3 text-sm">
           쿠팡 발주서가 아니어서 건너뛴 파일: {skipped.join(', ')}
+        </div>
+      )}
+      {isAdmin && (unregistered.length > 0 || pmMsg) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+          {unregistered.length > 0 && (
+            <>
+              <span>상품마스터에 없는 상품 {unregistered.length}개 (바코드·쿠팡 SKU ID 기준)</span>
+              <button
+                onClick={addToProductMaster}
+                disabled={pmBusy}
+                className="rounded bg-blue-600 px-3 py-1 text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {pmBusy ? '추가 중…' : `상품마스터에 추가 (${unregistered.length}개)`}
+              </button>
+            </>
+          )}
+          {pmMsg && (
+            <span className={pmMsg.ok ? 'text-blue-900' : 'text-red-700'}>
+              {pmMsg.text}{' '}
+              {pmMsg.ok && (
+                <a href={`https://docs.google.com/spreadsheets/d/${MASTER_SHEET_ID}/edit`} target="_blank" rel="noreferrer" className="underline">
+                  나무_마스터 상품마스터 열기 ↗
+                </a>
+              )}
+            </span>
+          )}
         </div>
       )}
       {unknown.length > 0 && (

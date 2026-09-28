@@ -30,6 +30,7 @@ export type CoupangOrderItem = {
   notDelivered: boolean // 확정 발주서 안의 H=0 행 → 미납품 확정 (차단 아님, 이력 제외)
   displayQty: number // 화면 표시용 — 미확정이면 G, 아니면 H
   barcode: string // 상품마스터 매칭 키
+  skuId: string // 상품 표 B열 상품코드 (= 쿠팡 SKU ID) — 상품마스터 추가·중복 확인용
   centerAddress: string // 발주서 '주소' 셀 (택배수령담당자 괄호부 제거)
   centerPhone: string // 주소 괄호부에서 분리한 택배수령담당자 번호
   sourceFile: string
@@ -156,6 +157,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       notDelivered: false,
       displayQty: confirmQty,
       barcode: textAt(rows, r + 1, 2),
+      skuId: textAt(rows, r, 1),
       centerAddress,
       centerPhone,
       sourceFile,
