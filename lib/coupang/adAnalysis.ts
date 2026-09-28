@@ -22,9 +22,8 @@
  *   - BEP 는 % 단위라 분모에 1/100 곱해 사용 (= BEP/100)
  *   - 클릭 < 20 → null (데이터 부족)
  *
- * BEP CPC (옵션별):
- *   옵션 단가 × 평균 CVR / (옵션 BEP × 1.21)
- *   = 마진 마스터 actualPrice × 캠페인 평균 CVR / (옵션 bepRoas × 1.21)
+ * BEP CPC (옵션별, VAT 별도):
+ *   옵션 단가 × 평균 CVR / 옵션 BEP(광고센터 기준, %/100)
  *   - 단위: BEP 는 % (433 → 곱할 때 4.33 으로 환산)
  *   - 평균 CVR 은 캠페인 전체 (orders14d / clicks)
  */
@@ -698,7 +697,7 @@ export function buildManualReviewRows(
 }
 
 /** 캠페인의 옵션별 BEP CPC 단가 (헤더 우측 표시용).
- *  옵션 단가 × 평균 CVR / (옵션 BEP × 1.21)
+ *  옵션 단가 × 평균 CVR / 옵션 BEP(광고센터 기준)
  *  - 평균 CVR 은 캠페인 전체 (orders/clicks)
  *  - 옵션은 캠페인에 등장한 adOptionId 들
  *  - 작은 옵션(낮은 봉수) 우선 정렬
@@ -760,7 +759,9 @@ export function buildBepCpcForCampaign(
     const price = priceMap.get(optId) ?? (row?.saleChannel === '1P' ? row.actualPrice : undefined)
     const bep = bepMap.get(optId)
     if (!price || !bep || !row) continue
-    const cpc = (price * avgCvr) / ((bep / 100) * 1.1) // BEP 광고센터 기준 (옛 ×1.21 = ×1.1 VAT + ×1.1 환산)
+    // 필수 CPC (VAT 별도) = 판매가 × 전환율 ÷ 필수 ROAS — bep 는 이미 광고센터 기준(광고비 VAT 별도)이라 ×1.1 을 또 나누지 않는다
+    //   (추천 입찰가 = 매출 ÷ (클릭 × BEP × 1.05) 와 같은 기준)
+    const cpc = (price * avgCvr) / (bep / 100)
     if (!Number.isFinite(cpc) || cpc <= 0) continue
     const label = bepCpcLabel(row, optId)
     // 가중치: 광고비 — 0 이면 가중치 1 (단순 평균 효과, 신규 옵션 케이스)
