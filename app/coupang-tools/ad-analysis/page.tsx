@@ -2145,11 +2145,6 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
       return next
     })
 
-  const cpcLabel = cpcEntries.length > 0
-    ? cpcEntries.map((e) => `${e.label} ${Math.round(e.bepPct)}% [${Math.round(e.cpc).toLocaleString('ko-KR')}원]`).join(', ')
-    : '—'
-  const bepRoasLabel = campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'
-
   return (
     <div className="aa-section" style={{ border: '2px solid #FF6B35' }}>
       <div className="aa-section-header" style={{ background: '#FFF7ED' }}>
@@ -2165,14 +2160,7 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
           )}
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          {cpcEntries.length > 0 && (
-            <div style={{ fontSize: 11.5, color: '#64748B' }}>
-              <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}—{' '}
-              <strong className="mono" style={{ color: '#1F2937' }}>{bepRoasLabel}</strong>{' '}/{' '}
-              <span className="mono">{cpcLabel}</span>{' '}
-              <span style={{ color: '#EF4444' }}>(VAT 별도)</span>
-            </div>
-          )}
+          <BepCpcLine campaign={campaign} entries={cpcEntries} rowMap={rowMap} selectedOptionId={selectedOptionId} />
           <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
         </div>
       </div>
@@ -2961,6 +2949,40 @@ function ActionLegend() {
 }
 
 // ── Manual Section ────────────────────────────────────────────
+/** 키워드 분석·입찰가 점검 칸 제목 오른쪽 BEP 줄 — 캠페인 필수 ROAS / 봉수별 필수 ROAS [필수 CPC] (표시만, 계산은 buildBepCpcForCampaign).
+ *  옵션 칩으로 한 옵션만 볼 때는 그 옵션 라벨을 강조 */
+function BepCpcLine({ campaign, entries, rowMap, selectedOptionId }: {
+  campaign: CampaignDiag
+  entries: ReturnType<typeof buildBepCpcForCampaign>
+  rowMap: ReturnType<typeof buildMarginRowMap>
+  selectedOptionId: string | null
+}) {
+  if (!entries.length) return null
+  const sel = selectedOptionId ? rowMap.get(selectedOptionId) : undefined
+  // buildBepCpcForCampaign 과 같은 라벨 규칙
+  const selLabel = sel ? (sel.bagCount > 0 && sel.kgPerBag > 0 ? `${sel.bagCount}봉` : (sel.optionName || selectedOptionId!.slice(-4))) : null
+  return (
+    <div style={{ fontSize: 11.5, color: '#64748B' }}>
+      <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}—{' '}
+      <strong className="mono" style={{ color: '#1F2937' }}>{campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'}</strong>{' '}/{' '}
+      <span className="mono">
+        {entries.map((e, i) => {
+          const hit = selLabel != null && e.label === selLabel
+          return (
+            <span key={e.label}>
+              {i > 0 && ', '}
+              <span style={hit ? { background: '#FEF3C7', color: '#92400E', fontWeight: 700, padding: '0 3px', borderRadius: 3 } : selLabel ? { opacity: 0.55 } : undefined}>
+                {e.label} {Math.round(e.bepPct)}% [{Math.round(e.cpc).toLocaleString('ko-KR')}원]
+              </span>
+            </span>
+          )
+        })}
+      </span>{' '}
+      <span style={{ color: '#EF4444' }}>(VAT 별도)</span>
+    </div>
+  )
+}
+
 function ManualSection({ campaign, master, marginOff = false, hideBep = false, manualBep, periodLabel, selectedOptionId, onClearOption, onClose, onSelectOption }: {
   onSelectOption?: (optionId: string | null) => void
   campaign: CampaignDiag
@@ -2987,6 +3009,7 @@ function ManualSection({ campaign, master, marginOff = false, hideBep = false, m
     ? (options.find((o) => o.optionId === selectedOptionId)?.optionName ?? selectedOptionId)
     : null
 
+  const cpcEntries = useMemo(() => marginOff ? [] : buildBepCpcForCampaign(campaign, master), [campaign, master, marginOff])
   const [bidByKeyword, setBidByKeyword] = useState<Map<string, number>>(new Map())
   const rows = useMemo(() => buildManualReviewRows(filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap, marginOff), [filteredCampaign, bepMap, priceMap, bidByKeyword, exposureMap, marginOff])
   const { sorted, key, dir, toggle } = useSort(rows, 'recommendedBidVatExcl' as keyof ManualKeywordRow, 'desc')
@@ -3091,7 +3114,10 @@ function ManualSection({ campaign, master, marginOff = false, hideBep = false, m
           <div className="aa-section-title">▼ {campaign.campaignName} · 입찰가 점검</div>
           <div className="aa-section-desc">현재 입찰가 = 광고비/클릭수 (평균 CPC, VAT 별도) · 편집 가능</div>
         </div>
-        <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          {!hideBep && <BepCpcLine campaign={campaign} entries={cpcEntries} rowMap={rowMap} selectedOptionId={selectedOptionId} />}
+          <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
+        </div>
       </div>
       <div className="aa-section-body">
         <OptionChips options={options} selectedOptionId={selectedOptionId} onSelect={(id) => (id == null ? onClearOption() : onSelectOption?.(id))} />
