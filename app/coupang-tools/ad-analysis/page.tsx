@@ -391,10 +391,30 @@ export default function AdAnalysisPage() {
   const [chFilter, setChFilter] = useState<'all' | '3P' | '1P'>('all')
   // 1P 캠페인도 3P 와 같은 표·키워드·입찰가 흐름으로 — 마진 마스터에 1P 옵션 합성 행을 붙여 같은 계산에 태운다
   const masterAug = useMemo(() => augmentMasterWith1P(marginMaster as any, sourceRows), [marginMaster, sourceRows])
-  const filteredRows = useMemo(
-    () => (!sourceRows ? null : chFilter === 'all' ? sourceRows : sourceRows.filter((r) => (chFilter === '1P' ? isRetailRow(r) : !isRetailRow(r)))),
-    [sourceRows, chFilter],
-  )
+  // 상품 필터 (?alias= — 쿠팡 손익 상품별 판정 "광고 보기") — 그 별칭 옵션을 광고하거나 전환한 캠페인만
+  const [aliasFilter, setAliasFilter] = useState<string | null>(null)
+  useEffect(() => {
+    try { setAliasFilter(new URLSearchParams(window.location.search).get('alias') || null) } catch { /* 무시 */ }
+  }, [])
+  const clearAliasFilter = () => {
+    setAliasFilter(null)
+    try { window.history.replaceState(null, '', window.location.pathname) } catch { /* 무시 */ }
+  }
+  const aliasCampaignIds = useMemo(() => {
+    if (!aliasFilter || !sourceRows) return null
+    const aliasOf = new Map(((masterAug as any)?.marginRows || []).map((r: any) => [String(r.optionId).trim(), r.alias as string]))
+    const ids = new Set<string>()
+    for (const r of sourceRows) {
+      if (aliasOf.get(String(r.adOptionId || '').trim()) === aliasFilter || aliasOf.get(String(r.convOptionId || '').trim()) === aliasFilter) ids.add(r.campaignId)
+    }
+    return ids
+  }, [aliasFilter, sourceRows, masterAug])
+  const filteredRows = useMemo(() => {
+    if (!sourceRows) return null
+    let rs = chFilter === 'all' ? sourceRows : sourceRows.filter((r) => (chFilter === '1P' ? isRetailRow(r) : !isRetailRow(r)))
+    if (aliasCampaignIds) rs = rs.filter((r) => aliasCampaignIds.has(r.campaignId))
+    return rs
+  }, [sourceRows, chFilter, aliasCampaignIds])
 
   const view = useMemo(
     () => buildAdAnalysisView(filteredRows, masterAug as any, marginOff ? manualBepMap : undefined),
@@ -503,6 +523,12 @@ export default function AdAnalysisPage() {
         isGuest={isGuest}
         adPeriodLabel={sourcePeriod ? `${sourcePeriod.startDate} ~ ${sourcePeriod.endDate} (${sourcePeriod.days}일)` : undefined}
       />
+      {aliasFilter && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 0 12px', padding: '8px 14px', borderRadius: 8, border: '1px solid #FDBA74', background: '#FFF7ED', fontSize: 13, color: '#9A3412' }}>
+          <span>🔎 상품 필터: <b>{aliasFilter}</b> — 이 상품을 광고·전환한 캠페인 {aliasCampaignIds?.size ?? 0}개만 표시</span>
+          <button onClick={clearAliasFilter} style={{ marginLeft: 'auto', border: '1px solid #FDBA74', borderRadius: 6, background: '#fff', padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>필터 해제</button>
+        </div>
+      )}
       {mode === 'saved' && !isGuest && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 12px', padding: '8px 14px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', fontSize: 13, color: '#1E3A8A' }}>
           <span>📅 월</span>

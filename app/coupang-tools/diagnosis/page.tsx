@@ -662,6 +662,7 @@ export default function DiagnosisPage() {
         {!loadedSnapshot && (
           <CoupangPnlPanel
             summary3P={rawSalesInsight.length > 0 && diagnosisResult ? diagnosisResult.summary : null}
+            diag3P={rawSalesInsight.length > 0 && diagnosisResult ? diagnosisResult : null}
             storeAdRows={rawAdCampaign}
             storeHasSeller={rawSalesInsight.length > 0}
             storeSellerRows={rawSalesInsight}

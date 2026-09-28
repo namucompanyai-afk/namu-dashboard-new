@@ -20,6 +20,8 @@ import { parseRocketLedger, ledgerToOrders, splitLedgerByMonth, type RocketLedge
 import { parseMilkrunSettlement, parseMilkrunList, type MilkrunSettleRow, type MilkrunListRow } from '@/lib/coupang/parsers/milkrun'
 import { build1PView } from '@/lib/coupang/onePAnalysis'
 import { packAdRows, unpackAdRows } from '@/lib/coupang/adRowsPack'
+import { buildProductVerdicts } from '@/lib/coupang/productVerdict'
+import ProductVerdictTable from './ProductVerdictTable'
 import { computeOnePPnl } from '@/lib/coupang/onePPnl'
 import type { OnePMarginRow, MarginCalcRow } from '@/lib/coupang/parsers/marginMaster'
 
@@ -73,6 +75,8 @@ function compactAdRows(rows: AdCampaignRow[]): AdCampaignRow[] {
 
 export default function CoupangPnlPanel(props: {
   summary3P: any | null
+  /** 수익 진단 결과 (상품별 판정 표용 — products·unmatched) */
+  diag3P?: any | null
   storeAdRows: AdCampaignRow[]
   storeHasSeller: boolean
   /** 수익 진단 저장소의 3P 판매 행 — "이 데이터로 저장" 용 */
@@ -252,6 +256,14 @@ export default function CoupangPnlPanel(props: {
     sales: (cur('onep_sales')?.rows as OnePSalesRow[]) || null,
     extraNames: (adRows || []).flatMap((r) => [{ optionId: r.convOptionId, name: r.convProductName }, { optionId: r.adOptionId, name: r.adProductName }]),
   }), [month, props.onePRows, saved, pending, legacyPo, onePView, adRows]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 상품별 판정 (3P 수익 진단 products + 1P 판매 기준 + 1P 광고 옵션) — 기존 결과 재사용
+  const verdictRows = useMemo(() => buildProductVerdicts({
+    products3P: props.diag3P?.products,
+    unmatchedAdCost3P: props.diag3P?.unmatched?.adCost,
+    sales1P: pnl.sales,
+    adOptions1P: onePView?.options,
+  }), [props.diag3P, pnl.sales, onePView])
 
   const s3 = props.summary3P
   const net3P: number | null = s3 ? s3.totalNetProfit : null
@@ -434,6 +446,7 @@ export default function CoupangPnlPanel(props: {
           )}
         </div>
       </div>
+      {verdictRows.length > 0 && <ProductVerdictTable rows={verdictRows} monthLabel={monthLabel} />}
     </div>
   )
 }
