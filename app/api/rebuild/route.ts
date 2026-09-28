@@ -7891,6 +7891,84 @@ export async function GET(req: Request) {
     }
 
     // ── m13: 상품마스터 과세 구분 → 단가DB 과세여부 수식 · 발주매핑 526행 발송 거래처 · 단가DB C1 '공급사' ──
+    // ── m14: 마진계산 — 쿠팡 1P 신규 7행 추가 (1P 블록 맨 아래에 행 삽입 · 다른 탭 쓰기 없음) ──
+    //   · 기존 1P 마지막 행 수식을 읽어 행 번호만 바꿔 씀 (행별 수식, ARRAYFORMULA 없음)
+    //   · 값 칸: A 채널 · B 별칭(상품마스터 B 가 아직 비어 있어 값으로) · C 봉수 1 · H(템플릿 값) · Y 1P 상품코드
+    //   · dry=1 → 쓰기 없이 계획 + 백업(A1:AD 수식·값) 반환
+    if (action === 'm14') {
+      const sheets = getSheets()
+      const TAB = '마진계산'
+      const NEW: { alias: string; sku: string }[] = [
+        { alias: '[보배마을] 저속노화쌀 1kg', sku: '80846331' },
+        { alias: '[보배마을] 어린이 혼합곡 800g', sku: '80856772' },
+        { alias: '[보배마을] 기장 1kg', sku: '80955246' },
+        { alias: '[쌀쌀쌀] 국산 귀리 1kg B급', sku: '80968309' },
+        { alias: '[보배마을] 바나듐쌀 백미 2kg', sku: '70881188' },
+        { alias: '[쌀쌀쌀] 국산 귀리 2kg B급', sku: '80967533' },
+        { alias: '[쌀쌀쌀] 흑미 1kg', sku: '80967928' },
+      ]
+      const read = async (opt: 'FORMULA' | 'UNFORMATTED_VALUE') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(TAB)}!A1:AD1000`, valueRenderOption: opt })).data.values || []) as Cell[][]
+      const fx = await read('FORMULA'), v = await read('UNFORMATTED_VALUE')
+      const hdr = (v[0] || []).map((h) => String(h ?? '').trim())
+      const cY = hdr.indexOf('1P 상품코드')
+      if (cY !== 24) throw new Error(`마진계산 Y열 머리글이 '1P 상품코드' 가 아님: ${hdr[24]}`)
+      const oneRows = v.map((r, i) => (String(r?.[0] ?? '') === '쿠팡 1P' ? i + 1 : 0)).filter(Boolean)
+      if (!oneRows.length) throw new Error('쿠팡 1P 행 없음')
+      const last = oneRows[oneRows.length - 1]
+      if (oneRows.some((r, i) => i > 0 && r !== oneRows[i - 1] + 1)) throw new Error('쿠팡 1P 행이 연속이 아님')
+      const existing = new Set(v.map((r) => String(r?.[cY] ?? '').trim()).filter(Boolean))
+      const dup = NEW.filter((n) => existing.has(n.sku))
+      if (dup.length) return NextResponse.json({ ok: false, error: `이미 마진계산에 있는 SKU: ${dup.map((d) => d.sku).join(', ')}` })
+      const tpl = fx[last - 1] || []
+      const width = 30 // A~AD
+      const shiftRow = (f: string, row: number) => f.replace(new RegExp(`(\\$?[A-Z]{1,3}\\$?)${last}(?!\\d)`, 'g'), `$1${row}`)
+      const plan = NEW.map((n, i) => {
+        const row = last + 1 + i
+        const cells: Cell[] = Array.from({ length: width }, (_, c) => {
+          const t = tpl[c]
+          if (typeof t === 'string' && t.startsWith('=')) return c === 1 ? n.alias : shiftRow(t, row)
+          if (c === 0) return '쿠팡 1P'
+          if (c === 1) return n.alias
+          if (c === 2) return 1
+          if (c === cY) return `'${n.sku}`
+          if (c === 23) return '' // 옵션ID — 판매·광고 파일에서 못 찾음
+          return t ?? ''
+        })
+        return { row, cells }
+      })
+      const tplKinds = tpl.slice(0, width).map((t, c) => `${colName(c)}:${typeof t === 'string' && t.startsWith('=') ? 'fx' : t === '' || t == null ? '·' : 'val'}`).join(' ')
+      if (url.searchParams.get('dry') === '1') {
+        return NextResponse.json({ ok: true, dry: true, last1P: last, oneCount: oneRows.length, tplKinds, plan, backup: { 수식: fx, 값: v } })
+      }
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: MASTER_SHEET_ID, fields: 'sheets(properties(sheetId,title))' })
+      const sheetId = (meta.data.sheets || []).find((x) => x.properties?.title === TAB)?.properties?.sheetId as number
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: { requests: [{ insertDimension: { range: { sheetId, dimension: 'ROWS', startIndex: last, endIndex: last + NEW.length }, inheritFromBefore: true } }] },
+      })
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: MASTER_SHEET_ID,
+        range: `${quote(TAB)}!A${last + 1}:${colName(width - 1)}${last + NEW.length}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: plan.map((p) => p.cells) },
+      })
+      // 검증: 삽입 위 행은 그대로 · 아래 행은 7칸 밀려 값 같음(수식은 행 번호만 +7)
+      const afx = await read('FORMULA'), av = await read('UNFORMATTED_VALUE')
+      const eq = (x: Cell, y: Cell) => (typeof x === 'number' && typeof y === 'number' ? Math.abs(x - y) < 1e-6 : String(x ?? '') === String(y ?? ''))
+      const bump = (f: Cell) => (typeof f === 'string' && f.startsWith('=') ? f.replace(/(\$?[A-Z]{1,3}\$?)(\d+)(?!\d)/g, (m, col, n) => (Number(n) > last ? `${col}${Number(n) + NEW.length}` : m)) : f)
+      const diff: string[] = []
+      for (let i = 0; i < v.length; i++) {
+        const j = i + 1 <= last ? i : i + NEW.length
+        for (let c = 0; c < width; c++) {
+          if (!eq((v[i] || [])[c] ?? '', (av[j] || [])[c] ?? '')) diff.push(`값 ${colName(c)}${i + 1}`)
+          if (!eq(bump((fx[i] || [])[c] ?? ''), (afx[j] || [])[c] ?? '')) diff.push(`수식 ${colName(c)}${i + 1}`)
+        }
+      }
+      const added = plan.map((p) => ({ row: p.row, v: (av[p.row - 1] || []).slice(0, width) }))
+      return NextResponse.json({ ok: true, inserted: plan.map((p) => p.row), existingDiff: diff.slice(0, 30), existingDiffCount: diff.length, errors: errorCellsOf(TAB, av).length, added })
+    }
+
     if (action === 'm13') {
       const sheets = getSheets()
       const read = async (tab: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE', range = 'A1:Z1000') =>
