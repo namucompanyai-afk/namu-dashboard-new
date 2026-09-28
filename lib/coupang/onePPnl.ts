@@ -63,6 +63,12 @@ export interface OnePPnl {
     gmv: number
     bags: number
     unlinked: { optionId: string; name: string; gmv: number; qty: number }[]
+    /** 판매 기준 참고 (최종 순이익 아님) — 판매 봉수 × 1봉 마진 */
+    margin: number
+    /** 판매 봉수 × 이번 달 봉당 운송비 (입고 기준 운송비(확정+추정) ÷ 입고 봉수) */
+    milkrun: number | null
+    /** 판매 기준 1P 순이익 = 판매 마진 − 운송비 − 1P 광고비 */
+    netProfit: number | null
   } | null
 }
 
@@ -227,13 +233,22 @@ export function computeOnePPnl(args: {
     for (const r of args.sales) learn(r.optionId, r.name)
     for (const r of args.extraNames || []) learn(r.optionId, r.name)
     let bags = 0
+    let margin = 0
     const unlinked: NonNullable<OnePPnl['sales']>['unlinked'] = []
     for (const r of args.sales) {
       const l = linkOnePOption(r.optionId, r.name, one, nameIdx)
       if (!l) { unlinked.push({ optionId: r.optionId, name: r.name, gmv: r.gmv, qty: r.qty }); continue }
       bags += r.qty * l.bags
+      margin += r.qty * l.bags * (bySku.get(l.sku)?.perBagMargin ?? 0)
     }
-    sales = { gmv: args.sales.reduce((s, r) => s + r.gmv, 0), bags, unlinked: unlinked.sort((a, b) => b.gmv - a.gmv) }
+    // 판매 기준 참고 — 운송비는 입고 기준 봉당 운송비 재사용, 광고비는 입고 기준과 같은 값
+    const perBagMilkrun = inbound && milkrun && inbound.bags > 0 ? (milkrun.allocated + milkrun.estimated) / inbound.bags : null
+    const salesMilkrun = perBagMilkrun != null ? bags * perBagMilkrun : null
+    sales = {
+      gmv: args.sales.reduce((s, r) => s + r.gmv, 0), bags, unlinked: unlinked.sort((a, b) => b.gmv - a.gmv),
+      margin, milkrun: salesMilkrun,
+      netProfit: salesMilkrun != null && adCost != null ? margin - salesMilkrun - adCost : null,
+    }
   }
 
   return { month: args.month, inbound, milkrun, adCost, adRevenue, netProfit, sales }

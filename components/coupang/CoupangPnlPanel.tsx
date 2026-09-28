@@ -348,7 +348,14 @@ export default function CoupangPnlPanel(props: {
           </div>
           <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-600">
             <div>3P<br /><b className="text-sm text-gray-900">{net3P != null ? won(net3P) : need('3P 판매')}</b></div>
-            <div>1P (입고 기준)<br /><b className="text-sm text-gray-900">{net1P != null ? won(net1P) : <span className="text-amber-700">{need1P.join('·')} 필요</span>}</b></div>
+            <div>1P (입고 기준)<br /><b className="text-sm text-gray-900">{net1P != null ? won(net1P) : <span className="text-amber-700">{need1P.join('·')} 필요</span>}</b>
+              {pnl.sales?.netProfit != null && pnl.inbound && (
+                <div className="mt-0.5 text-[10.5px] leading-snug text-gray-500" title="판매 봉수 × 1봉 마진 − 판매 봉수 × 이번 달 봉당 운송비 − 1P 광고비 (참고용 · 최종 순이익은 입고 기준)">
+                  판매 기준 참고 {won(pnl.sales.netProfit)} (판매 {Math.round(pnl.sales.bags).toLocaleString('ko-KR')}봉 / 입고 {pnl.inbound.bags.toLocaleString('ko-KR')}봉)
+                  {pnl.inbound.bags > pnl.sales.bags * 1.2 && <div className="text-amber-700">재고 쌓는 중 — 다음 달 입고 감소 가능</div>}
+                </div>
+              )}
+            </div>
             <div>순이익률<br /><b className="text-sm text-gray-900">{total != null && revTotal ? pct(total / revTotal) : '—'}</b></div>
           </div>
           {steps && (
@@ -416,7 +423,14 @@ export default function CoupangPnlPanel(props: {
           </div>
           <div className="mt-3 text-[11px] text-gray-400">1P 판매 매출 = 로켓 판매 GMV · 1P 광고 매출 = 광고센터 전환매출(판매수 = 봉)</div>
           {pnl.sales && pnl.sales.unlinked.length > 0 && (
-            <div className="mt-2 text-[11px] text-amber-700">1P 판매 옵션 {pnl.sales.unlinked.length}개 SKU 연결 못 함 (봉수 집계 제외)</div>
+            <details className="mt-2 text-[11px] text-amber-700">
+              <summary className="cursor-pointer">1P 판매 옵션 {pnl.sales.unlinked.length}개 SKU 연결 못 함 — GMV {man(pnl.sales.unlinked.reduce((a, u) => a + u.gmv, 0))} (판매 기준 봉수·마진 제외)</summary>
+              <ul className="mt-1 space-y-0.5 text-gray-600">
+                {pnl.sales.unlinked.map((u) => (
+                  <li key={u.optionId}>{u.name || u.optionId} · {u.qty.toLocaleString('ko-KR')}개 · {won(u.gmv)}</li>
+                ))}
+              </ul>
+            </details>
           )}
         </div>
       </div>
