@@ -25,8 +25,8 @@ const VALID_TYPES = [
   'naver_margin',
   'naver_cpm',
 ] as const;
-// 쿠팡 손익 월별 저장본 — pnl_{종류}_{YYYY-MM} (광고 요약·키워드 포함 광고 행(adkw)·3P 판매·1P 판매·발주서·밀크런 정산·접수 내역). 관리자만.
-const PNL_TYPE = /^pnl_(ad|adkw|seller|onep_sales|po|mr_settle|mr_list)_\d{4}-\d{2}$/;
+// 쿠팡 손익 월별 저장본 — pnl_{종류}_{YYYY-MM} (광고 요약·키워드 포함 광고 행(adkw)·3P 판매·1P 판매·1P 입고 원장(ledger, 로켓_세일즈)·옛 발주서(po)·밀크런 정산·접수 내역). 관리자만.
+const PNL_TYPE = /^pnl_(ad|adkw|seller|onep_sales|po|ledger|mr_settle|mr_list)_\d{4}-\d{2}$/;
 type DataType = typeof VALID_TYPES[number] | `pnl_${string}`;
 
 /** Supabase 오류는 Error 가 아닌 객체({message, code, details, hint}) — 사람이 읽을 문장으로 */

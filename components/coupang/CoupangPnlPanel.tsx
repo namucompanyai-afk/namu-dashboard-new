@@ -15,21 +15,23 @@ import { useEffect, useMemo, useState } from 'react'
 import { parseAdCampaign, extractPeriodFromFileName, type AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseOnePSalesCsv, type OnePSalesRow } from '@/lib/coupang/parsers/onePSales'
-import { parsePurchaseOrderFiles, type PurchaseOrder } from '@/lib/coupang/parsers/purchaseOrder'
+import type { PurchaseOrder } from '@/lib/coupang/parsers/purchaseOrder'
+import { parseRocketLedger, ledgerToOrders, splitLedgerByMonth, type RocketLedgerRow } from '@/lib/coupang/parsers/rocketLedger'
 import { parseMilkrunSettlement, parseMilkrunList, type MilkrunSettleRow, type MilkrunListRow } from '@/lib/coupang/parsers/milkrun'
 import { build1PView } from '@/lib/coupang/onePAnalysis'
 import { packAdRows, unpackAdRows } from '@/lib/coupang/adRowsPack'
 import { computeOnePPnl } from '@/lib/coupang/onePPnl'
 import type { OnePMarginRow, MarginCalcRow } from '@/lib/coupang/parsers/marginMaster'
 
-type Kind = 'ad' | 'seller' | 'onep_sales' | 'po' | 'mr_settle' | 'mr_list'
+type Kind = 'ad' | 'seller' | 'onep_sales' | 'ledger' | 'mr_settle' | 'mr_list'
+const EMPTY = <T,>(v: T): Record<Kind, T> => ({ ad: v, seller: v, onep_sales: v, ledger: v, mr_settle: v, mr_list: v })
 type Saved = { data: any; fileName: string | null; savedAt: string | null } | null
 
 const KINDS: { kind: Kind; label: string; hint: string; accept: string; multiple?: boolean; optional?: boolean }[] = [
   { kind: 'ad', label: '광고', hint: 'pa_total_campaign .xlsx', accept: '.xlsx' },
   { kind: 'seller', label: '3P 판매', hint: 'SELLER_INSIGHTS .xlsx', accept: '.xlsx' },
   { kind: 'onep_sales', label: '1P 판매', hint: '로켓 판매 .csv', accept: '.csv' },
-  { kind: 'po', label: '1P 발주서', hint: '발주서리스트 .zip / 여러 .xlsx', accept: '.zip,.xlsx', multiple: true },
+  { kind: 'ledger', label: '1P 입고 원장', hint: '로켓_세일즈 .xlsx (여러 달 → 달별 저장)', accept: '.xlsx' },
   { kind: 'mr_settle', label: '밀크런 정산', hint: 'milkrun_sales .xls', accept: '.xls,.html,.htm' },
   { kind: 'mr_list', label: '밀크런 접수 내역', hint: 'milkrun_list .xls', accept: '.xls,.html,.htm', optional: true },
 ]
@@ -83,10 +85,12 @@ export default function CoupangPnlPanel(props: {
   onMonthEmpty?: () => void
 }) {
   const [month, setMonth] = useState(thisMonth())
-  const [saved, setSaved] = useState<Record<Kind, Saved>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+  const [saved, setSaved] = useState<Record<Kind, Saved>>(EMPTY(null))
   // 올렸지만 월 저장 못 한 파싱 결과 (저장 실패해도 계산엔 사용) · 칸별 오류 문장
-  const [pending, setPending] = useState<Record<Kind, { data: any; fileName: string; kw?: AdCampaignRow[] } | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
-  const [errors, setErrors] = useState<Record<Kind, string | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+  const [pending, setPending] = useState<Record<Kind, { data: any; fileName: string; kw?: AdCampaignRow[] } | null>>(EMPTY(null))
+  const [errors, setErrors] = useState<Record<Kind, string | null>>(EMPTY(null))
+  // 옛 발주서(zip) 월 저장본 — 그 달 원장이 없을 때만 1P 입고 계산에 사용
+  const [legacyPo, setLegacyPo] = useState<PurchaseOrder[] | null>(null)
   const [busy, setBusy] = useState<Kind | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
 
@@ -94,7 +98,7 @@ export default function CoupangPnlPanel(props: {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const next: Record<Kind, Saved> = { ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null }
+      const next: Record<Kind, Saved> = EMPTY(null)
       await Promise.all(KINDS.map(async ({ kind }) => {
         try {
           const r = await fetch(`/api/coupang-master?type=pnl_${kind}_${month}`)
@@ -102,6 +106,13 @@ export default function CoupangPnlPanel(props: {
           if (j?.data) next[kind] = { data: j.data, fileName: j.fileName, savedAt: j.savedAt }
         } catch { /* 없음 */ }
       }))
+      let po: PurchaseOrder[] | null = null
+      if (!next.ledger) {
+        try {
+          const j = await (await fetch(`/api/coupang-master?type=pnl_po_${month}`)).json()
+          if (Array.isArray(j?.data?.orders) && j.data.orders.length) po = j.data.orders
+        } catch { /* 없음 */ }
+      }
       // 키워드 포함 광고 행 (광고 분석과 같은 데이터) — 있으면 수익 진단에 요약 대신 주입
       let kwRows: AdCampaignRow[] = []
       if (next.ad) {
@@ -112,8 +123,9 @@ export default function CoupangPnlPanel(props: {
       }
       if (cancelled) return
       setSaved(next)
-      setPending({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
-      setErrors({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+      setLegacyPo(po)
+      setPending(EMPTY(null))
+      setErrors(EMPTY(null))
       // 그 달 저장본을 아래 수익 진단(3P)에도 주입 — 광고 요약 행 + 광고 기간 → SELLER 순서.
       // 광고 요약(캠페인·광고옵션·전환옵션·판매방식 단위 합계)은 3P 진단이 쓰는 열(광고비·14일 매출·판매수·옵션ID)을 다 가져 결과가 원본과 같다.
       const ad = next.ad
@@ -135,13 +147,13 @@ export default function CoupangPnlPanel(props: {
     return () => { cancelled = true }
   }, [month]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const postPnl = async (type: string, data: any, fileName: string) => {
+  const postPnl = async (type: string, data: any, fileName: string, m: string = month) => {
     let res: Response
     try {
       res = await fetch('/api/coupang-master', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: `pnl_${type}_${month}`, data, fileName }),
+        body: JSON.stringify({ type: `pnl_${type}_${m}`, data, fileName }),
       })
     } catch (e) {
       throw new Error(`월 저장 실패 — 서버 연결 안 됨 (${errMsg(e)})`)
@@ -199,12 +211,17 @@ export default function CoupangPnlPanel(props: {
         const r = parseOnePSalesCsv(await f.text())
         if (r.error) throw new Error(r.error)
         await save('onep_sales', { rows: r.rows }, f.name)
-      } else if (kind === 'po') {
-        const list = await Promise.all(Array.from(files).map(async (x) => ({ name: x.name, buf: await x.arrayBuffer() })))
-        const r = await parsePurchaseOrderFiles(list)
-        if (!r.orders.length) throw new Error('발주서를 찾지 못했습니다')
-        await save('po', { orders: r.orders }, list.map((x) => x.name).join(', '))
-        if (r.skipped.length) setMsg(`발주서로 읽지 못한 파일 ${r.skipped.length}개: ${r.skipped.slice(0, 3).join(', ')}`)
+      } else if (kind === 'ledger') {
+        // 원장은 여러 달이 들어 있으므로 입고 월별로 나눠 각 달 pnl_ledger_YYYY-MM 에 저장 (선택 월은 칸 상태로)
+        const r = parseRocketLedger(await f.arrayBuffer())
+        if (r.error) throw new Error(r.error)
+        if (!r.rows.length) throw new Error('입고(구분=발주) 행이 없습니다')
+        const byMonth = splitLedgerByMonth(r.rows)
+        const months = Object.keys(byMonth).sort()
+        for (const m of months) if (m !== month) await postPnl('ledger', { rows: byMonth[m] }, f.name, m)
+        if (byMonth[month]) await save('ledger', { rows: byMonth[month] }, f.name)
+        const label = months.map((m) => `${Number(m.slice(5, 7))}월`).join('·')
+        setMsg(`입고 원장 ${months.length}개월 저장: ${label}${byMonth[month] ? '' : ` — 선택한 ${Number(month.slice(5, 7))}월 입고는 없음`}${r.skipped ? ` · 발주 외 행 ${r.skipped}개 제외` : ''}`)
       } else if (kind === 'mr_settle') {
         const r = parseMilkrunSettlement(await f.text())
         if (r.error) throw new Error(r.error)
@@ -228,13 +245,13 @@ export default function CoupangPnlPanel(props: {
   const pnl = useMemo(() => computeOnePPnl({
     month,
     onePRows: props.onePRows,
-    orders: (cur('po')?.orders as PurchaseOrder[]) || null,
+    orders: cur('ledger')?.rows ? ledgerToOrders(cur('ledger').rows as RocketLedgerRow[]) : legacyPo,
     settle: (cur('mr_settle')?.rows as MilkrunSettleRow[]) || null,
     list: (cur('mr_list')?.rows as MilkrunListRow[]) || null,
     adView: onePView,
     sales: (cur('onep_sales')?.rows as OnePSalesRow[]) || null,
     extraNames: (adRows || []).flatMap((r) => [{ optionId: r.convOptionId, name: r.convProductName }, { optionId: r.adOptionId, name: r.adProductName }]),
-  }), [month, props.onePRows, saved, pending, onePView, adRows]) // eslint-disable-line react-hooks/exhaustive-deps
+  }), [month, props.onePRows, saved, pending, legacyPo, onePView, adRows]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const s3 = props.summary3P
   const net3P: number | null = s3 ? s3.totalNetProfit : null
@@ -246,7 +263,7 @@ export default function CoupangPnlPanel(props: {
 
   const need1P: string[] = []
   if (!props.onePRows?.length) need1P.push('1P 마진(나무_마스터)')
-  if (!cur('po')) need1P.push('1P 발주서')
+  if (!cur('ledger') && !legacyPo) need1P.push('1P 입고 원장')
   if (!cur('mr_settle')) need1P.push('밀크런 정산')
   if (!adRows) need1P.push('광고')
   const net1P = pnl.netProfit
@@ -316,7 +333,10 @@ export default function CoupangPnlPanel(props: {
             )
           })}
         </div>
-        {msg && <div className="mt-2 rounded bg-red-50 px-3 py-1.5 text-xs text-red-700">{msg}</div>}
+        {msg && <div className="mt-2 rounded bg-gray-50 px-3 py-1.5 text-xs text-gray-700">{msg}</div>}
+        {!cur('ledger') && legacyPo && (
+          <div className="mt-2 rounded bg-amber-50 px-3 py-1.5 text-xs text-amber-800">이 달은 입고 원장이 없어 옛 발주서(zip) 저장본(입고예정일 기준)으로 1P 입고를 계산 중 — 로켓_세일즈 원장을 올리면 실제 입고일 기준으로 바뀝니다</div>
+        )}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -361,7 +381,7 @@ export default function CoupangPnlPanel(props: {
             <div className="text-[11px] text-amber-700">밀크런 정산 표 합계 {won(cur('mr_settle').total)} ≠ 파일 상단 총 금액 {won(cur('mr_settle').headerTotal)} (미확정 행 포함 추정)</div>
           )}
           <div className="mt-3 text-[11px] text-gray-400">
-            반품·쿠폰 분담·판매장려금 등 정산 차감 전 손익 · 3P = 현재 수익 진단 데이터 · 1P = 입고예정일 {monthLabel} 발주 기준
+            반품·쿠폰 분담·판매장려금 등 정산 차감 전 손익 · 3P = 현재 수익 진단 데이터 · 1P = {cur('ledger') ? `실제 입고일 ${monthLabel} 기준 (로켓_세일즈 원장)` : legacyPo ? `입고예정일 ${monthLabel} 발주 기준 (옛 발주서)` : '입고 원장 필요'}
           </div>
         </div>
 
