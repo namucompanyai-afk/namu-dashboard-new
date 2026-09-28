@@ -42,6 +42,7 @@ import {
   type KeywordRow,
   type ManualKeywordRow,
   type CampaignPairAnalysis,
+  hasBidSample,
 } from '@/lib/coupang/adAnalysis'
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
@@ -2383,6 +2384,7 @@ function computeKeywordOptions(
   )
   if (!filtered.length) return []
   const totalSold = filtered.reduce((s, r) => s + (r.sold14d || 0), 0)
+  const keywordClicks = filtered.reduce((s, r) => s + (r.clicks || 0), 0)
   // 매출 발생 옵션 (convOptionId) 단위 그룹핑
   const grp = new Map<string, AdCampaignRow[]>()
   for (const r of filtered) {
@@ -2418,7 +2420,8 @@ function computeKeywordOptions(
       const cpc = ((cvrUsedPct / 100) * price) / (bep / 100)
       if (Number.isFinite(cpc) && cpc > 0) {
         bepCpcVatExcl = cpc
-        recBid = cpc * 0.95
+        // 키워드 클릭 20 미만이면 옵션별 추천 입찰가도 없음 (모수 부족 — hasBidSample 단일 기준)
+        recBid = hasBidSample(keywordClicks) ? cpc * 0.95 : null
       } else {
         cvrSource = null
       }
@@ -2705,8 +2708,7 @@ function ActionGuideHeader() {
               클릭 &lt; 20 <span style={{ color: '#9CA3AF', fontWeight: 400, fontSize: 11 }}>(모수 쌓는 중)</span>
             </div>
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
-              ROAS ≥ BEP    → 성장 중 ⭐<br />
-              그 외          → 모수 부족
+              ROAS 무관      → 모수 부족 (추천 입찰가 없음)
             </div>
           </div>
           <div style={{ marginBottom: 8 }}>
@@ -2943,10 +2945,9 @@ function sanitizeFile(s: string): string {
 function ActionLegend() {
   return (
     <div style={{ fontSize: 11.5, color: '#64748B', padding: '10px 12px', background: '#F8FAFC', borderRadius: 6, lineHeight: 1.7, marginTop: 8 }}>
-      <strong style={{ color: '#1F2937' }}>추천 액션 기준 (클릭 기준 6단):</strong>
+      <strong style={{ color: '#1F2937' }}>추천 액션 기준 (클릭 기준):</strong>
       <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 &lt; 20 (모수 쌓는 중)</span>
-      <br />• <span className="aa-action-chip action-growing">⭐ 성장 중</span> ROAS ≥ BEP — AI 캠페인에서 모수 쌓는 중 (참고용 입찰가)
-      <br />• <span className="aa-action-chip action-low-sample">모수 부족</span> 그 외 — 입찰가 노출 안 함
+      <br />• <span className="aa-action-chip action-low-sample">모수 부족</span> ROAS 와 무관 — 추천 입찰가 노출 안 함 (화면·엑셀 모두)
       <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 ≥ 20 (판단 가능)</span>
       <br />• <span className="aa-action-chip action-enhance">강화</span> ROAS ≥ BEP × 2
       <br />• <span className="aa-action-chip action-maintain">유지</span> BEP ≤ ROAS &lt; BEP × 2

@@ -35,8 +35,8 @@ import { isRetailRow } from './onePAnalysis'
 
 export type CampaignType = 'ai' | 'manual' | 'unknown'
 /** 추천 액션 6단:
- *  - growing      : 클릭 < 20 + ROAS ≥ BEP (성장 중)
- *  - low_sample   : 클릭 < 20 + ROAS < BEP / 또는 BEP·ROAS 미산정 (모수 부족)
+ *  - growing      : (사용 안 함 — 5/5 이후 클릭 < 20 은 ROAS 와 무관하게 모수 부족)
+ *  - low_sample   : 클릭 < 20 / 또는 BEP·ROAS 미산정 (모수 부족, 추천 입찰가 없음)
  *  - enhance      : 클릭 ≥ 20 + ROAS ≥ BEP × 2 (강화)
  *  - maintain     : 클릭 ≥ 20 + BEP ≤ ROAS < BEP × 2 (유지)
  *  - lower_bid    : 클릭 ≥ 20 + 0 < ROAS < BEP (입찰가 ↓)
@@ -159,12 +159,18 @@ function weightedBep(
 /** 쿠팡 광고센터 입찰가 최소 정책 (VAT 별도) — recommendedBid / classifyKeyword.revenueBid 공통 floor */
 const MIN_BID_VAT_EXCL = 100
 
+/** 추천 입찰가 모수 기준 — 클릭 20 미만이면 어디서든 추천 입찰가 없음 + 모수 부족 (단일 판단 지점) */
+export const MIN_CLICKS_FOR_BID = 20
+export function hasBidSample(clicks: number | null | undefined): boolean {
+  return (clicks ?? 0) >= MIN_CLICKS_FOR_BID
+}
+
 /** 추천 입찰가 (VAT 별도). 클릭 < 20 또는 BEP 없음이면 null.
  *  공식: 매출 ÷ (클릭수 × BEP × 1.05) — BEP(광고센터 기준, 이미 VAT 환산) 대비 5% 여유.
  *  최소 100원 floor 적용 (쿠팡 광고센터 정책). BEP 매우 낮은 광범위 키워드도 100원 보장. */
 export function recommendedBid(revenue: number, clicks: number, bepPct: number | null): number | null {
   if (!bepPct || bepPct <= 0) return null
-  if (clicks < 20) return null
+  if (!hasBidSample(clicks)) return null
   if (revenue <= 0) return null
   // BEP 는 % 단위 광고센터 기준 (예: 476 → 4.76, 옛 부가포함 BEP × 1.1). 1.05 = 5% 여유
   const bid = revenue / (clicks * (bepPct / 100) * 1.05)
@@ -179,7 +185,7 @@ export function recommendedBid(revenue: number, clicks: number, bepPct: number |
  *    bidSource  — 입찰가 산출 근거 ('revenue' | 'fixed_100' | 'low_sample' | null)
  *
  *  매출 역산 공식: 매출 ÷ (클릭수 × BEP × 1.05) — BEP(광고센터 기준) 5% 여유
- *  ※ 'growing' 케이스는 클릭 <20 이라도 매출 역산 입찰가를 노출 (참고용 라벨은 페이지에서)
+ *  ※ 클릭 < 20 은 ROAS 와 무관하게 low_sample (추천 입찰가 없음)
  */
 export function classifyKeyword(
   clicks: number,
@@ -187,26 +193,15 @@ export function classifyKeyword(
   roasPct: number | null,
   bepPct: number | null,
 ): { action: KeywordAction; bid: number | null; bidSource: KeywordRow['bidSource'] } {
-  // 자동 'growing' (클릭<20) 케이스는 매출 역산 입찰가 노출이 필요해서 recommendedBid 의 클릭<20 가드를 우회.
-  // 공식·100원 floor 는 recommendedBid 와 동일 (단일 진실: MIN_BID_VAT_EXCL).
-  const revenueBid = (): number | null => {
-    if (!bepPct || bepPct <= 0) return null
-    if (clicks <= 0) return null
-    if (revenue <= 0) return null
-    const v = revenue / (clicks * (bepPct / 100) * 1.05)
-    if (!Number.isFinite(v) || v <= 0) return null
-    return Math.max(v, MIN_BID_VAT_EXCL)
-  }
+  // 매출 역산 입찰가 = recommendedBid (클릭 20 미만 차단·100원 floor 포함, 단일 진실)
+  const revenueBid = (): number | null => recommendedBid(revenue, clicks, bepPct)
 
   // BEP 또는 ROAS 미산정 → 모수 부족
   if (roasPct == null || bepPct == null) {
     return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
   }
 
-  if (clicks < 20) {
-    if (roasPct >= bepPct) {
-      return { action: 'growing', bid: revenueBid(), bidSource: 'revenue' }
-    }
+  if (!hasBidSample(clicks)) {
     return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
   }
 
@@ -682,7 +677,7 @@ export function buildManualReviewRows(
     const effective = cur ?? avgCpc
     const conf: 1 | 2 | 3 = k.clicks >= 50 ? 3 : k.clicks >= 20 ? 2 : 1
     let verdict: ManualKeywordRow['bidVerdict'] = 'unknown'
-    if (k.clicks >= 20 && bid != null && effective != null) {
+    if (hasBidSample(k.clicks) && bid != null && effective != null) {
       if (effective <= bid) verdict = 'ok'
       else if (effective <= bid * 1.5) verdict = 'high'
       else verdict = 'too_high'
