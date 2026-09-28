@@ -1,6 +1,6 @@
 import { requireRole } from "@/lib/server-auth"
 import { NextResponse } from "next/server";
-import { getData, saveData } from "@/lib/supabase";
+import { getData, saveData, listIdsByPrefix } from "@/lib/supabase";
 
 /**
  * 쿠팡 마스터 데이터 API
@@ -25,8 +25,8 @@ const VALID_TYPES = [
   'naver_margin',
   'naver_cpm',
 ] as const;
-// 쿠팡 손익 월별 저장본 — pnl_{종류}_{YYYY-MM} (광고 요약·3P 판매·1P 판매·발주서·밀크런 정산·접수 내역). 관리자만.
-const PNL_TYPE = /^pnl_(ad|seller|onep_sales|po|mr_settle|mr_list)_\d{4}-\d{2}$/;
+// 쿠팡 손익 월별 저장본 — pnl_{종류}_{YYYY-MM} (광고 요약·키워드 포함 광고 행(adkw)·3P 판매·1P 판매·발주서·밀크런 정산·접수 내역). 관리자만.
+const PNL_TYPE = /^pnl_(ad|adkw|seller|onep_sales|po|mr_settle|mr_list)_\d{4}-\d{2}$/;
 type DataType = typeof VALID_TYPES[number] | `pnl_${string}`;
 
 /** Supabase 오류는 Error 가 아닌 객체({message, code, details, hint}) — 사람이 읽을 문장으로 */
@@ -62,6 +62,19 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');
+
+    // 월 저장본 목록 — { months: { 'YYYY-MM': ['ad','adkw',...] } } (데이터 없이 키 이름만)
+    if (type === 'pnl_months') {
+      const pd = requireRole(request, ['admin']);
+      if (pd) return pd;
+      const ids = await listIdsByPrefix('coupang_pnl_');
+      const months: Record<string, string[]> = {};
+      for (const id of ids) {
+        const m = id.match(/^coupang_pnl_(.+)_(\d{4}-\d{2})$/);
+        if (m) (months[m[2]] ||= []).push(m[1]);
+      }
+      return NextResponse.json({ months });
+    }
 
     if (!type || !isValidType(type)) {
       return NextResponse.json(

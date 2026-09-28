@@ -12,6 +12,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { getDefaultConstants } from '@/lib/coupang/costBook'
 import { build1PView, isRetailRow, augmentMasterWith1P, type OnePView } from '@/lib/coupang/onePAnalysis'
 import { downloadFormattedXlsx, type XlsxCol } from '@/lib/xlsxExport'
+import { unpackAdRows } from '@/lib/coupang/adRowsPack'
+import { extractPeriodFromFileName } from '@/lib/coupang/parsers/adCampaign'
 import { useConfirm } from '@/components/ui/useConfirm'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
@@ -170,6 +172,7 @@ export default function AdAnalysisPage() {
   const marginMeta = useMarginStore((s) => s.uploads.marginMaster)
   const rawAdCampaign = useMarginStore((s) => s.rawAdCampaign)
   const adPeriod = useMarginStore((s) => s.adPeriod)
+  const adMeta = useMarginStore((s) => s.uploads.adCampaign)
   const adAnalysisLive = useMarginStore((s) => s.adAnalysisLive)
   const setMarginMaster = useMarginStore((s) => s.setMarginMaster)
   const setAdCampaign = useMarginStore((s) => s.setAdCampaign)
@@ -181,6 +184,42 @@ export default function AdAnalysisPage() {
   // 캠페인 진단 표 인라인 옵션 드릴다운: 옵션 클릭 시 상세 영역 키워드도 옵션 단위로 필터링.
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
   const [autoLoading, setAutoLoading] = useState(true)
+  // 쿠팡 손익 월 저장본 — 광고가 저장된 달 목록 (최신순) · 불러오는 중인 달
+  const [pnlMonths, setPnlMonths] = useState<string[]>([])
+  const [monthLoading, setMonthLoading] = useState<string | null>(null)
+  // 지금 저장 탭 데이터가 어느 달 저장본인지 (쿠팡 손익 화면에서 주입한 경우 포함 — 파일명 표식)
+  const srcMonth = String(adMeta?.fileName || '').match(/\((\d{4}-\d{2}) 월 저장본\)/)?.[1] ?? null
+
+  /** 쿠팡 손익 월 저장본(키워드 포함 광고 행 + 기간 + 3P 판매) → 저장 탭 데이터 */
+  const loadPnlMonth = async (m: string) => {
+    setMonthLoading(m)
+    try {
+      const get = async (k: string) => {
+        try { return await (await fetch(`/api/coupang-master?type=pnl_${k}_${m}`)).json() } catch { return null }
+      }
+      const [ad, kw, seller] = await Promise.all([get('ad'), get('adkw'), get('seller')])
+      const kwRows = unpackAdRows(kw?.data)
+      const rows: AdCampaignRow[] = kwRows.length ? kwRows : (ad?.data?.rows || [])
+      if (!rows.length) return false
+      const fromName = extractPeriodFromFileName(ad?.fileName || kw?.fileName || '')
+      const start: string | null = ad?.data?.startDate || fromName?.startDate || null
+      const end: string | null = ad?.data?.endDate || fromName?.endDate || null
+      const days = start && end ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1 : null
+      setAdCampaign(rows, {
+        fileName: `${ad?.fileName || kw?.fileName || '광고'} (${m} 월 저장본)`,
+        uploadedAt: ad?.savedAt || new Date().toISOString(),
+        rowCount: rows.length,
+      }, start && end && days ? { startDate: start, endDate: end, days } : null)
+      if (seller?.data?.rows?.length) {
+        setSalesInsight(seller.data.rows, { fileName: seller.fileName || '저장본', uploadedAt: seller.savedAt, rowCount: seller.data.rows.length })
+      }
+      setOpenCampId(null)
+      setSelectedOptionId(null)
+      return true
+    } finally {
+      setMonthLoading(null)
+    }
+  }
   const [uploadError, setUploadError] = useState<string | null>(null)
 
   // 게스트 계정(role='게스트'): 라이브 탭만 사용. 저장 탭·추세차트·저장데이터 로드 전부 차단.
@@ -258,10 +297,6 @@ export default function AdAnalysisPage() {
     const needMaster = !marginMaster
     const needAd = !rawAdCampaign || rawAdCampaign.length === 0 || !adPeriod
 
-    if (!needMaster && !needAd) {
-      setAutoLoading(false)
-      return
-    }
 
     ;(async () => {
       try {
@@ -298,44 +333,20 @@ export default function AdAnalysisPage() {
           }
         }
 
-        if (needAd) {
-          const listRes = await fetch('/api/coupang-diagnoses?type=list')
-          const listJson = await listRes.json()
-          const all = listJson?.diagnoses || []
-          const weeklies = all
-            .filter((a: any) => a.weekKey && a._hasRaw)
-            .sort((a: any, b: any) => (b.weekKey || '').localeCompare(a.weekKey || ''))
-          const meta = weeklies[0]
-          if (meta?.id) {
-            // 메인 row 의 adRows/sellerStats 는 4.5MB Vercel limit 회피용 빈 배열 마커.
-            // 실데이터는 raw 키에 분리 저장되어 있어 별도 fetch 후 머지.
-            const [itemRes, rawRes] = await Promise.all([
-              fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`),
-              fetch(`/api/coupang-diagnoses?type=raw&id=${meta.id}`),
-            ])
-            const target = await itemRes.json()
-            const raw = rawRes.ok ? await rawRes.json().catch(() => null) : null
-            const adRows = raw?.adRows?.length ? raw.adRows : target?.adRows
-            const sellerStats = raw?.sellerStats?.length ? raw.sellerStats : target?.sellerStats
-            if (!cancelled && adRows?.length) {
-              setAdCampaign(adRows, {
-                fileName: target?.adFileName || '저장된 분석',
-                uploadedAt: target?.createdAt || new Date().toISOString(),
-                rowCount: adRows.length,
-              }, target?.periodStartDate && target?.periodEndDate ? {
-                startDate: target.periodStartDate,
-                endDate: target.periodEndDate,
-                days: target.periodDays || 30,
-              } : null)
-              if (sellerStats?.length) {
-                setSalesInsight(sellerStats, {
-                  fileName: target?.sellerFileName || '저장된 분석',
-                  uploadedAt: target?.createdAt || new Date().toISOString(),
-                  rowCount: sellerStats.length,
-                })
-              }
-            }
-          }
+        // 쿠팡 손익 월 저장본 목록 — 이번 달, 없으면 가장 최근 달을 불러온다.
+        // (주간 저장본은 자동으로 열지 않음 — 추이 차트/저장된 분석에서 직접 고를 때만)
+        let months: string[] = []
+        try {
+          const mj = await (await fetch('/api/coupang-master?type=pnl_months')).json()
+          months = Object.entries((mj?.months || {}) as Record<string, string[]>)
+            .filter(([, kinds]) => kinds.includes('ad') || kinds.includes('adkw'))
+            .map(([m]) => m)
+            .sort((x, y) => y.localeCompare(x))
+        } catch { /* 목록 없음 */ }
+        if (!cancelled) setPnlMonths(months)
+        if (needAd && !cancelled && months.length) {
+          const thisMonth = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 7)
+          await loadPnlMonth(months.includes(thisMonth) ? thisMonth : months[0])
         }
       } catch (err) {
         console.error('[ad-analysis] 자동 로드 실패:', err)
@@ -481,13 +492,36 @@ export default function AdAnalysisPage() {
   }
 
   // 셀렉터/공통 헤더 — 어떤 분기든 항상 노출
+  const fmtMd = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
   const headerNode = (
-    <Header
-      mode={mode}
-      onMode={setMode}
-      isGuest={isGuest}
-      adPeriodLabel={sourcePeriod ? `${sourcePeriod.startDate} ~ ${sourcePeriod.endDate} (${sourcePeriod.days}일)` : undefined}
-    />
+    <>
+      <Header
+        mode={mode}
+        onMode={setMode}
+        isGuest={isGuest}
+        adPeriodLabel={sourcePeriod ? `${sourcePeriod.startDate} ~ ${sourcePeriod.endDate} (${sourcePeriod.days}일)` : undefined}
+      />
+      {mode === 'saved' && !isGuest && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 12px', padding: '8px 14px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', fontSize: 13, color: '#1E3A8A' }}>
+          <span>📅 월</span>
+          <select
+            value={srcMonth || ''}
+            onChange={(e) => { if (e.target.value) loadPnlMonth(e.target.value) }}
+            disabled={!!monthLoading}
+            style={{ border: '1px solid #93C5FD', borderRadius: 6, padding: '2px 6px', background: '#fff' }}
+          >
+            {!srcMonth && <option value="">— 선택 —</option>}
+            {pnlMonths.map((m) => <option key={m} value={m}>{m.slice(0, 4)}년 {Number(m.slice(5, 7))}월</option>)}
+          </select>
+          <span>
+            {monthLoading ? `${Number(monthLoading.slice(5, 7))}월 저장본 불러오는 중…`
+              : srcMonth ? <><b>{Number(srcMonth.slice(5, 7))}월 광고 (쿠팡 손익 저장본)</b>{adPeriod ? ` · 기간 ${fmtMd(adPeriod.startDate)}~${fmtMd(adPeriod.endDate)}` : ''}</>
+              : rawAdCampaign.length ? <>저장된 분석 데이터 보는 중{adPeriod ? ` · 기간 ${fmtMd(adPeriod.startDate)}~${fmtMd(adPeriod.endDate)}` : ''} — 월을 고르면 쿠팡 손익 저장본으로 바뀝니다</>
+              : pnlMonths.length ? '월을 고르세요' : '쿠팡 손익에 저장된 광고 파일이 없습니다 — 쿠팡 손익 화면에서 광고 파일을 올려 주세요'}
+          </span>
+        </div>
+      )}
+    </>
   )
 
   // ── 본문 (라이브·저장 공통) — 채널 필터 · KPI(전체/3P/1P) · 1P 박스 · 3P 섹션 ──
@@ -742,7 +776,7 @@ function Header({ mode, onMode, adPeriodLabel, isGuest }: {
   isGuest?: boolean
 }) {
   const allTabs: { id: Mode; label: string; sub: string }[] = [
-    { id: 'saved', label: '저장 (7일)', sub: '진단 페이지 자동 저장' },
+    { id: 'saved', label: '저장 (월)', sub: '쿠팡 손익 월 저장본' },
     { id: 'live', label: '라이브', sub: '광고 엑셀 직접 업로드' },
   ]
   // 게스트는 라이브 탭만 노출 (저장 탭 숨김)

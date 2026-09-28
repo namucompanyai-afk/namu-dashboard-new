@@ -18,6 +18,7 @@ import { parseOnePSalesCsv, type OnePSalesRow } from '@/lib/coupang/parsers/oneP
 import { parsePurchaseOrderFiles, type PurchaseOrder } from '@/lib/coupang/parsers/purchaseOrder'
 import { parseMilkrunSettlement, parseMilkrunList, type MilkrunSettleRow, type MilkrunListRow } from '@/lib/coupang/parsers/milkrun'
 import { build1PView } from '@/lib/coupang/onePAnalysis'
+import { packAdRows, unpackAdRows } from '@/lib/coupang/adRowsPack'
 import { computeOnePPnl } from '@/lib/coupang/onePPnl'
 import type { OnePMarginRow, MarginCalcRow } from '@/lib/coupang/parsers/marginMaster'
 
@@ -84,7 +85,7 @@ export default function CoupangPnlPanel(props: {
   const [month, setMonth] = useState(thisMonth())
   const [saved, setSaved] = useState<Record<Kind, Saved>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
   // 올렸지만 월 저장 못 한 파싱 결과 (저장 실패해도 계산엔 사용) · 칸별 오류 문장
-  const [pending, setPending] = useState<Record<Kind, { data: any; fileName: string } | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
+  const [pending, setPending] = useState<Record<Kind, { data: any; fileName: string; kw?: AdCampaignRow[] } | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
   const [errors, setErrors] = useState<Record<Kind, string | null>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
   const [busy, setBusy] = useState<Kind | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -101,6 +102,14 @@ export default function CoupangPnlPanel(props: {
           if (j?.data) next[kind] = { data: j.data, fileName: j.fileName, savedAt: j.savedAt }
         } catch { /* 없음 */ }
       }))
+      // 키워드 포함 광고 행 (광고 분석과 같은 데이터) — 있으면 수익 진단에 요약 대신 주입
+      let kwRows: AdCampaignRow[] = []
+      if (next.ad) {
+        try {
+          const j = await (await fetch(`/api/coupang-master?type=pnl_adkw_${month}`)).json()
+          kwRows = unpackAdRows(j?.data)
+        } catch { /* 없음 → 요약 사용 */ }
+      }
       if (cancelled) return
       setSaved(next)
       setPending({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
@@ -113,7 +122,8 @@ export default function CoupangPnlPanel(props: {
         const start: string | null = ad.data.startDate || fromName?.startDate || null
         const end: string | null = ad.data.endDate || fromName?.endDate || null
         const days = start && end ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1 : null
-        props.onAd(ad.data.rows, { fileName: `${ad.fileName || '광고'} (${Number(month.slice(5, 7))}월 저장본)`, uploadedAt: ad.savedAt, rowCount: ad.data.rows.length },
+        const rows = kwRows.length ? kwRows : ad.data.rows
+        props.onAd(rows, { fileName: `${ad.fileName || '광고'} (${month} 월 저장본)`, uploadedAt: ad.savedAt, rowCount: rows.length },
           start && end && days ? { startDate: start, endDate: end, days } : null)
       }
       if (next.seller?.data?.rows?.length) {
@@ -125,14 +135,13 @@ export default function CoupangPnlPanel(props: {
     return () => { cancelled = true }
   }, [month]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const save = async (kind: Kind, data: any, fileName: string) => {
-    setPending((p) => ({ ...p, [kind]: { data, fileName } }))
+  const postPnl = async (type: string, data: any, fileName: string) => {
     let res: Response
     try {
       res = await fetch('/api/coupang-master', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: `pnl_${kind}_${month}`, data, fileName }),
+        body: JSON.stringify({ type: `pnl_${type}_${month}`, data, fileName }),
       })
     } catch (e) {
       throw new Error(`월 저장 실패 — 서버 연결 안 됨 (${errMsg(e)})`)
@@ -142,6 +151,12 @@ export default function CoupangPnlPanel(props: {
       const why = j?.error == null ? '' : typeof j.error === 'string' ? j.error : errMsg(j.error)
       throw new Error(`월 저장 실패 (${res.status})${why ? ` — ${why}` : ''}`)
     }
+  }
+  /** kw = 광고 원본 행 (키워드 포함) — 광고 칸이면 압축해 pnl_adkw 로 함께 저장 (광고 분석이 읽음) */
+  const save = async (kind: Kind, data: any, fileName: string, kw?: AdCampaignRow[]) => {
+    setPending((p) => ({ ...p, [kind]: { data, fileName, kw } }))
+    if (kind === 'ad' && kw?.length) await postPnl('adkw', packAdRows(kw), fileName)
+    await postPnl(kind, data, fileName)
     setSaved((s) => ({ ...s, [kind]: { data, fileName, savedAt: new Date().toISOString() } }))
     setPending((p) => ({ ...p, [kind]: null }))
   }
@@ -151,8 +166,8 @@ export default function CoupangPnlPanel(props: {
     setErrors((e) => ({ ...e, [kind]: null }))
     try {
       const p = pending[kind]
-      if (p) await save(kind, p.data, p.fileName)
-      else if (kind === 'ad' && props.storeAdRows.length) await save('ad', { rows: compactAdRows(props.storeAdRows) }, '수익 진단 광고 데이터')
+      if (p) await save(kind, p.data, p.fileName, p.kw)
+      else if (kind === 'ad' && props.storeAdRows.length) await save('ad', { rows: compactAdRows(props.storeAdRows) }, '수익 진단 광고 데이터', props.storeAdRows)
       else if (kind === 'seller' && props.storeSellerRows?.length) await save('seller', { rows: props.storeSellerRows }, '수익 진단 3P 판매 데이터')
     } catch (e) {
       setErrors((x) => ({ ...x, [kind]: errMsg(e) }))
@@ -173,7 +188,7 @@ export default function CoupangPnlPanel(props: {
         props.onAd(r.rows, { fileName: f.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length },
           r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate, days: r.periodDays || 30 } : null)
         const per = r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate } : extractPeriodFromFileName(f.name)
-        await save('ad', { rows: compactAdRows(r.rows), startDate: per?.startDate ?? null, endDate: per?.endDate ?? null }, f.name)
+        await save('ad', { rows: compactAdRows(r.rows), startDate: per?.startDate ?? null, endDate: per?.endDate ?? null }, f.name, r.rows)
       } else if (kind === 'seller') {
         const r = parseSalesInsight(await f.arrayBuffer())
         const rows = (r as any).rows || []
