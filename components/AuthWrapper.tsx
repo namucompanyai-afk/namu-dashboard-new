@@ -16,7 +16,7 @@ const AUTH_APIS = [
   '/api/campaign-targets', '/api/coupang-ad-history', '/api/coupang-diagnoses',
   '/api/coupang-margin-master', '/api/coupang-master', '/api/influencer',
   '/api/jindopam-mapping', '/api/jindopam/settlement', '/api/meta',
-  '/api/naver-diagnoses', '/api/ss-product-mapping',
+  '/api/naver-diagnoses', '/api/ss-product-mapping', '/api/apps-script',
 ];
 
 // 보호 API 가 401 을 주면 localStorage 로그인만 남은 상태 → 로그아웃 처리 후 재로그인 (1회 설치)

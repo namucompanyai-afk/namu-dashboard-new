@@ -32,14 +32,22 @@ export function roleCodeOf(role: unknown): RoleCode {
 
 const sign = (payload: string) => createHmac('sha256', secret()).update(payload).digest('base64url')
 
-export function issueAuthToken(role: unknown): string {
+/** m = 로그인 이메일(소문자) — 본인 것만 허용하는 동작(연차 신청·본인 조회) 확인용 */
+export function issueAuthToken(role: unknown, email?: unknown): string {
+  const m = typeof email === 'string' ? email.trim().toLowerCase() : ''
   const payload = Buffer.from(
-    JSON.stringify({ r: roleCodeOf(role), e: Math.floor(Date.now() / 1000) + MAX_AGE_SEC })
+    JSON.stringify({ r: roleCodeOf(role), e: Math.floor(Date.now() / 1000) + MAX_AGE_SEC, ...(m ? { m } : {}) })
   ).toString('base64url')
   return `${payload}.${sign(payload)}`
 }
 
+export interface AuthSession { role: RoleCode; email: string | null }
+
 function verifyAuthToken(token: string | undefined): RoleCode | null {
+  return verifySession(token)?.role ?? null
+}
+
+function verifySession(token: string | undefined): AuthSession | null {
   if (!token) return null
   const [payload, sig] = token.split('.')
   if (!payload || !sig) return null
@@ -47,9 +55,10 @@ function verifyAuthToken(token: string | undefined): RoleCode | null {
   const given = Buffer.from(sig)
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null
   try {
-    const { r, e } = JSON.parse(Buffer.from(payload, 'base64url').toString())
+    const { r, e, m } = JSON.parse(Buffer.from(payload, 'base64url').toString())
     if (typeof e !== 'number' || e < Date.now() / 1000) return null
-    return ['admin', 'staff', 'jindo', 'guest'].includes(r) ? (r as RoleCode) : null
+    if (!['admin', 'staff', 'jindo', 'guest'].includes(r)) return null
+    return { role: r as RoleCode, email: typeof m === 'string' && m ? m : null }
   } catch {
     return null
   }
@@ -62,8 +71,13 @@ const cookieOf = (req: Request, name: string) =>
     .find((c) => c.startsWith(`${name}=`))
     ?.slice(name.length + 1)
 
-export function setAuthCookie(res: NextResponse, role: unknown) {
-  res.cookies.set(AUTH_COOKIE, issueAuthToken(role), {
+/** 서명 쿠키로 확인한 로그인 세션 (없음·위조·만료 → null) */
+export function getSession(req: Request): AuthSession | null {
+  return verifySession(cookieOf(req, AUTH_COOKIE))
+}
+
+export function setAuthCookie(res: NextResponse, role: unknown, email?: unknown) {
+  res.cookies.set(AUTH_COOKIE, issueAuthToken(role, email), {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
