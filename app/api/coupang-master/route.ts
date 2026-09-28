@@ -29,6 +29,17 @@ const VALID_TYPES = [
 const PNL_TYPE = /^pnl_(ad|seller|onep_sales|po|mr_settle|mr_list)_\d{4}-\d{2}$/;
 type DataType = typeof VALID_TYPES[number] | `pnl_${string}`;
 
+/** Supabase 오류는 Error 가 아닌 객체({message, code, details, hint}) — 사람이 읽을 문장으로 */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object') {
+    const e = err as { message?: string; code?: string; details?: string; hint?: string };
+    const parts = [e.message, e.details, e.hint, e.code && `(code ${e.code})`].filter(Boolean);
+    return parts.length ? parts.join(' · ') : JSON.stringify(err);
+  }
+  return String(err);
+}
+
 function getKey(type: DataType): string {
   return `coupang_${type}`;
 }
@@ -68,7 +79,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json(saved);
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: errText(err) }, { status: 500 });
   }
 }
 
@@ -103,7 +114,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: errText(err) }, { status: 500 });
   }
 }
 
@@ -136,6 +147,6 @@ export async function DELETE(request: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: errText(err) }, { status: 500 });
   }
 }
