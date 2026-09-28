@@ -139,19 +139,8 @@ export default function DiagnosisPage() {
           setSavedAnalyses(listJson.diagnoses)
         }
 
-        // 가장 최근 저장 분석을 frozen view 로 자동 로드 (재계산 없음)
-        const all = listJson?.diagnoses || []
-        const sorted = all
-          .filter((a: any) => a.periodEndDate || a.weekKey || a.monthKey)
-          .sort((a: any, b: any) => (b.periodEndDate || b.weekKey || b.monthKey || '').localeCompare(a.periodEndDate || a.weekKey || a.monthKey || ''))
-        const meta = sorted[0]
-        if (meta?.id) {
-          try {
-            const itemRes = await fetch(`/api/coupang-diagnoses?type=item&id=${meta.id}`)
-            const target = await itemRes.json()
-            if (target?.summary) setLoadedSnapshot(target)
-          } catch (e) { console.warn('자동 로드 실패:', e) }
-        }
+        // 저장된 분석은 자동으로 열지 않는다 — 첫 화면은 항상 라이브 모드(쿠팡 손익 패널 맨 위).
+        // 저장본은 "저장된 분석" 목록에서 직접 고를 때만 frozen view 로 연다.
       } catch (err) {
         console.error('자동 로드 실패:', err)
       } finally {
@@ -507,6 +496,20 @@ export default function DiagnosisPage() {
         {!loadedSnapshot && marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
           <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
             ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
+          </div>
+        )}
+        {loadedSnapshot && (
+          <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm text-blue-900">
+            <span>
+              📌 저장본 보는 중 · {loadedSnapshot.label || `${loadedSnapshot.periodStartDate || ''} ~ ${loadedSnapshot.periodEndDate || ''}`}
+              <span className="ml-2 text-xs text-blue-700">(쿠팡 손익 월별 패널은 라이브 모드에서 보입니다)</span>
+            </span>
+            <button
+              onClick={exitSnapshotView}
+              className="rounded border border-blue-400 bg-white px-3 py-1 text-xs font-semibold text-blue-800 hover:bg-blue-100"
+            >
+              라이브로 돌아가기
+            </button>
           </div>
         )}
         {/* 헤더 */}
