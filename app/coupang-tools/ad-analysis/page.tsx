@@ -43,6 +43,7 @@ import {
   type ManualKeywordRow,
   type CampaignPairAnalysis,
   hasBidSample,
+  bepCpcLabel,
 } from '@/lib/coupang/adAnalysis'
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
@@ -2959,8 +2960,7 @@ function BepCpcLine({ campaign, entries, rowMap, selectedOptionId }: {
 }) {
   if (!entries.length) return null
   const sel = selectedOptionId ? rowMap.get(selectedOptionId) : undefined
-  // buildBepCpcForCampaign 과 같은 라벨 규칙
-  const selLabel = sel ? (sel.bagCount > 0 && sel.kgPerBag > 0 ? `${sel.bagCount}봉` : (sel.optionName || selectedOptionId!.slice(-4))) : null
+  const selLabel = sel ? bepCpcLabel(sel, selectedOptionId!) : null
   return (
     <div style={{ fontSize: 11.5, color: '#64748B' }}>
       <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}—{' '}

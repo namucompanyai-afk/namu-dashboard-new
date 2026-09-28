@@ -712,6 +712,15 @@ export interface BepCpcEntry {
   kgPerBag: number
 }
 
+/** BEP 줄 라벨 — 3P: 봉수("1봉"), 1P: 옵션별 ("2개·1봉" — 1P 는 1봉 기준 수치라 옵션을 봉수로 묶지 않음) */
+export function bepCpcLabel(row: MarginCalcRow, optId: string): string {
+  if (row.saleChannel === '1P') {
+    const n = String(row.coupangOptionName || '').match(/(\d+)\s*개/)?.[1]
+    return n ? `${n}개·1봉` : `${optId.slice(-4)}·1봉`
+  }
+  return row.bagCount > 0 && row.kgPerBag > 0 ? `${row.bagCount}봉` : (row.optionName || `${optId.slice(-4)}`)
+}
+
 export function buildBepCpcForCampaign(
   campaign: CampaignDiag,
   master: CostMaster | null,
@@ -753,10 +762,7 @@ export function buildBepCpcForCampaign(
     if (!price || !bep || !row) continue
     const cpc = (price * avgCvr) / ((bep / 100) * 1.1) // BEP 광고센터 기준 (옛 ×1.21 = ×1.1 VAT + ×1.1 환산)
     if (!Number.isFinite(cpc) || cpc <= 0) continue
-    const label =
-      row.bagCount > 0 && row.kgPerBag > 0
-        ? `${row.bagCount}봉`
-        : (row.optionName || `${optId.slice(-4)}`)
+    const label = bepCpcLabel(row, optId)
     // 가중치: 광고비 — 0 이면 가중치 1 (단순 평균 효과, 신규 옵션 케이스)
     const w = Math.max(adCostByOpt.get(optId) ?? 0, 1)
     const g = groups.get(label)
@@ -793,7 +799,8 @@ export function buildBepCpcForCampaign(
   // 봉수 작은 순 → 그 다음 1봉당 kg 작은 순
   out.sort((a, b) => {
     if (a.bagCount !== b.bagCount) return a.bagCount - b.bagCount
-    return a.kgPerBag - b.kgPerBag
+    if (a.kgPerBag !== b.kgPerBag) return a.kgPerBag - b.kgPerBag
+    return a.label.localeCompare(b.label, 'ko', { numeric: true }) // 1P "2개·1봉" < "3개·1봉"
   })
 
   return out
