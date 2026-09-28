@@ -2266,7 +2266,10 @@ function computeOptions(
     for (const r of rs) {
       const cm = rowMap.get(String(r.convOptionId || '').trim())
       if (cm?.netProfit != null && (isRetailRow(r) || cm.saleChannel !== '1P')) margin += (r.sold14d || 0) * cm.netProfit
-      const taxable = isRetailRow(r) && !!(rowMap.get(optId)?.taxable ?? cm?.taxable)
+      // 과세 여부: 광고집행 옵션 기준 (3P 행은 3P 옵션 행만) — 과세 ×1.0 · 면세 ×1.1
+      const own = rowMap.get(optId)
+      const ownRow = own && (isRetailRow(r) || own.saleChannel !== '1P') ? own : undefined
+      const taxable = !!(ownRow?.taxable ?? cm?.taxable)
       costForProfit += (r.adCost || 0) * (taxable ? 1.0 : 1.1)
     }
     const gapPct = roasPct != null && bepPct != null ? roasPct - bepPct : null

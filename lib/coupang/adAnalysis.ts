@@ -241,7 +241,7 @@ export interface CampaignDiag {
   channel: '3P' | '1P'
   /** 광고 마진 합 = Σ 판매수 × 옵션 마진 (1P: 판매 봉수 × 1봉 마진) */
   marginSum: number
-  /** 손익 계산용 광고비 (부가포함 ×1.1, 1P 과세 ×1.0) */
+  /** 손익 계산용 광고비 (면세 ×1.1 · 과세 ×1.0) */
   adCostForProfit: number
   /** 광고 손익 (원) = marginSum − adCostForProfit */
   adProfit: number
@@ -346,7 +346,9 @@ export function buildBepMap(master: CostMaster | null): Map<string, number> {
   for (const r of master.marginRows) {
     if (!r.optionId) continue
     if (r.bepRoas == null || !Number.isFinite(r.bepRoas) || r.bepRoas <= 0) continue
-    m.set(String(r.optionId).trim(), r.bepRoas * 100 * 1.1) // 광고센터 기준 (부가포함 BEP × 1.1)
+    // 광고센터 기준 (부가포함 BEP × 1.1) — 3P 과세 옵션은 광고비 부가세 환급이라 ×1.0 (1P 합성 행은 bepRoas 에 이미 반영)
+    const f = r.taxable && r.saleChannel !== '1P' ? 1.0 : 1.1
+    m.set(String(r.optionId).trim(), r.bepRoas * 100 * f)
   }
   return m
 }
@@ -494,7 +496,7 @@ export function buildAdAnalysisView(
     const searchAdCostVat = searchRaw * 1.1
     const nonSearchAdCostVat = nonSearchRaw * 1.1
 
-    // 광고 손익 — 판매수 × 전환 옵션 마진 − 광고비(부가포함, 1P 과세 ×1.0)
+    // 광고 손익 — 판매수 × 전환 옵션 마진 − 광고비(부가포함, 과세 ×1.0)
     const channel: '3P' | '1P' = rows.some(isRetailRow) ? '1P' : '3P'
     let marginSum = 0
     let adCostForProfit = 0
@@ -504,8 +506,10 @@ export function buildAdAnalysisView(
       // 3P 행은 3P 옵션 마진만 (1P 합성 행 제외) · 1P 행은 3P 전환이면 3P 마진, 1P 면 1봉 마진
       const mr = mrRaw && (isRetailRow(r) || mrRaw.saleChannel !== '1P') ? mrRaw : undefined
       if (mr && mr.netProfit != null) marginSum += (r.sold14d || 0) * mr.netProfit
-      const adRow = rowMapAll.get(String(r.adOptionId || '').trim())
-      const taxable = isRetailRow(r) && !!(adRow?.taxable ?? mr?.taxable)
+      // 과세 여부: 광고집행 옵션 기준 (3P 행은 3P 옵션 행만, 1P 행은 1P 합성 행 포함)
+      const adRowRaw = rowMapAll.get(String(r.adOptionId || '').trim())
+      const adRow = adRowRaw && (isRetailRow(r) || adRowRaw.saleChannel !== '1P') ? adRowRaw : undefined
+      const taxable = !!(adRow?.taxable ?? mr?.taxable)
       adCostForProfit += (r.adCost || 0) * (taxable ? 1.0 : 1.1)
     }
 

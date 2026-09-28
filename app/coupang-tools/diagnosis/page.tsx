@@ -1235,7 +1235,7 @@ function SummarySection({ result, viewMode, prevSummary, periodStart, periodEnd,
         <KpiCard
           label="광고비 (+VAT)"
           value={formatMan(adj(s.totalAdCost))}
-          formula="Σ 쿠팡 광고비 × 1.1"
+          formula="Σ 쿠팡 광고비 (면세 ×1.1 · 과세 ×1.0)"
           sub={(() => {
             const u = (result as any).unmatched?.adCost
             if (u && Number.isFinite(u) && u > 0) {

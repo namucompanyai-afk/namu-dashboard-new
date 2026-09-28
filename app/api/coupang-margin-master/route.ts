@@ -111,6 +111,7 @@ export async function GET(req: Request) {
         netProfit: Number.isFinite(netProfit) ? netProfit : null,
         marginRate: Number.isFinite(marginRate) ? marginRate : null,
         bepRoas: Number.isFinite(netProfit) && netProfit > 0 ? actualPrice / netProfit : null,
+        taxable: taxOf.get(alias) === '과세',
       });
     }
     // ── 쿠팡 1P 행 ──

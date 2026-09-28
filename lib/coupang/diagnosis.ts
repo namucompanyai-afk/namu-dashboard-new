@@ -44,6 +44,9 @@ import type { AdCampaignRow } from './parsers/adCampaign'
 import type { MarginCalcRow } from './parsers/marginMaster'
 
 const AD_VAT_MULTIPLIER = 1.1
+/** 광고비 부가세 배수 — 과세 상품은 부가세 환급이라 ×1.0, 면세 ×1.1 (광고집행 옵션의 나무_마스터 과세 구분) */
+const adVatMul = (optionId: string | undefined): number =>
+  optionId && getMarginRow(optionId)?.taxable ? 1.0 : AD_VAT_MULTIPLIER
 
 // ─────────────────────────────────────────────────────────────
 // 입력 / 출력 타입
@@ -306,7 +309,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   for (const r of adRows) {
     if (r.adOptionId) {
       const prev = adExecByOpt.get(r.adOptionId) ?? { cost: 0, campRevenue: 0 }
-      prev.cost += (r.adCost ?? 0) * AD_VAT_MULTIPLIER
+      prev.cost += (r.adCost ?? 0) * adVatMul(r.adOptionId)
       prev.campRevenue += r.revenue14d ?? 0
       adExecByOpt.set(r.adOptionId, prev)
     }
@@ -661,7 +664,7 @@ export function diagnose(input: DiagnosisInput): DiagnosisResult {
   const totalOrganicRevenue = totalRevenue - totalAdRevenue
   const totalOrganicSold = totalSold - totalAdSold
   const totalMargin = sum(products, 'totalMargin')
-  const totalAdCost = adRows.reduce((s, r) => s + (r.adCost || 0), 0) * AD_VAT_MULTIPLIER
+  const totalAdCost = adRows.reduce((s, r) => s + (r.adCost || 0) * adVatMul(r.adOptionId), 0)
   const totalCampaignRevenue = adRows.reduce((s, r) => s + (r.revenue14d || 0), 0)
   const totalNetProfit = totalMargin - totalAdCost
   const marginRateOverall = totalRevenue > 0 ? totalMargin / totalRevenue : 0
