@@ -257,3 +257,10 @@ export async function listByPrefix(prefix: string) {
   allRows.sort((a: any, b: any) => a.id.localeCompare(b.id));
   return allRows;
 }
+
+// 깨우기용 가벼운 읽기 1건 (무료 요금제 7일 미사용 자동 정지 방지) — 행 1개의 id 만
+export async function pingSupabase(): Promise<string | null> {
+  const { data, error } = await getClient().from('dashboard_data').select('id').limit(1);
+  if (error) throw error;
+  return data?.[0]?.id ?? null;
+}
