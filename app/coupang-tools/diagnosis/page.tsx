@@ -669,6 +669,7 @@ export default function DiagnosisPage() {
             marginRows={marginMaster?.marginRows}
             onAd={(rows, meta, period) => { setLoadedSnapshot(null); setAdCampaign(rows, meta, period) }}
             onSeller={(rows, meta) => { setLoadedSnapshot(null); setSalesInsight(rows as any, meta) }}
+            onMonthEmpty={() => resetExceptMargin()}
           />
         )}
 

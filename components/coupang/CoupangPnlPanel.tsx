@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { parseAdCampaign, type AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
+import { parseAdCampaign, extractPeriodFromFileName, type AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseOnePSalesCsv, type OnePSalesRow } from '@/lib/coupang/parsers/onePSales'
 import { parsePurchaseOrderFiles, type PurchaseOrder } from '@/lib/coupang/parsers/purchaseOrder'
@@ -78,6 +78,8 @@ export default function CoupangPnlPanel(props: {
   marginRows?: MarginCalcRow[]
   onAd: (rows: AdCampaignRow[], meta: any, period: any) => void
   onSeller: (rows: any[], meta: any) => void
+  /** 선택 월에 광고·3P 판매 저장본이 없을 때 — 수익 진단 저장소 비우기 */
+  onMonthEmpty?: () => void
 }) {
   const [month, setMonth] = useState(thisMonth())
   const [saved, setSaved] = useState<Record<Kind, Saved>>({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
@@ -103,10 +105,22 @@ export default function CoupangPnlPanel(props: {
       setSaved(next)
       setPending({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
       setErrors({ ad: null, seller: null, onep_sales: null, po: null, mr_settle: null, mr_list: null })
-      // 3P 판매 저장본은 수익 진단 저장소가 비어 있을 때만 주입 (기존 흐름 우선)
-      if (next.seller?.data?.rows?.length && !props.storeHasSeller) {
+      // 그 달 저장본을 아래 수익 진단(3P)에도 주입 — 광고 요약 행 + 광고 기간 → SELLER 순서.
+      // 광고 요약(캠페인·광고옵션·전환옵션·판매방식 단위 합계)은 3P 진단이 쓰는 열(광고비·14일 매출·판매수·옵션ID)을 다 가져 결과가 원본과 같다.
+      const ad = next.ad
+      if (ad?.data?.rows?.length) {
+        const fromName = extractPeriodFromFileName(ad.fileName || '')
+        const start: string | null = ad.data.startDate || fromName?.startDate || null
+        const end: string | null = ad.data.endDate || fromName?.endDate || null
+        const days = start && end ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1 : null
+        props.onAd(ad.data.rows, { fileName: `${ad.fileName || '광고'} (${Number(month.slice(5, 7))}월 저장본)`, uploadedAt: ad.savedAt, rowCount: ad.data.rows.length },
+          start && end && days ? { startDate: start, endDate: end, days } : null)
+      }
+      if (next.seller?.data?.rows?.length) {
         props.onSeller(next.seller.data.rows, { fileName: next.seller.fileName || '저장본', uploadedAt: next.seller.savedAt, rowCount: next.seller.data.rows.length })
       }
+      // 그 달 저장본이 하나도 없으면 다른 달 데이터가 남지 않게 수익 진단 광고·판매를 비움
+      if (!ad?.data?.rows?.length && !next.seller?.data?.rows?.length) props.onMonthEmpty?.()
     })()
     return () => { cancelled = true }
   }, [month]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -158,7 +172,8 @@ export default function CoupangPnlPanel(props: {
         if (r.missingColumns.length) throw new Error(`광고 파일 열 누락: ${r.missingColumns.join(', ')}`)
         props.onAd(r.rows, { fileName: f.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length },
           r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate, days: r.periodDays || 30 } : null)
-        await save('ad', { rows: compactAdRows(r.rows), startDate: r.startDate, endDate: r.endDate }, f.name)
+        const per = r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate } : extractPeriodFromFileName(f.name)
+        await save('ad', { rows: compactAdRows(r.rows), startDate: per?.startDate ?? null, endDate: per?.endDate ?? null }, f.name)
       } else if (kind === 'seller') {
         const r = parseSalesInsight(await f.arrayBuffer())
         const rows = (r as any).rows || []
