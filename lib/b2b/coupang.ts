@@ -12,6 +12,7 @@ import {
   toNum,
   type ProductMaster,
 } from './kurly'
+import { parseOptionName } from '@/lib/coupang/margin'
 
 // ── 쿠팡 발주서 파싱 ─────────────────────────────────────────────
 /** 첫 셀이 이 문자열로 시작하면 쿠팡 발주서로 본다 */
@@ -207,6 +208,34 @@ export function parseCenters(rows: unknown[][]): CenterAddress[] {
     })
   }
   return out
+}
+
+/** 나무_마스터 '단가DB' 탭 → 별칭(정규화) → 1개 g. g 빈칸·0 행은 뺀다 */
+export function parseGramByAlias(rows: unknown[][]): Record<string, number> {
+  if (!rows.length) return {}
+  const c = resolveCols(rows[0], { alias: ['별칭'], gram: ['g'] })
+  const out: Record<string, number> = {}
+  if (c.alias < 0 || c.gram < 0) return out
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i] || []
+    const key = norm(r[c.alias])
+    const g = toNum(r[c.gram])
+    if (key && g > 0 && !(key in out)) out[key] = g
+  }
+  return out
+}
+
+/** 1개 무게(kg) — 단가DB g(별칭 매칭) 우선, 없으면 상품명 용량 파싱(parseOptionName). 둘 다 실패면 null */
+export function unitKgOf(
+  alias: string,
+  productName: string,
+  gramByAlias: Record<string, number>,
+): number | null {
+  const g = gramByAlias[norm(alias)]
+  if (g > 0) return g / 1000
+  // 'N개' 표기가 없으면 1개로 본다(parseOptionName 은 개수 토큰이 있어야 잡힌다)
+  const p = parseOptionName(/\d\s*개/.test(productName) ? productName : `${productName} 1개`)
+  return p && p.totalKg > 0 ? p.totalKg : null
 }
 
 /** 센터명 → 주소. 정규화 완전일치 우선, 없으면 부분일치(표기 흔들림 흡수) */
@@ -510,6 +539,8 @@ export type CoupangSummaryRow = {
   qty: number // 납품가능수량 합
   boxes: number // 발주 행별 박스 수(RoutedItem.boxes) 합
   boxesKnown: boolean // 박스입수 없는 행(boxes=null)이 섞이면 false → '—'
+  kg: number // 수량 × 1개 무게(unitKgOf)
+  kgKnown: boolean // 1개 무게를 못 구하면 false → '—'
   unitPrices: number[] // 발주서 매입가 — 발주마다 다르면 여러 개 (VAT 별도)
   unitPricesIncl: number[] // 부가포함 단가 (과세면 ×1.1)
   total: number // VAT 별도
@@ -526,6 +557,7 @@ export type CoupangSummary = {
   rows: CoupangSummaryRow[]
   totalQty: number
   totalBoxes: number // boxesKnown 행만 합산
+  totalKg: number // kgKnown 행만 합산
   total: number
   totalIncl: number
 }
@@ -536,7 +568,10 @@ export type CoupangSummary = {
  * 매출 경로에서 쓰지 않는다). 과세 구분만 시트 상품마스터에서 가져온다.
  * 부가세는 상품별 합계에 한 번만 적용해 행별 반올림 누적 오차를 피한다.
  */
-export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
+export function summarizeCoupang(
+  items: RoutedItem[],
+  gramByAlias: Record<string, number> = {},
+): CoupangSummary {
   const byKey = new Map<string, CoupangSummaryRow>()
   for (const it of items) {
     const key = norm(it.barcode) || norm(it.productName)
@@ -549,6 +584,8 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
         qty: 0,
         boxes: 0,
         boxesKnown: true,
+        kg: 0,
+        kgKnown: true,
         unitPrices: [],
         unitPricesIncl: [],
         total: 0,
@@ -565,6 +602,9 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
     r.qty += it.confirmQty
     if (it.boxes === null) r.boxesKnown = false
     else r.boxes += it.boxes
+    const unitKg = unitKgOf(it.master?.alias || '', it.productName, gramByAlias)
+    if (unitKg === null) r.kgKnown = false
+    else r.kg += it.confirmQty * unitKg
     r.total += it.confirmQty * it.unitPrice
     // 미납품 행은 매출이 0이라 단가를 따지지 않는다(잘못된 차단 방지)
     if (it.notDelivered) continue
@@ -586,6 +626,7 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
     rows,
     totalQty: rows.reduce((s, r) => s + r.qty, 0),
     totalBoxes: rows.reduce((s, r) => s + (r.boxesKnown ? r.boxes : 0), 0),
+    totalKg: rows.reduce((s, r) => s + (r.kgKnown ? r.kg : 0), 0),
     total: rows.reduce((s, r) => s + r.total, 0),
     totalIncl: rows.reduce((s, r) => s + r.totalIncl, 0),
   }

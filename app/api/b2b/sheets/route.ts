@@ -3,7 +3,7 @@ import { google } from 'googleapis'
 import { requireRole } from '@/lib/server-auth'
 import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 import { parseProductMaster, parseMilkrunPrices } from '@/lib/b2b/kurly'
-import { parseCenters } from '@/lib/b2b/coupang'
+import { parseCenters, parseGramByAlias } from '@/lib/b2b/coupang'
 import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
 
 /**
@@ -13,7 +13,7 @@ import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
  * 이 라우트는 읽기 전용이다 — scope 를 spreadsheets.readonly 로 고정하고
  * values.update/append/clear 등 쓰기 호출은 두지 않는다.
  *
- * GET /api/b2b/sheets        → { ok, products, prices, centers, coupangPrices }
+ * GET /api/b2b/sheets        → { ok, products, prices, centers, coupangPrices, gramByAlias }
  * GET /api/b2b/sheets?debug=1 → + { debug: 탭 목록·헤더 } (컬럼명 확인용)
  */
 
@@ -25,6 +25,7 @@ const TAB_PRODUCT = '상품마스터'
 const TAB_PRICE = '컬리 밀크런 가격표'
 const TAB_CENTER = '쿠팡 센터 주소록'
 const TAB_CP_PRICE = '쿠팡 밀크런 가격표'
+const TAB_PRICE_DB = '단가DB' // 별칭 → 1개 g (쿠팡 매출 요약 kg 열)
 
 const quote = (tab: string) => `'${tab.replace(/'/g, "''")}'`
 
@@ -63,6 +64,7 @@ export async function GET(req: Request) {
     if (has(TAB_PRICE)) wanted.push({ tab: TAB_PRICE, range: `${quote(TAB_PRICE)}!A1:J` })
     if (has(TAB_CENTER)) wanted.push({ tab: TAB_CENTER, range: `${quote(TAB_CENTER)}!A1:Z` })
     if (has(TAB_CP_PRICE)) wanted.push({ tab: TAB_CP_PRICE, range: `${quote(TAB_CP_PRICE)}!A1:ZZ` })
+    if (has(TAB_PRICE_DB)) wanted.push({ tab: TAB_PRICE_DB, range: `${quote(TAB_PRICE_DB)}!A1:Z` })
 
     const res = wanted.length
       ? await sheets.spreadsheets.values.batchGet({
@@ -87,6 +89,7 @@ export async function GET(req: Request) {
       prices: parseMilkrunPrices(valuesOf(TAB_PRICE)),
       centers: parseCenters(centerRows),
       coupangPrices: parseCoupangMilkrun(valuesOf(TAB_CP_PRICE)),
+      gramByAlias: parseGramByAlias(valuesOf(TAB_PRICE_DB)),
       missingTabs: [TAB_PRODUCT, TAB_PRICE, TAB_CENTER, TAB_CP_PRICE].filter((t) => !has(t)),
     }
     if (debug) {

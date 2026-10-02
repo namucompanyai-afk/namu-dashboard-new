@@ -68,6 +68,8 @@ import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/co
  */
 
 const num = (n: number) => n.toLocaleString('ko-KR')
+/** kg — 천 단위 콤마, 소수 첫째 자리까지(정수면 소수점 없이) */
+const kgFmt = (n: number) => n.toLocaleString('ko-KR', { maximumFractionDigits: 1 })
 type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
@@ -78,6 +80,7 @@ export default function CoupangB2BPage() {
   const [products, setProducts] = useState<ProductMaster[]>([])
   const [centers, setCenters] = useState<CenterAddress[]>([])
   const [milkrunPrices, setMilkrunPrices] = useState<CoupangMilkrunRow[]>([])
+  const [gramByAlias, setGramByAlias] = useState<Record<string, number>>({})
   const [sheetState, setSheetState] = useState<SheetState>('idle')
   const [sheetError, setSheetError] = useState('')
 
@@ -100,6 +103,7 @@ export default function CoupangB2BPage() {
       setProducts(json.products || [])
       setCenters(json.centers || [])
       setMilkrunPrices(json.coupangPrices || [])
+      setGramByAlias(json.gramByAlias || {})
       setSheetState('loaded')
     } catch (e: unknown) {
       setSheetError(e instanceof Error ? e.message : String(e))
@@ -211,7 +215,7 @@ export default function CoupangB2BPage() {
   )
   // 센터·입고예정일 묶음 9박스 이하 = 택배 발송분 / 초과 = 트럭 발송분(밀크런)
   const { parcel: rocketParcel, truck: rocketTruck } = useMemo(() => splitRocketRows(rocket), [rocket])
-  const summary = useMemo(() => summarizeCoupang(routed), [routed])
+  const summary = useMemo(() => summarizeCoupang(routed, gramByAlias), [routed, gramByAlias])
 
   // 발주 이력 저장 — 버튼을 눌렀을 때만 기록한다(업로드만으로는 시트에 쓰지 않음).
   // 실패해도 변환 기능은 그대로 동작해야 하므로 비차단(작은 문구만).
@@ -597,6 +601,7 @@ export default function CoupangB2BPage() {
                     <th className="px-3 py-2 text-left font-medium">상품</th>
                     <th className="px-3 py-2 text-right font-medium">수량</th>
                     <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-right font-medium">kg</th>
                     <th className="px-3 py-2 text-right font-medium">공급단가</th>
                     <th className="px-3 py-2 text-right font-medium">매출 합계</th>
                   </tr>
@@ -621,6 +626,9 @@ export default function CoupangB2BPage() {
                       <td className={'px-3 py-2 text-right ' + (r.boxesKnown ? '' : 'text-amber-600')}>
                         {r.boxesKnown ? num(r.boxes) : '—'}
                       </td>
+                      <td className={'px-3 py-2 text-right ' + (r.kgKnown ? '' : 'text-amber-600')}>
+                        {r.kgKnown ? kgFmt(r.kg) : '—'}
+                      </td>
                       <td className="px-3 py-2 text-right">
                         {r.unitPricesIncl.length > 0 ? (
                           r.unitPricesIncl.map((p) => num(p)).join(' / ')
@@ -638,6 +646,7 @@ export default function CoupangB2BPage() {
                     <td className="px-3 py-2">합계</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalQty)}</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalBoxes)}</td>
+                    <td className="px-3 py-2 text-right">{kgFmt(summary.totalKg)}</td>
                     <td className="px-3 py-2 text-right text-gray-400">—</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalIncl)}원</td>
                   </tr>
