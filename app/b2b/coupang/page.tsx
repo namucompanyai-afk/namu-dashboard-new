@@ -119,6 +119,9 @@ export default function CoupangB2BPage() {
         throw new Error('쿠팡 발주서에서 상품 행을 찾지 못했습니다. (발주서리스트_*.xlsx 인지 확인)')
       }
       setItems(parsed)
+      // 업로드마다 오늘(KST)로 되돌린다 — 탭을 며칠 열어 두면 처음 연 날짜에 멈춰 있으므로.
+      // 업로드 뒤 사용자가 바꾼 값은 다음 업로드 전까지 유지된다.
+      setMadeDate(todayKst())
       setFileNames(files.map((f) => f.name))
       setSkipped(skip)
       setHistoryMsg('')
@@ -593,6 +596,7 @@ export default function CoupangB2BPage() {
                   <tr>
                     <th className="px-3 py-2 text-left font-medium">상품</th>
                     <th className="px-3 py-2 text-right font-medium">수량</th>
+                    <th className="px-3 py-2 text-right font-medium">박스</th>
                     <th className="px-3 py-2 text-right font-medium">공급단가</th>
                     <th className="px-3 py-2 text-right font-medium">매출 합계</th>
                   </tr>
@@ -614,6 +618,9 @@ export default function CoupangB2BPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right">{num(r.qty)}</td>
+                      <td className={'px-3 py-2 text-right ' + (r.boxesKnown ? '' : 'text-amber-600')}>
+                        {r.boxesKnown ? num(r.boxes) : '—'}
+                      </td>
                       <td className="px-3 py-2 text-right">
                         {r.unitPricesIncl.length > 0 ? (
                           r.unitPricesIncl.map((p) => num(p)).join(' / ')
@@ -630,6 +637,7 @@ export default function CoupangB2BPage() {
                   <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                     <td className="px-3 py-2">합계</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalQty)}</td>
+                    <td className="px-3 py-2 text-right">{num(summary.totalBoxes)}</td>
                     <td className="px-3 py-2 text-right text-gray-400">—</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalIncl)}원</td>
                   </tr>
@@ -840,13 +848,16 @@ export default function CoupangB2BPage() {
               </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-gray-600">
-                  제조일자 (발주서에 없을 때만 적용)
+                  제조일자 (선택한 날짜로 일괄 적용)
                   <input
                     type="date"
                     value={madeDate}
                     onChange={(e) => setMadeDate(e.target.value)}
                     className="ml-2 px-2 py-1 border border-gray-300 rounded text-xs"
                   />
+                  {madeDate !== todayKst() && (
+                    <span className="ml-2 text-[11px] text-amber-600">오늘 날짜가 아닙니다</span>
+                  )}
                 </label>
                 <button
                   onClick={downloadXlsx}

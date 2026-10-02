@@ -25,7 +25,6 @@ export type CoupangOrderItem = {
   orderQty: number // 발주수량 (G열) — 참고 필드
   confirmQty: number // 납품가능수량 (H열) ← 실제 출고·매출·박스·PLT·이력 기준 (불변)
   unitPrice: number // 매입가 (공급가 블록 첫 컬럼) ← 매출 단가. 빈값·0이면 '단가 미확인'
-  madeDate?: string // 상품 표 '제조(수입)일자' — 없으면 undefined (화면 입력칸으로 폴백)
   qtyUnconfirmed: boolean // 발주서 전 행이 H=0 → 확정 전/구버전 발주서 (저장 차단)
   notDelivered: boolean // 확정 발주서 안의 H=0 행 → 미납품 확정 (차단 아님, 이력 제외)
   displayQty: number // 화면 표시용 — 미확정이면 G, 아니면 H
@@ -83,32 +82,6 @@ export function supplyPriceCol(rows: unknown[][], prodIdx: number): number {
   return SUPPLY_PRICE_COL
 }
 
-/**
- * 상품 표 '제조(수입)일자' 열 (못 찾으면 실측 위치 U열).
- *
- * 헤더는 '제조(수입)일자\n유통(소비)기한' 처럼 줄바꿈으로 두 줄이 한 셀에 들어 있고,
- * 바로 왼쪽(T열)에 'Y/N' 값을 갖는 **'제조일자관리'** 열이 있다 — 부분 일치로 찾으면
- * 그쪽이 먼저 걸려 'Y' 를 날짜로 읽으려다 전 행이 폴백된다. 그래서 공백·줄바꿈을 지운
- * 뒤 '제조(수입)일자' 로 시작하는 셀만 인정한다.
- */
-export const MADE_DATE_COL = 20
-const MADE_DATE_HEADER = '제조(수입)일자'
-
-export function madeDateCol(rows: unknown[][], prodIdx: number): number {
-  const want = norm(MADE_DATE_HEADER)
-  for (const row of [rows[prodIdx + 2], rows[prodIdx + 3]]) {
-    const i = (row || []).findIndex((v) => norm(v).startsWith(want))
-    if (i >= 0) return i
-  }
-  return MADE_DATE_COL
-}
-
-/** 제조일자 셀 → YYYY-MM-DD. 빈칸·'-'·형식 불명은 undefined (화면 입력칸 폴백 대상) */
-const madeDateOf = (v: unknown): string | undefined => {
-  const s = fmtDate(v)
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : undefined
-}
-
 export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrderItem[] {
   const A = (i: number) => textAt(rows, i, 0)
   const findRow = (pred: (s: string) => boolean) => rows.findIndex((_, i) => pred(A(i)))
@@ -134,7 +107,6 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   const prodIdx = findRow((s) => norm(s).startsWith('3.상품정보'))
   if (prodIdx < 0) return []
   const priceCol = supplyPriceCol(rows, prodIdx)
-  const mdCol = madeDateCol(rows, prodIdx)
 
   const raw: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {
@@ -152,7 +124,6 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       orderQty,
       confirmQty,
       unitPrice: toNum(cellAt(rows, r, priceCol)),
-      madeDate: madeDateOf(cellAt(rows, r, mdCol)),
       qtyUnconfirmed: false,
       notDelivered: false,
       displayQty: confirmQty,
@@ -439,13 +410,14 @@ export type RocketRow = {
  *            (발주서 값이 비면 주소록으로 대체)
  * 파렛트 수는 묶음 1회(첫 행)만 기입한다 — pltByGroup(묶음 키 → 실측 PLT 장수).
  * 배송메세지1 에는 묶음의 발주번호를 병기한다.
- * 제조일자는 발주서 파싱값을 행별로 쓰고, 없는 행만 fallbackMadeDate(화면 입력칸)로 채운다.
+ * 제조일자는 발주서 값을 쓰지 않고 화면 입력칸 날짜(madeDate)를 모든 행에 일괄 적용한다
+ * (쿠팡 발주서는 확정 전에도 '제조(수입)일자' 칸이 미리 채워져 내려온다).
  * 미납품(확정 발주서의 H=0) 행은 실제로 나가지 않으므로 양식에서 뺀다.
  */
 export function buildRocketRows(
   items: RoutedItem[],
   centers: CenterAddress[],
-  fallbackMadeDate: string,
+  madeDate: string,
   pltByGroup: Record<string, number>,
 ): RocketRow[] {
   const shipping = items.filter((it) => !it.notDelivered)
@@ -471,7 +443,7 @@ export function buildRocketRows(
       itemName: it.productName,
       itemQty: it.confirmQty,
       boxes: it.boxes,
-      madeDate: it.madeDate || fallbackMadeDate,
+      madeDate,
       pallet,
       invoice: '',
       centerKnown: !!address,
@@ -536,6 +508,8 @@ export type CoupangSummaryRow = {
   barcode: string
   name: string // 상품마스터 별칭(없으면 발주서 상품명)
   qty: number // 납품가능수량 합
+  boxes: number // 발주 행별 박스 수(RoutedItem.boxes) 합
+  boxesKnown: boolean // 박스입수 없는 행(boxes=null)이 섞이면 false → '—'
   unitPrices: number[] // 발주서 매입가 — 발주마다 다르면 여러 개 (VAT 별도)
   unitPricesIncl: number[] // 부가포함 단가 (과세면 ×1.1)
   total: number // VAT 별도
@@ -551,6 +525,7 @@ export type CoupangSummaryRow = {
 export type CoupangSummary = {
   rows: CoupangSummaryRow[]
   totalQty: number
+  totalBoxes: number // boxesKnown 행만 합산
   total: number
   totalIncl: number
 }
@@ -572,6 +547,8 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
         barcode: it.barcode,
         name: it.master?.alias || it.productName,
         qty: 0,
+        boxes: 0,
+        boxesKnown: true,
         unitPrices: [],
         unitPricesIncl: [],
         total: 0,
@@ -586,6 +563,8 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
       byKey.set(key, r)
     }
     r.qty += it.confirmQty
+    if (it.boxes === null) r.boxesKnown = false
+    else r.boxes += it.boxes
     r.total += it.confirmQty * it.unitPrice
     // 미납품 행은 매출이 0이라 단가를 따지지 않는다(잘못된 차단 방지)
     if (it.notDelivered) continue
@@ -606,6 +585,7 @@ export function summarizeCoupang(items: RoutedItem[]): CoupangSummary {
   return {
     rows,
     totalQty: rows.reduce((s, r) => s + r.qty, 0),
+    totalBoxes: rows.reduce((s, r) => s + (r.boxesKnown ? r.boxes : 0), 0),
     total: rows.reduce((s, r) => s + r.total, 0),
     totalIncl: rows.reduce((s, r) => s + r.totalIncl, 0),
   }
