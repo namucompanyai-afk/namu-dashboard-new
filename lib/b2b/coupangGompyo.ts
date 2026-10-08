@@ -120,7 +120,7 @@ export function buildGompyoNotice(shipments: GompyoShipment[]): string {
         `[쿠팡 로켓 ${date} 입고 — 곰표 상차 안내]`,
         `총 ${num(plt)}PLT (${num(units)}봉/${num(boxes)}박스) 밀크런 상차 부탁드립니다.`,
         ...lines,
-        `※ 1팔레트 = ${GOMPYO_UNITS_PER_PLT}봉(${GOMPYO_BOXES_PER_PLT}박스) / ※ 밀크런 접수 D-1 16:00`,
+        `※ 1팔레트 = ${GOMPYO_UNITS_PER_PLT}봉(${GOMPYO_BOXES_PER_PLT}박스) / ※ 밀크런 접수 D-1 영업일 14:00`,
       ].join('\n')
     })
     .join('\n\n')
