@@ -116,10 +116,55 @@ export function buildCenterAdvisories(groups: PoPalletGroup[]): CenterAdvisory[]
 }
 
 // ── 자리(더미) 모델 ──────────────────────────────────────────────
+// 한 도면 안에서 상품마다 다른 색 — 밝기·색상이 서로 떨어진 14색 (글자는 진한 색으로 위에 얹는다)
 const COLORS = [
   '#64B5F6', '#F5C542', '#81C784', '#E57373',
   '#BA68C8', '#4DB6AC', '#FFB74D', '#90A4AE',
+  '#F48FB1', '#A1887F', '#7986CB', '#D4E157',
+  '#4DD0E1', '#FF8A65',
 ]
+
+/** 약칭 2단계 — 용량 앞 단어 + 용량 + 뒤 단어 ('[쌀쌀쌀] 국산 귀리 2kg B급' → '귀리 2kg B급') */
+function nameWithSize(raw: string): string {
+  const words = String(raw || '').replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim().split(' ')
+  const i = words.findIndex((w) => /^\d+(\.\d+)?\s*(kg|g|ml|l)$/i.test(w))
+  if (i < 0) return words.join(' ')
+  return [words[i - 1], ...words.slice(i)].filter(Boolean).join(' ')
+}
+const brandOf = (raw: string): string => String(raw || '').match(/\[([^\]]*)\]/)?.[1] ?? ''
+
+/**
+ * 도면 하나의 상품 약칭 — shortName 이 겹치는 상품만 용량을 붙이고,
+ * 그래도 겹치면 브랜드, 마지막엔 전체 이름. 범례·목록·탑뷰·사이드뷰가 모두 이 이름을 쓴다.
+ */
+export function uniqueShortNames(fullNames: string[]): Map<string, string> {
+  const names = [...new Set(fullNames)]
+  const levels = [
+    shortName,
+    nameWithSize,
+    (f: string) => (brandOf(f) ? `${nameWithSize(f)}(${brandOf(f)})` : nameWithSize(f)),
+    (f: string) => f,
+  ]
+  const lvl = new Map(names.map((f) => [f, 0]))
+  const label = (f: string) => levels[lvl.get(f) ?? 0](f)
+  for (let round = 0; round < levels.length; round++) {
+    const byLabel = new Map<string, string[]>()
+    for (const f of names) byLabel.set(label(f), [...(byLabel.get(label(f)) ?? []), f])
+    let bumped = false
+    for (const group of byLabel.values()) {
+      if (group.length < 2) continue
+      for (const f of group) {
+        const l = lvl.get(f) ?? 0
+        if (l < levels.length - 1) {
+          lvl.set(f, l + 1)
+          bumped = true
+        }
+      }
+    }
+    if (!bumped) break
+  }
+  return new Map(names.map((f) => [f, label(f)]))
+}
 
 /** '[보배마을] 즉석밥 6개' → '즉석밥' (옛 표기 '… 180g * 6' 도 동일) */
 export function shortName(raw: string): string {
@@ -343,6 +388,31 @@ export function packPallets(slots: PlanSlot[], slotsPerPlt: number, maxBoxes = I
   return out
 }
 
+/**
+ * 같은 상품은 한 팔레트에 — 쿠팡 입고 매뉴얼 v3.06 §4.2 (나뉘면 수량 확인 곤란 → 회송 가능).
+ * 같은 상품의 연속 자리를 한 덩어리로 보고(자투리 자리는 자리 하나가 한 덩어리),
+ * 팔레트 1장을 넘는 덩어리만 자리 수·박스 상한 단위로 나눈 뒤 큰 덩어리부터 들어가는 첫 팔레트에 넣는다.
+ * 장수 결정은 하지 않는다 — 호출부가 packPallets 와 장수가 같을 때만 이 배치를 쓴다.
+ */
+export function packPalletsBySku(slots: PlanSlot[], slotsPerPlt: number, maxBoxes = Infinity): PlanSlot[][] {
+  const blocks: PlanSlot[][] = []
+  for (const s of slots) {
+    const last = blocks[blocks.length - 1]
+    if (last && !s.parts && !last[0].parts && last[0].fullName === s.fullName) last.push(s)
+    else blocks.push([s])
+  }
+  const pieces = blocks.flatMap((b) => packPallets(b, slotsPerPlt, maxBoxes))
+  const boxesOf = (xs: PlanSlot[]) => xs.reduce((a, x) => a + x.tiers, 0)
+  const order = pieces.map((p, i) => ({ p, i })).sort((a, b) => (b.p.length - a.p.length) || (a.i - b.i))
+  const out: PlanSlot[][] = []
+  for (const { p } of order) {
+    const fit = out.find((plt) => plt.length + p.length <= slotsPerPlt && boxesOf(plt) + boxesOf(p) <= maxBoxes)
+    if (fit) fit.push(...p)
+    else out.push([...p])
+  }
+  return out
+}
+
 /** 출고지별 팔레트 박스 상한 — 진도팜만 명시 상한 */
 export const maxBoxesPerPlt = (shipFrom: string): number =>
   shipFrom === '진도팜' ? GRAIN_MAX_BOXES_PER_PLT : Infinity
@@ -443,25 +513,21 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
   const need = groups.filter((g) => g.needsPallet)
   const gramByAlias = opts.gramByAlias ?? {}
 
-  const colorOf = new Map<string, string>()
-  let ci = 0
-  for (const g of need) {
-    for (const it of g.items) {
-      const k = norm(it.barcode) || norm(it.productName)
-      if (!colorOf.has(k)) colorOf.set(k, COLORS[ci++ % COLORS.length])
-    }
-  }
 
   const panels: PlanPanel[] = []
   for (const g of need) {
     // 같은 발주 안에서 상품 단위 합산
-    const skus = planSkusOf(g, colorOf)
+    const skus = planSkusOf(g)
     if (!skus.length) continue
 
     const grid = planGridOf(skus)
     const dimsUnknown = skus.some((s) => s.dims.unknown)
 
-    const chunks = packPallets(allocateSlots(skus, g.shipFrom), grid.slots, maxBoxesPerPlt(g.shipFrom))
+    // 장수는 packPallets(= pltCountOf) 기준 그대로 — 같은 상품 모으기는 장수가 같을 때만 적용
+    const allocated = allocateSlots(skus, g.shipFrom)
+    const seq = packPallets(allocated, grid.slots, maxBoxesPerPlt(g.shipFrom))
+    const bySku = packPalletsBySku(allocated, grid.slots, maxBoxesPerPlt(g.shipFrom))
+    const chunks = bySku.length === seq.length ? bySku : seq
     const total = Math.max(1, chunks.length)
     const grain = g.shipFrom === '진도팜'
     const lotOf = new Map(skus.map((x) => [x.fullName, x.lotKey]))
@@ -544,15 +610,25 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
     }
   }
 
-  const seen = new Set<string>()
-  const legend: CoupangPalletPlan['legend'] = []
+  // 도면 전체 기준 약칭·색 — 상품(전체 이름)마다 하나씩, 겹치지 않게 다시 입힌다
+  const order: string[] = []
+  for (const p of panels) for (const it of p.items) if (!order.includes(it.fullName)) order.push(it.fullName)
+  const nameOf = uniqueShortNames(order)
+  const colorByName = new Map(order.map((f, i) => [f, COLORS[i % COLORS.length]]))
+  const paint = <T extends { fullName: string; sku: string; color: string }>(x: T): T => ({
+    ...x,
+    sku: nameOf.get(x.fullName) ?? x.sku,
+    color: colorByName.get(x.fullName) ?? x.color,
+  })
   for (const p of panels) {
-    for (const it of p.items) {
-      if (seen.has(it.fullName)) continue
-      seen.add(it.fullName)
-      legend.push({ sku: it.sku, fullName: it.fullName, color: it.color })
-    }
+    p.items = p.items.map(paint)
+    p.slots = p.slots.map((s) => (s ? { ...paint(s), ...(s.parts ? { parts: s.parts.map(paint) } : {}) } : s))
   }
+  const legend: CoupangPalletPlan['legend'] = order.map((f) => ({
+    sku: nameOf.get(f) ?? f,
+    fullName: f,
+    color: colorByName.get(f) ?? COLORS[0],
+  }))
 
   return {
     dueDate: need.find((g) => g.dueDate)?.dueDate || '',
