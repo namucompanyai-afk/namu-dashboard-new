@@ -14,15 +14,18 @@ import { pltCountOf, type PoPalletGroup } from './coupangDiagram'
 
 export { pltCountOf } // 단일 소스: lib/b2b/coupangDiagram.tsx (실측 자리 수 × 단수)
 
-/** 톤수 구간 — 최대 PLT 오름차순. 14PLT 초과는 차량 분할로 처리한다. */
+/**
+ * 톤수 구간 예비값 — 최대 PLT 오름차순. 진도팜 차량 배정은 가격표 단위 라벨(vehicleTiers)이
+ * 기준이고, 라벨을 하나도 못 읽을 때만 이 값을 쓴다. 최대 구간 초과는 차량 분할로 처리한다.
+ */
 export const TON_TIERS: { maxPlt: number; tons: number }[] = [
   { maxPlt: 2, tons: 1 },
+  { maxPlt: 3, tons: 2.5 },
   { maxPlt: 4, tons: 3.5 },
   { maxPlt: 12, tons: 5 },
   { maxPlt: 14, tons: 8 },
+  { maxPlt: 16, tons: 11 },
 ]
-
-const MAX_TIER = TON_TIERS[TON_TIERS.length - 1]
 
 /** 가격표 한 행 — fees 는 센터명 → 요금(빈칸이면 키 없음) */
 export type CoupangMilkrunRow = {
@@ -157,18 +160,24 @@ export function vehicleTiers(rows: CoupangMilkrunRow[], shipFrom: string): Vehic
 }
 
 /**
- * PLT → 차량 배정. 14PLT 이하는 한 대, 초과분은 큰 차부터 분할한다.
- * 예) 16PLT → 8톤(14PLT) + 1톤(2PLT)
+ * PLT → 차량 배정 (진도팜). 구간은 가격표 단위 라벨(vehicleTiers)에서 읽고,
+ * 비어 있으면 TON_TIERS 예비값을 쓴다. 최대 구간 이하는 한 대, 초과분은 큰 차부터 분할한다.
+ * 예) 3PLT → 2.5톤 · 17PLT → 11톤(16PLT) + 1톤(1PLT)
  */
-export function assignVehicles(plt: number): { tons: number; plt: number }[] {
+export function assignVehicles(
+  plt: number,
+  tiers: { maxPlt: number; tons: number }[] = [],
+): { tons: number; plt: number }[] {
+  const table = tiers.length ? tiers : TON_TIERS
+  const top = table[table.length - 1]
   const out: { tons: number; plt: number }[] = []
   let left = Math.max(0, plt)
-  while (left > MAX_TIER.maxPlt) {
-    out.push({ tons: MAX_TIER.tons, plt: MAX_TIER.maxPlt })
-    left -= MAX_TIER.maxPlt
+  while (left > top.maxPlt) {
+    out.push({ tons: top.tons, plt: top.maxPlt })
+    left -= top.maxPlt
   }
   if (left > 0) {
-    const tier = TON_TIERS.find((t) => left <= t.maxPlt) ?? MAX_TIER
+    const tier = table.find((t) => left <= t.maxPlt) ?? top
     out.push({ tons: tier.tons, plt: left })
   }
   return out
@@ -293,7 +302,7 @@ export function buildMilkrunShipments(
   for (const s of list) {
     const origin = priceOrigin[s.shipFrom] ?? ''
     if (s.shipFrom === '진도팜') {
-      s.vehicles = assignVehicles(s.plt)
+      s.vehicles = assignVehicles(s.plt, vehicleTiers(prices, origin))
       s.vehicleLabel = vehicleLabelOf(s.vehicles)
       s.method = s.vehicleLabel
       const fees = s.vehicles.map((v) => lookupCoupangFee(prices, origin, s.center, v.tons))
