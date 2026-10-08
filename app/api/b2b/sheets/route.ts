@@ -5,7 +5,7 @@ import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
 import { parseProductMaster, parseMilkrunPrices } from '@/lib/b2b/kurly'
 import { parseCenters, parseGramByAlias } from '@/lib/b2b/coupang'
 import { parseCoupangMilkrun } from '@/lib/b2b/coupangMilkrun'
-import { parseBagFee, parseParcelFees, parseUnitCostByAlias } from '@/lib/b2b/coupangParcel'
+import { parseParcelSettings, parseUnitCostByAlias } from '@/lib/b2b/coupangParcel'
 
 /**
  * B2B 발주 변환 공용 기준정보 — 구글시트 read-only API (컬리·쿠팡 공용).
@@ -15,7 +15,7 @@ import { parseBagFee, parseParcelFees, parseUnitCostByAlias } from '@/lib/b2b/co
  * values.update/append/clear 등 쓰기 호출은 두지 않는다.
  *
  * GET /api/b2b/sheets        → { ok, products, prices, centers, coupangPrices, gramByAlias,
- *                                unitCostByAlias, bagFee, parcelFees }  (뒤 셋은 택배 전환 검토용)
+ *                                unitCostByAlias, parcelSettings }  (뒤 둘은 택배 전환 검토용)
  * GET /api/b2b/sheets?debug=1 → + { debug: 탭 목록·헤더 } (컬럼명 확인용)
  */
 
@@ -28,8 +28,7 @@ const TAB_PRICE = '컬리 밀크런 가격표'
 const TAB_CENTER = '쿠팡 센터 주소록'
 const TAB_CP_PRICE = '쿠팡 밀크런 가격표'
 const TAB_PRICE_DB = '단가DB' // 별칭 → 1개 g (쿠팡 매출 요약 kg 열) · 1봉 원가(소포장 공급가)·봉투
-const TAB_SETTING = '설정' // J~M '항목 | 값' 표 — 봉투 단가
-const TAB_JINDO_COST = '진도팜 원가표' // 상단 참고표 '규격 | 박스 | 택배' (A1:F8)
+const TAB_SETTING = '설정' // J~M '항목 | 값' 표 — 봉투·쿠팡 박스·쿠팡 택배·팔레트 단가
 
 const quote = (tab: string) => `'${tab.replace(/'/g, "''")}'`
 
@@ -70,7 +69,6 @@ export async function GET(req: Request) {
     if (has(TAB_CP_PRICE)) wanted.push({ tab: TAB_CP_PRICE, range: `${quote(TAB_CP_PRICE)}!A1:ZZ` })
     if (has(TAB_PRICE_DB)) wanted.push({ tab: TAB_PRICE_DB, range: `${quote(TAB_PRICE_DB)}!A1:Z` })
     if (has(TAB_SETTING)) wanted.push({ tab: TAB_SETTING, range: `${quote(TAB_SETTING)}!J1:M` })
-    if (has(TAB_JINDO_COST)) wanted.push({ tab: TAB_JINDO_COST, range: `${quote(TAB_JINDO_COST)}!A1:F8` })
 
     const res = wanted.length
       ? await sheets.spreadsheets.values.batchGet({
@@ -97,8 +95,7 @@ export async function GET(req: Request) {
       coupangPrices: parseCoupangMilkrun(valuesOf(TAB_CP_PRICE)),
       gramByAlias: parseGramByAlias(valuesOf(TAB_PRICE_DB)),
       unitCostByAlias: parseUnitCostByAlias(valuesOf(TAB_PRICE_DB)),
-      bagFee: parseBagFee(valuesOf(TAB_SETTING)),
-      parcelFees: parseParcelFees(valuesOf(TAB_JINDO_COST)),
+      parcelSettings: parseParcelSettings(valuesOf(TAB_SETTING)),
       missingTabs: [TAB_PRODUCT, TAB_PRICE, TAB_CENTER, TAB_CP_PRICE].filter((t) => !has(t)),
     }
     if (debug) {
