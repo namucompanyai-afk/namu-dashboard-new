@@ -48,6 +48,7 @@ import {
   PALLET_MM,
   pltCountOf,
   renderCoupangPalletPlanSvg,
+  SCRAP_NOTE,
 } from '@/lib/b2b/coupangDiagram'
 import {
   buildMilkrunShipments,
@@ -827,6 +828,7 @@ export default function CoupangB2BPage() {
                 · 자리당 단수는 SKU 실측 높이로 계산 — 진도팜(곡물) 출고만 {GRAIN_MAX_TIERS}단으로 묶는다
                 (위킵·곰표 출고는 실측 단수). PLT 수는 적재 구성도와 같은 기준
               </p>
+              <p className="text-gray-500">· {SCRAP_NOTE}</p>
             </div>
           </div>
 
