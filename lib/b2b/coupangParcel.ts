@@ -150,7 +150,7 @@ export function freightCompareText(f: FreightCompare): string {
   if (f.breakeven === undefined) return head
   if (f.breakeven === null) return `${head} · 트럭이 항상 불리`
   const b = f.breakeven
-  return `${head} · ${won(b.boxes)}박스(${won(b.bags)}봉)↑부터 트럭 유리 (${b.vehicle})`
+  return `${head} · ${won(b.boxes)}박스↑ 트럭 유리 · ${b.vehicle}`
 }
 
 // ── 행 펼침 — 9박스로 줄일 때 (참고) ───────────────────────────────

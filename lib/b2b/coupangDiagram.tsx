@@ -27,12 +27,9 @@ export const LIMIT_MM = 1700 // 팔레트 포함 높이 한도 (컬리와 동일
 export const PALLET_W_MM = 1100 // 팔레트 바닥 가로
 export const PALLET_D_MM = 1100 // 팔레트 바닥 세로
 export const GRAIN_MAX_TIERS = 5 // 진도팜(곡물) 현장 캡 — 6단부터 무너져서 단수를 묶는다
-export const GRAIN_MAX_BOXES_PER_PLT = 30 // 진도팜 팔레트 1장 박스 상한 — 넘으면 다음 PLT
-export const SCRAP_MIN_BOXES = 5 // 진도팜 그룹 합계가 이 값 미만인 상품은 자투리 자리로
-export const SCRAP_MAX_BOXES = 5 // 자투리 자리 1개 박스 상한
-export const SCRAP_MAX_STACK_MM = LIMIT_MM - PALLET_MM // 자투리 자리 박스 높이 합 상한 (1,550mm)
+export const GRAIN_MAX_BOXES_PER_PLT = 30 // 진도팜 PLT 수 = 올림(박스 합 ÷ 30), 팔레트 1장 박스 상한
 export const SCRAP_NOTE =
-  '진도팜 소량 상품(5박스 미만)은 자투리 자리에 함께 적재 — 실제 제조일자가 같은 것끼리만 묶고, 다르면 단독 자리로. 적재리스트 부착 필수'
+  '진도팜 PLT 수 = 올림(센터 × 입고예정일 박스 합 ÷ 30) — 자리가 모자라면 한 자리에 여러 상품을 아래→위로 혼적(점선 칸). 소비기한관리 상품은 가능하면 단독 자리, 적재리스트 부착 필수'
 export const PLT_KG_WARN = 1000 // 팔레트 1장 제품 중량 경고 기준(kg)
 
 /** 출고지별 안내 — 운송수단은 자동 판정하지 않고 문구만 낸다 */
@@ -215,14 +212,14 @@ export type PlanSku = {
   boxes: number
   dims: BoxDims
   tiersPerSlot: number // 이 박스가 이 출고지에서 쌓이는 최대 단수
-  lotKey: string // 발주서 관리 구분 ('제조일자관리'만 자투리 대상, '소비기한관리'·'' 는 단독 자리)
+  lotKey: string // 발주서 관리 구분 ('소비기한관리' 는 가능하면 단독 자리)
 }
 
-/** 자투리 자리 안의 상품 한 칸 (아래 → 위 순서) */
+/** 혼적 자리 안의 상품 한 칸 (아래 → 위 순서) */
 export type SlotPart = { sku: string; fullName: string; color: string; boxes: number; dims: BoxDims }
 
 /**
- * 자리 하나 = SKU 하나. 단, 진도팜 자투리 자리는 parts 에 여러 상품을 담는다
+ * 자리 하나 = SKU 하나. 단, 진도팜 혼적 자리는 parts 에 여러 상품을 담는다
  * (그때 tiers = 박스 합, sku/fullName/color/dims 는 맨 아래 상품 기준).
  */
 export type PlanSlot = {
@@ -233,7 +230,7 @@ export type PlanSlot = {
   tiersPerSlot: number // 이 SKU 의 실측 한계 단수 (펴서 쌓을 때 상한)
   dims: BoxDims
   parts?: SlotPart[]
-  scrapLabel?: string // 팔레트 안 자투리 자리 이름 (A, B …) — 도면 표시용
+  scrapLabel?: string // 팔레트 안 혼적 자리 이름 (A, B …) — 도면 표시용
 }
 
 /** 자리 적재 높이(mm, 팔레트 제외) */
@@ -257,7 +254,7 @@ export type PlanPanel = {
     color: string
     boxes: number
     slots: number // 단독 자리 수
-    scrapLabels: string[] // 들어간 자투리 자리 이름 (A, B …)
+    scrapLabels: string[] // 들어간 혼적 자리 이름 (A, B …)
     dateText: string // 진도팜만 — '제조일자 관리' / '소비기한 관리' (못 읽으면·그 외 출고지 '')
   }[]
   boxes: number // 이 PLT 박스 수
@@ -273,6 +270,7 @@ export type PlanPanel = {
   slackMm: number
   over: boolean // 한도 초과 → 빨강 경고
   dimsUnknown: boolean // 치수 미등록 상품 포함
+  lotMix: boolean // 소비기한관리 상품이 혼적 자리에 들어감 → 경고
 }
 
 export type CoupangPalletPlan = {
@@ -295,75 +293,106 @@ export const lotDateText = (lotKey: string): string =>
 
 /**
  * 박스 많은 순 → 자리 배분. 자리당 단수는 SKU별 실측 단수(tiersPerSlot)까지,
- * 같은 SKU 는 인접 자리 연속. 팔레트 장수를 정하는 '용량 기준' 배분이다.
- * 진도팜은 소량 상품(SCRAP_MIN_BOXES 미만)을 자투리 자리로 따로 모은다(scrapSlots).
+ * 같은 SKU 는 인접 자리 연속. 팔레트 장수를 정하는 '용량 기준' 배분이다 (진도팜 외 출고지).
  */
-export function allocateSlots(skus: PlanSku[], shipFrom?: string): PlanSlot[] {
+export function allocateSlots(skus: PlanSku[]): PlanSlot[] {
   const out: PlanSlot[] = []
-  const scrap = shipFrom === '진도팜' ? skus.filter(isScrapSku) : []
-  const sorted = skus
-    .filter((s) => !scrap.includes(s))
-    .sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
+  const sorted = [...skus].sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
   for (const s of sorted) {
     let left = s.boxes
     while (left > 0) {
       const tiers = Math.min(Math.max(1, s.tiersPerSlot), left)
-      out.push({
-        sku: s.sku,
-        fullName: s.fullName,
-        color: s.color,
-        tiers,
-        tiersPerSlot: s.tiersPerSlot,
-        dims: s.dims,
-      })
+      out.push(singleSlot(s, tiers))
       left -= tiers
     }
   }
-  return [...out, ...scrapSlots(scrap)]
+  return out
 }
 
-/** 자투리 대상 — 소량이고, 발주서 관리 구분이 '제조일자관리'이고, 혼자 쌓아도 높이 한도 안 */
-const isScrapSku = (s: PlanSku): boolean =>
-  s.boxes < SCRAP_MIN_BOXES && s.lotKey === '제조일자관리' && s.boxes * s.dims.h <= SCRAP_MAX_STACK_MM
+const singleSlot = (s: PlanSku, tiers: number): PlanSlot => ({
+  sku: s.sku,
+  fullName: s.fullName,
+  color: s.color,
+  tiers,
+  tiersPerSlot: s.tiersPerSlot,
+  dims: s.dims,
+})
+
+const LOT_EXPIRY = '소비기한관리'
 
 /**
- * 진도팜 자투리 자리 — 관리 구분(제조일자관리)이 같은 상품끼리만, 자리당 SCRAP_MAX_BOXES 박스·
- * 높이 합 SCRAP_MAX_STACK_MM 이하로 박스 많은 상품부터 앞 자리에 채운다(상품은 쪼개지 않음).
- * 자리 안에서는 바닥 면적이 큰 박스가 아래. 상품이 하나뿐인 자리는 일반 자리로 둔다.
+ * 진도팜 — PLT 수는 올림(박스 합 ÷ 30)으로 정해져 있고(pltCountOf), 그 장수 안에 채운다.
+ * 박스 많은 상품부터 PLT 마다 30박스까지, PLT 안에서는 상품별 단수(5단) 자리 → 남는 박스는 빈 자리
+ * (소비기한관리 먼저) → 자리가 모자라면 여유 있는 자리에 아래→위로 혼적(소비기한관리 자리는 마지막).
  */
-export function scrapSlots(skus: PlanSku[]): PlanSlot[] {
-  const byLot = new Map<string, PlanSku[]>()
-  for (const s of skus) byLot.set(s.lotKey, [...(byLot.get(s.lotKey) ?? []), s])
-  const out: PlanSlot[] = []
-  for (const lot of [...byLot.keys()].sort()) {
-    const list = byLot.get(lot)!.sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
-    const bins: PlanSku[][] = []
-    for (const s of list) {
-      const fit = bins.find(
-        (b) =>
-          b.reduce((a, x) => a + x.boxes, 0) + s.boxes <= SCRAP_MAX_BOXES &&
-          b.reduce((a, x) => a + x.boxes * x.dims.h, 0) + s.boxes * s.dims.h <= SCRAP_MAX_STACK_MM,
-      )
-      if (fit) fit.push(s)
-      else bins.push([s])
-    }
-    for (const b of bins) {
-      const parts = [...b].sort((x, y) => y.dims.w * y.dims.d - x.dims.w * x.dims.d)
-      const base = parts[0]
-      out.push({
-        sku: base.sku,
-        fullName: base.fullName,
-        color: base.color,
-        tiers: parts.reduce((a, x) => a + x.boxes, 0),
-        tiersPerSlot: base.tiersPerSlot,
-        dims: base.dims,
-        ...(parts.length > 1
-          ? { parts: parts.map((x) => ({ sku: x.sku, fullName: x.fullName, color: x.color, boxes: x.boxes, dims: x.dims })) }
-          : {}),
-      })
+export function grainPallets(skus: PlanSku[], total: number, slotsPerPlt: number): PlanSlot[][] {
+  const order = [...skus].sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
+  const shares: { s: PlanSku; n: number }[][] = Array.from({ length: Math.max(1, total) }, () => [])
+  let p = 0
+  let room = GRAIN_MAX_BOXES_PER_PLT
+  for (const s of order) {
+    let left = s.boxes
+    while (left > 0) {
+      if (room <= 0) {
+        if (p < shares.length - 1) {
+          p += 1
+          room = GRAIN_MAX_BOXES_PER_PLT
+        } else room = Infinity // 장수가 고정이라 넘치는 몫은 마지막 PLT 에 (박스 합 ÷ 30 올림이면 생기지 않음)
+      }
+      const n = Math.min(left, room)
+      const e = shares[p].find((x) => x.s === s)
+      if (e) e.n += n
+      else shares[p].push({ s, n })
+      left -= n
+      room -= n
     }
   }
-  return out
+  return shares.map((share) => grainSlots(share, slotsPerPlt))
+}
+
+function grainSlots(share: { s: PlanSku; n: number }[], slotsPerPlt: number): PlanSlot[] {
+  const slots: PlanSlot[] = []
+  const lotOf = new Map<PlanSlot, string>()
+  const rest: { s: PlanSku; n: number }[] = []
+  for (const { s, n } of share) {
+    const per = Math.max(1, s.tiersPerSlot)
+    for (let k = 0; k < Math.floor(n / per); k++) {
+      const slot = singleSlot(s, per)
+      slots.push(slot)
+      lotOf.set(slot, s.lotKey)
+    }
+    if (n % per) rest.push({ s, n: n % per })
+  }
+  rest.sort((a, b) => Number(b.s.lotKey === LOT_EXPIRY) - Number(a.s.lotKey === LOT_EXPIRY) || b.n - a.n)
+  const pending: { s: PlanSku; n: number }[] = []
+  for (const r of rest) {
+    if (slots.length < slotsPerPlt) {
+      const slot = singleSlot(r.s, r.n)
+      slots.push(slot)
+      lotOf.set(slot, r.s.lotKey)
+    } else pending.push(r)
+  }
+  const capOf = (x: PlanSlot) => Math.max(1, x.tiersPerSlot) - x.tiers
+  for (const r of pending) {
+    let left = r.n
+    while (left > 0) {
+      const open = slots.filter((x) => capOf(x) > 0)
+      // 소비기한관리 자리는 마지막 선택지, 그다음 여유 큰 자리
+      const target =
+        open.sort(
+          (a, b) =>
+            Number(lotOf.get(a) === LOT_EXPIRY) - Number(lotOf.get(b) === LOT_EXPIRY) || capOf(b) - capOf(a),
+        )[0] ?? slots.reduce((m, x) => (x.tiers < m.tiers ? x : m), slots[0])
+      const n = target ? Math.min(left, Math.max(1, capOf(target))) : left
+      const part = { sku: r.s.sku, fullName: r.s.fullName, color: r.s.color, boxes: n, dims: r.s.dims }
+      const base = { sku: target.sku, fullName: target.fullName, color: target.color, boxes: target.tiers, dims: target.dims }
+      target.parts = [...(target.parts ?? [base]), part]
+      target.tiers += n
+      if (r.s.lotKey === LOT_EXPIRY) lotOf.set(target, LOT_EXPIRY)
+      left -= n
+    }
+  }
+  return slots
 }
 
 /**
@@ -389,7 +418,7 @@ export function packPallets(slots: PlanSlot[], slotsPerPlt: number, maxBoxes = I
 
 /**
  * 같은 상품은 한 팔레트에 — 쿠팡 입고 매뉴얼 v3.06 §4.2 (나뉘면 수량 확인 곤란 → 회송 가능).
- * 같은 상품의 연속 자리를 한 덩어리로 보고(자투리 자리는 자리 하나가 한 덩어리),
+ * 같은 상품의 연속 자리를 한 덩어리로 보고(혼적 자리는 자리 하나가 한 덩어리),
  * 팔레트 1장을 넘는 덩어리만 자리 수·박스 상한 단위로 나눈 뒤 큰 덩어리부터 들어가는 첫 팔레트에 넣는다.
  * 장수 결정은 하지 않는다 — 호출부가 packPallets 와 장수가 같을 때만 이 배치를 쓴다.
  */
@@ -422,7 +451,7 @@ export const maxBoxesPerPlt = (shipFrom: string): number =>
  * 예) 즉석밥 34박스·6자리·12단 → 12·12·10 대신 6·6·6·6·6·4
  */
 export function spreadSlots(slots: PlanSlot[], capacity: number): PlanSlot[] {
-  // 자투리 자리(여러 상품)는 펴지 않고 그대로 두고, 남은 자리 안에서만 편다
+  // 혼적 자리(여러 상품)는 펴지 않고 그대로 두고, 남은 자리 안에서만 편다
   const mixed = slots.filter((s) => s.parts)
   const cap = Math.max(1, capacity - mixed.length)
   type Bin = { s: PlanSlot; boxes: number; slots: number }
@@ -484,7 +513,7 @@ export function planSkusOf(g: PoPalletGroup, colorOf?: Map<string, string>): Pla
       }
       byKey.set(k, p)
     }
-    // 같은 상품인데 발주마다 관리 구분이 다르면 묶음 키를 비워 자투리에 섞지 않는다
+    // 같은 상품인데 발주마다 관리 구분이 다르면 관리 구분을 비운다(소비기한관리 판정 제외)
     if (p.lotKey !== (it.lotKey ?? '')) p.lotKey = ''
     p.boxes += it.boxes ?? 0
   }
@@ -496,15 +525,18 @@ export const planGridOf = (skus: PlanSku[]) =>
   skus.map((s) => floorGrid(s.dims)).reduce((a, b) => (b.slots < a.slots ? b : a))
 
 /**
- * 발주 → 실측 용량 기준 팔레트 장수.
- * 30박스 같은 고정 상수가 아니라 '바닥 자리 수 × SKU별 단수' 로 계산한다.
- * (도면의 PLT 장수와 항상 같은 값)
+ * 발주 → 팔레트 장수 (도면의 PLT 장수와 항상 같은 값).
+ *   진도팜: 올림(박스 합 ÷ 30) — 무조건
+ *   그 외 : 실측 용량 기준 '바닥 자리 수 × SKU별 단수'
  */
 export function pltCountOf(g: PoPalletGroup): number {
   const skus = planSkusOf(g)
   if (!skus.length) return 0
+  if (g.shipFrom === '진도팜') {
+    return Math.max(1, Math.ceil(skus.reduce((a, s) => a + s.boxes, 0) / GRAIN_MAX_BOXES_PER_PLT))
+  }
   const grid = planGridOf(skus)
-  return Math.max(1, packPallets(allocateSlots(skus, g.shipFrom), grid.slots, maxBoxesPerPlt(g.shipFrom)).length)
+  return Math.max(1, packPallets(allocateSlots(skus), grid.slots, maxBoxesPerPlt(g.shipFrom)).length)
 }
 
 /** 팔레트 필요 발주 → PLT 단위 패널 (자리 수를 넘기면 다음 PLT 로 넘긴다) */
@@ -522,13 +554,18 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
     const grid = planGridOf(skus)
     const dimsUnknown = skus.some((s) => s.dims.unknown)
 
-    // 장수는 packPallets(= pltCountOf) 기준 그대로 — 같은 상품 모으기는 장수가 같을 때만 적용
-    const allocated = allocateSlots(skus, g.shipFrom)
-    const seq = packPallets(allocated, grid.slots, maxBoxesPerPlt(g.shipFrom))
-    const bySku = packPalletsBySku(allocated, grid.slots, maxBoxesPerPlt(g.shipFrom))
-    const chunks = bySku.length === seq.length ? bySku : seq
-    const total = Math.max(1, chunks.length)
+    // 장수는 pltCountOf 기준 그대로 — 진도팜은 박스 합 ÷ 30 올림 장수 안에 채우고(혼적 허용),
+    // 그 외는 packPallets 장수, 같은 상품 모으기는 장수가 같을 때만 적용
     const grain = g.shipFrom === '진도팜'
+    let chunks: PlanSlot[][]
+    if (grain) chunks = grainPallets(skus, pltCountOf(g), grid.slots)
+    else {
+      const allocated = allocateSlots(skus)
+      const seq = packPallets(allocated, grid.slots, maxBoxesPerPlt(g.shipFrom))
+      const bySku = packPalletsBySku(allocated, grid.slots, maxBoxesPerPlt(g.shipFrom))
+      chunks = bySku.length === seq.length ? bySku : seq
+    }
+    const total = Math.max(1, chunks.length)
     const lotOf = new Map(skus.map((x) => [x.fullName, x.lotKey]))
 
     // 상품별 제품 중량(매출 요약과 같은 식) → 박스당 kg 로 팔레트에 나눈다
@@ -547,7 +584,7 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
 
     for (let i = 0; i < chunks.length; i++) {
       // 이 팔레트 몫을 자리 수 안에서 다시 펴서 쌓는다 (장수는 그대로)
-      // 자투리 자리는 팔레트마다 A, B, C … 로 이름을 붙인다
+      // 혼적 자리는 팔레트마다 A, B, C … 로 이름을 붙인다
       let scrapNo = 0
       const mine = spreadSlots(chunks[i], grid.slots).map((x) =>
         x.parts ? { ...x, scrapLabel: String.fromCharCode(65 + scrapNo++) } : x,
@@ -607,6 +644,7 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
         slackMm: LIMIT_MM - heightMm,
         over: heightMm > LIMIT_MM,
         dimsUnknown,
+        lotMix: mine.some((x) => x.parts?.some((pt) => lotOf.get(pt.fullName) === LOT_EXPIRY)),
       })
     }
   }
@@ -670,6 +708,7 @@ export const panelWarnsOf = (p: PlanPanel): string[] => [
     : []),
   ...(p.dimsUnknown ? [`⚠ 치수 미등록 — ${DEFAULT_BOX_MM}mm 가정`] : []),
   ...(p.kg > PLT_KG_WARN ? [`⚠ 제품 중량 ${PLT_KG_WARN.toLocaleString('en-US')}kg 초과 — 중량 확인 필요`] : []),
+  ...(p.lotMix ? ['⚠ 소비기한관리 상품 혼적 — 세로 구분 확인'] : []),
 ]
 /** 패널 세로 배치 — 같은 센터 줄의 최대 상품 수·경고 수 기준 */
 function panelLayout(nItems: number, nWarns: number) {
@@ -733,14 +772,14 @@ function topView(p: PlanPanel, ox: number, oy: number): string {
       continue
     }
     if (s.parts) {
-      // 자투리 자리 — 상품별 색 띠로 나눠 보여 준다
+      // 혼적 자리 — 상품별 색 띠로 나눠 보여 준다
       const stripe = bw / s.parts.length
       s.parts.forEach((part, k) => {
         out += rect(x + k * stripe, y, stripe, bd, { fill: part.color, stroke: '#111827', sw: 0.8 })
       })
       out += rect(x, y, bw, bd, { stroke: '#111827', sw: 1.5, dash: '4 2', rx: 3 })
       out += rect(x + bw / 2 - 36, y + bd / 2 - 17, 72, 32, { fill: '#FFFFFF', stroke: '#111827', sw: 0.8, rx: 3 })
-      out += text({ x: x + bw / 2, y: y + bd / 2 - 4, s: `자투리 ${s.scrapLabel ?? ''}`.trim(), size: 10.5, bold: true, anchor: 'middle' })
+      out += text({ x: x + bw / 2, y: y + bd / 2 - 4, s: `혼적 ${s.scrapLabel ?? ''}`.trim(), size: 10.5, bold: true, anchor: 'middle' })
       out += text({ x: x + bw / 2, y: y + bd / 2 + 10, s: `${s.parts.length}종 ${s.tiers}박스`, size: 9.5, fill: '#1F2937', anchor: 'middle' })
       continue
     }
@@ -781,7 +820,7 @@ function sideView(p: PlanPanel, ox: number, oy: number): string {
       return
     }
     if (s.parts) {
-      // 자투리 자리 — 아래(바닥 면적 큰 박스)부터 상품별 색·실측 높이로 쌓는다
+      // 혼적 자리 — 아래(먼저 놓인 상품)부터 상품별 색·실측 높이로 쌓는다
       let y = palTop
       for (const part of s.parts) {
         const h = part.dims.h * scale
@@ -790,7 +829,7 @@ function sideView(p: PlanPanel, ox: number, oy: number): string {
           out += rect(x, y, colW, h, { fill: part.color, stroke: '#111827', sw: 1.2 })
         }
       }
-      out += text({ x: x + colW / 2, y: y - 5, s: `자투리 ${s.scrapLabel ?? ''} ${s.tiers}`.replace(/\s+/g, ' '), size: 8.5, bold: true, anchor: 'middle' })
+      out += text({ x: x + colW / 2, y: y - 5, s: `혼적 ${s.scrapLabel ?? ''} ${s.tiers}`.replace(/\s+/g, ' '), size: 8.5, bold: true, anchor: 'middle' })
       return
     }
     const boxH = s.dims.h * scale
@@ -821,7 +860,7 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, nItems: number, nWarns: 
 
   p.items.forEach((it, i) => {
     const y = oy + ITEMS_Y + i * ITEM_LH
-    const where = [it.slots ? `${it.slots}자리` : '', ...it.scrapLabels.map((l) => `자투리 ${l}`)].filter(Boolean).join(' + ')
+    const where = [it.slots ? `${it.slots}자리` : '', ...it.scrapLabels.map((l) => `혼적 ${l}`)].filter(Boolean).join(' + ')
     const line = [`${it.sku} ${cm(it.boxes)}박스`, where, it.dateText].filter(Boolean).join(' · ')
     out += text({ x: ox + 14, y, s: line, size: fitSize(line, 10, PANEL_W - 52), fill: '#374151' })
     out += rect(ox + PANEL_W - 24, y - 8, 10, 10, { fill: it.color, stroke: '#111827', sw: 1 })

@@ -88,7 +88,7 @@ const geoOf = (cols: number): Geo => {
 const panelTitle = (p: PlanPanel): string =>
   `${p.center} · PLT ${p.index}/${p.total} · ${cm(p.boxes)}박스 · ${cm(Math.round(p.kg))}kg${p.kgKnown ? '' : '(일부)'} · ${cm(p.heightMm)}mm`
 const itemLine = (it: PlanPanel['items'][number]): string => {
-  const where = [it.slots ? `${it.slots}자리` : '', ...it.scrapLabels.map((l) => `자투리 ${l}`)].filter(Boolean).join(' + ')
+  const where = [it.slots ? `${it.slots}자리` : '', ...it.scrapLabels.map((l) => `혼적 ${l}`)].filter(Boolean).join(' + ')
   return [`${it.sku} ${cm(it.boxes)}박스`, where].filter(Boolean).join(' · ')
 }
 const cellOf = (p: PlanPanel, g: Geo) => {
@@ -108,7 +108,7 @@ function fitsAt(panels: PlanPanel[], cols: number): boolean {
     const { bw, bd } = cellOf(p, g)
     for (const s of p.slots) {
       if (!s) continue
-      const label = s.parts ? `자투리 ${s.scrapLabel ?? ''}`.trim() : s.sku
+      const label = s.parts ? `혼적 ${s.scrapLabel ?? ''}`.trim() : s.sku
       const lines = wrapName(label, bw - 0.8, FS)
       if (!lines || (lines.length + 1) * (FS + 0.3) > bd) return false
     }
@@ -147,7 +147,7 @@ function topView(p: PlanPanel, ox: number, oy: number, size: number, g: Geo): st
       const stripe = bw / s.parts.length
       s.parts.forEach((part, k) => (out += rect(x + k * stripe, y, stripe, bd, { fill: part.color, stroke: '#111827', sw: 0.15 })))
       out += rect(x, y, bw, bd, { stroke: '#111827', sw: 0.3, dash: '0.8 0.4', rx: 0.5 })
-      const name = `자투리 ${s.scrapLabel ?? ''}`.trim()
+      const name = `혼적 ${s.scrapLabel ?? ''}`.trim()
       const lines = wrapName(name, bw - 0.8, FS) ?? [name]
       out += rect(x + 0.6, y + bd / 2 - ((lines.length + 1) * (FS + 0.3)) / 2 - 0.4, bw - 1.2, (lines.length + 1) * (FS + 0.3) + 0.8, { fill: '#FFFFFF', rx: 0.4 })
       out += label(x, y, lines, `${s.parts.length}종 ${s.tiers}박스`)

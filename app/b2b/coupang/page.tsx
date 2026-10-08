@@ -49,6 +49,7 @@ import {
   buildCoupangPalletPlan,
   buildPalletGroups,
   downloadCoupangPalletPlanJpg,
+  GRAIN_MAX_BOXES_PER_PLT,
   GRAIN_MAX_TIERS,
   LIMIT_MM,
   PALLET_MM,
@@ -90,6 +91,9 @@ import {
 const num = (n: number) => n.toLocaleString('ko-KR')
 /** kg — 천 단위 콤마, 소수 첫째 자리까지(정수면 소수점 없이) */
 const kgFmt = (n: number) => n.toLocaleString('ko-KR', { maximumFractionDigits: 1 })
+/** 행 제품 중량 — 매출 요약 kg 와 같은 식(수량 × 1봉 중량), 정수 kg */
+const kgOfItems = (items: RoutedItem[], gramByAlias: Record<string, number>): string =>
+  `${num(Math.round(items.reduce((a, it) => a + it.confirmQty * (unitKgOf(it.master?.alias || '', it.productName, gramByAlias) ?? 0), 0)))}kg`
 type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
@@ -225,7 +229,7 @@ function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; pa
       <div className="text-xs text-gray-500 whitespace-nowrap">
         {b === null
           ? '트럭이 항상 불리'
-          : b && `${num(b.boxes)}박스(${num(b.bags)}봉)↑부터 트럭 유리 · ${b.vehicle}`}
+          : b && `${num(b.boxes)}박스↑ 트럭 유리 · ${b.vehicle}`}
         {byQty.length > 0 && (
           <span className="ml-1 text-gray-400">
             ({byQty.map((o) => `${o.boxQty}입 ${num(Math.round(o.perBag))}`).join(' · ')})
@@ -377,7 +381,7 @@ export default function CoupangB2BPage() {
 
   // 팔레트 필요 안내 — 센터 × 입고예정일 × 출고지 박스 합계 기준
   const palletGroups = useMemo(() => buildPalletGroups(routed), [routed])
-  // PLT 장수는 실측 적재 기준(자리 수 × SKU별 단수) — 로켓 양식 파렛트 수도 같은 값을 쓴다.
+  // PLT 장수는 pltCountOf(진도팜 = 박스 합 ÷ 30 올림) — 로켓 양식 파렛 수도 같은 값을 쓴다.
   // 키는 묶음(센터|입고예정일)이고, 로켓 양식은 진도팜분만 쓰므로 진도팜 묶음만 담는다.
   const pltByGroup = useMemo(() => {
     const m: Record<string, number> = {}
@@ -614,6 +618,7 @@ export default function CoupangB2BPage() {
           dueDate: g.dueDate,
           shipFrom: g.shipFrom,
           boxes: g.boxes,
+          kg: kgOfItems(g.items, gramByAlias),
           plt: pltCountOf(g),
           vehicle: ship ? ship.method || ship.vehicleLabel : '',
           fee: !ship ? undefined : lead ? ship.fee : 'merged',
@@ -621,7 +626,7 @@ export default function CoupangB2BPage() {
           freight: !freight ? null : !lead ? 'merged' : <FreightCell freight={freight} parcelTarget={false} />,
         }
       })
-  }, [palletGroups, shipmentOf, freightOf])
+  }, [palletGroups, shipmentOf, freightOf, gramByAlias])
   const gompyoFreightRows = useMemo(
     (): FreightRow[] =>
       gompyoShipments.map((s) => ({
@@ -631,6 +636,7 @@ export default function CoupangB2BPage() {
         dueDate: s.dueDate,
         shipFrom: '곰표',
         boxes: s.boxes,
+        kg: kgOfItems(s.items, gramByAlias),
         plt: s.plt,
         vehicle: s.fare.method,
         fee: s.fare.fee,
@@ -645,7 +651,7 @@ export default function CoupangB2BPage() {
             </div>
           ),
       })),
-    [gompyoShipments],
+    [gompyoShipments, gramByAlias],
   )
   // 이번 발주 운송비 총합 = 밀크런 + 곰표 + 택배 가능 행 박스 × 택배 단가 (분모는 매출 요약 합계)
   const transport = useMemo(() => {
@@ -1027,6 +1033,7 @@ export default function CoupangB2BPage() {
                     <th className="px-3 py-2 text-left font-medium">입고예정일</th>
                     <th className="px-3 py-2 text-left font-medium">출고지</th>
                     <th className="px-3 py-2 text-right font-medium">박스</th>
+                    <th className="px-3 py-2 text-right font-medium">중량</th>
                     <th className="px-3 py-2 text-right font-medium">PLT</th>
                     <th className="px-3 py-2 text-left font-medium">차량</th>
                     <th className="px-3 py-2 text-right font-medium">밀크런 운임(참고)</th>
@@ -1069,6 +1076,7 @@ export default function CoupangB2BPage() {
                           <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
                           <td className="px-3 py-2">{g.shipFrom}</td>
                           <td className="px-3 py-2 text-right font-semibold text-gray-900">{num(g.boxes)}</td>
+                          <td className="px-3 py-2 text-right text-gray-700">{kgOfItems(g.items, gramByAlias)}</td>
                           <td className="px-3 py-2 text-right font-semibold text-gray-900">{pltCountOf(g)}</td>
                           <td className="px-3 py-2 text-gray-600">
                             {ship ? ship.method || ship.vehicleLabel : <span className="text-gray-400">—</span>}
@@ -1107,7 +1115,7 @@ export default function CoupangB2BPage() {
                         </tr>
                         {open && (
                           <tr className="border-t border-gray-100">
-                            <td colSpan={10} className="px-3 py-3 bg-gray-50">
+                            <td colSpan={11} className="px-3 py-3 bg-gray-50">
                               {review?.status === 'ok' ? (
                                 <ParcelReduceTable items={g.items} review={review} />
                               ) : (
@@ -1242,8 +1250,9 @@ export default function CoupangB2BPage() {
                     </p>
                   ))}
                   <p>
-                    · PLT는 상품마스터 실측 박스 치수 기준 (1,100×1,100 자리 수 × 자리당 단수, 높이
-                    한도 {LIMIT_MM.toLocaleString('ko-KR')}mm — 팔레트 {PALLET_MM}mm 포함) · 같은 센터·같은
+                    · PLT는 진도팜 = 올림(박스 합 ÷ {GRAIN_MAX_BOXES_PER_PLT}), 위킵 = 상품마스터 실측 박스 치수 기준
+                    (1,100×1,100 자리 수 × 자리당 단수, 높이 한도 {LIMIT_MM.toLocaleString('ko-KR')}mm — 팔레트{' '}
+                    {PALLET_MM}mm 포함) · 같은 센터·같은
                     입고예정일 발주는 PLT 합산 후 차량 배정 ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
                   </p>
                   <p>
@@ -1251,7 +1260,7 @@ export default function CoupangB2BPage() {
                   </p>
                   <p>
                     · 자리당 단수는 SKU 실측 높이로 계산 — 진도팜(곡물) 출고만 {GRAIN_MAX_TIERS}단으로 묶는다
-                    (위킵·곰표 출고는 실측 단수). PLT 수는 적재 구성도와 같은 기준
+                    (위킵·곰표 출고는 실측 단수). PLT 수는 적재 구성도와 같은 값
                   </p>
                   <p>· {SCRAP_NOTE}</p>
                 </div>
@@ -1361,7 +1370,7 @@ export default function CoupangB2BPage() {
             />
             <RocketTable
               title={ROCKET_SHEETS['트럭'].title}
-              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 센터 가나다순 · 센터·전화·주소·파렛 수는 묶음(센터 × 입고예정일)별 병합 · 파렛 수는 실측 적재 기준(자리 수 × 단수)`}
+              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 센터 가나다순 · 센터·전화·주소·파렛 수는 묶음(센터 × 입고예정일)별 병합 · 파렛 수 = 올림(박스 합 ÷ ${GRAIN_MAX_BOXES_PER_PLT})`}
               rows={rocketTruck}
               truck
             />
@@ -1677,6 +1686,7 @@ type FreightRow = {
   dueDate: string
   shipFrom: string
   boxes: number
+  kg: string // 제품 중량 표기 ('1,332kg')
   plt: number
   vehicle: string
   fee: number | null | undefined | 'merged' // undefined = 운임 대상 아님(택배), 'merged' = 위 행에 합산
@@ -1700,6 +1710,7 @@ function FreightRowsTable({ title, rows, footer }: { title: string; rows: Freigh
               <th className="px-3 py-2 text-left font-medium">입고예정일</th>
               <th className="px-3 py-2 text-left font-medium">출고지</th>
               <th className="px-3 py-2 text-right font-medium">박스</th>
+              <th className="px-3 py-2 text-right font-medium">중량</th>
               <th className="px-3 py-2 text-right font-medium">PLT</th>
               <th className="px-3 py-2 text-left font-medium">차량</th>
               <th className="px-3 py-2 text-right font-medium">밀크런 운임(참고)</th>
@@ -1721,6 +1732,7 @@ function FreightRowsTable({ title, rows, footer }: { title: string; rows: Freigh
                 <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
                 <td className="px-3 py-2">{r.shipFrom}</td>
                 <td className="px-3 py-2 text-right font-semibold text-gray-900">{num(r.boxes)}</td>
+                <td className="px-3 py-2 text-right text-gray-700">{r.kg}</td>
                 <td className="px-3 py-2 text-right font-semibold text-gray-900">{r.plt}</td>
                 <td className="px-3 py-2 text-gray-600">{r.vehicle || <span className="text-gray-400">—</span>}</td>
                 <td className="px-3 py-2 text-right font-semibold text-gray-900">
