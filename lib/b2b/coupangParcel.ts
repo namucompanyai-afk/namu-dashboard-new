@@ -90,7 +90,8 @@ export type FreightCompare = {
   boxes: number // 총 박스
   truckFee: number
   truckPerBag: number
-  parcelPerBag: { boxQty: number; perBag: number }[] // 입수 큰 순
+  parcelPerBagAll: number // 택배 1봉당 = 이 묶음 박스 수 × 택배 단가 ÷ 총 봉수 (트럭과 같은 센터 물량 기준)
+  parcelPerBag: { boxQty: number; perBag: number }[] // 입수별 참고값 (택배 단가 ÷ 입수), 입수 큰 순
   // 손익분기 — null 이면 어느 차량도 안 됨(트럭이 항상 불리). undefined 면 PLT당 박스 기준 없음
   breakeven: { boxes: number; bags: number; vehicle: string } | null | undefined
 }
@@ -128,16 +129,23 @@ export function compareFreight(
       }
     }
   }
-  return { bags, boxes, truckFee, truckPerBag: bags > 0 ? truckFee / bags : 0, parcelPerBag, breakeven }
+  return {
+    bags,
+    boxes,
+    truckFee,
+    truckPerBag: bags > 0 ? truckFee / bags : 0,
+    parcelPerBagAll: bags > 0 ? (boxes * parcelUnit) / bags : 0,
+    parcelPerBag,
+    breakeven,
+  }
 }
 
 /** 표 '개당 운임 (트럭 vs 택배)' 칸 문구 */
 export function freightCompareText(f: FreightCompare): string {
   const won = (n: number) => Math.round(n).toLocaleString('ko-KR')
   const parcel =
-    f.parcelPerBag.length === 1
-      ? won(f.parcelPerBag[0].perBag)
-      : f.parcelPerBag.map((p) => `${won(p.perBag)}(${p.boxQty}입)`).join('·')
+    won(f.parcelPerBagAll) +
+    (f.parcelPerBag.length > 1 ? `(${f.parcelPerBag.map((p) => `${p.boxQty}입 ${won(p.perBag)}`).join(' · ')})` : '')
   const head = `트럭 ${won(f.truckPerBag)} vs 택배 ${parcel}원/봉`
   if (f.breakeven === undefined) return head
   if (f.breakeven === null) return `${head} · 트럭이 항상 불리`

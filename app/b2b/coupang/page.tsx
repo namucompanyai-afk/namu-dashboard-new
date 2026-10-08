@@ -203,8 +203,9 @@ function ParcelReduceTable({
 
 /** 팔레트 필요 안내 '개당 운임' 칸 — 1줄 트럭 vs 택배(최저 입수), 2줄 손익분기 · 나머지 입수 */
 function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; parcelTarget: boolean }) {
-  const [best, ...others] = f.parcelPerBag // 입수 큰 순 = 1봉당 택배비 싼 순
-  const truckCheaper = best ? f.truckPerBag < best.perBag : false
+  // 택배 1봉당 = 센터 묶음 박스 × 택배 단가 ÷ 봉수 / 입수별 값은 참고(입수 2종 이상일 때만)
+  const byQty = f.parcelPerBag.length > 1 ? f.parcelPerBag : []
+  const truckCheaper = f.truckPerBag < f.parcelPerBagAll
   const truckColor = truckCheaper ? 'text-emerald-600' : 'text-rose-600'
   const parcelColor = truckCheaper ? 'text-rose-600' : 'text-emerald-600'
   const b = f.breakeven
@@ -213,9 +214,7 @@ function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; pa
       <div className="flex items-baseline gap-1.5 whitespace-nowrap">
         <span className={`text-base font-bold ${truckColor}`}>트럭 {num(Math.round(f.truckPerBag))}원</span>
         <span className="text-gray-400">vs</span>
-        {best && (
-          <span className={`text-base font-bold ${parcelColor}`}>택배 {num(Math.round(best.perBag))}원</span>
-        )}
+        <span className={`text-base font-bold ${parcelColor}`}>택배 {num(Math.round(f.parcelPerBagAll))}원</span>
         <span className="text-xs text-gray-400">/봉</span>
         {parcelTarget && (
           <span className="ml-1 rounded bg-blue-100 px-2 text-xs font-semibold text-blue-800">
@@ -227,9 +226,9 @@ function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; pa
         {b === null
           ? '트럭이 항상 불리'
           : b && `${num(b.boxes)}박스(${num(b.bags)}봉)↑부터 트럭 유리 · ${b.vehicle}`}
-        {others.length > 0 && (
+        {byQty.length > 0 && (
           <span className="ml-1 text-gray-400">
-            ({others.map((o) => `${o.boxQty}입 ${num(Math.round(o.perBag))}`).join(' · ')})
+            ({byQty.map((o) => `${o.boxQty}입 ${num(Math.round(o.perBag))}`).join(' · ')})
           </span>
         )}
       </div>
