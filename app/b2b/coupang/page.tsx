@@ -91,7 +91,8 @@ export default function CoupangB2BPage() {
   const [fileError, setFileError] = useState('')
   const [dragOver, setDragOver] = useState(false)
 
-  const [madeDate, setMadeDate] = useState(todayKst())
+  // 제조일자는 대표님이 고르기 전까지 공란 — 빈 값이면 로켓 표·xlsx 제조일자 열도 공란
+  const [madeDate, setMadeDate] = useState('')
   const [copied, setCopied] = useState(false)
 
   const loadSheets = useCallback(async () => {
@@ -124,9 +125,9 @@ export default function CoupangB2BPage() {
         throw new Error('쿠팡 발주서에서 상품 행을 찾지 못했습니다. (발주서리스트_*.xlsx 인지 확인)')
       }
       setItems(parsed)
-      // 업로드마다 오늘(KST)로 되돌린다 — 탭을 며칠 열어 두면 처음 연 날짜에 멈춰 있으므로.
-      // 업로드 뒤 사용자가 바꾼 값은 다음 업로드 전까지 유지된다.
-      setMadeDate(todayKst())
+      // 업로드마다 공란으로 되돌린다 — 지난 발주의 날짜가 새 발주에 따라가지 않게.
+      // 업로드 뒤 고른 값은 다음 업로드 전까지 유지된다.
+      setMadeDate('')
       setFileNames(files.map((f) => f.name))
       setSkipped(skip)
       setHistoryMsg('')
@@ -877,8 +878,21 @@ export default function CoupangB2BPage() {
                     onChange={(e) => setMadeDate(e.target.value)}
                     className="ml-2 px-2 py-1 border border-gray-300 rounded text-xs"
                   />
-                  {madeDate !== todayKst() && (
-                    <span className="ml-2 text-[11px] text-amber-600">오늘 날짜가 아닙니다</span>
+                  {madeDate && (
+                    <button
+                      type="button"
+                      onClick={() => setMadeDate('')}
+                      className="ml-1 px-1.5 py-0.5 rounded border border-gray-300 text-[11px] text-gray-600 hover:bg-gray-50"
+                    >
+                      지우기
+                    </button>
+                  )}
+                  {!madeDate ? (
+                    <span className="ml-2 text-[11px] text-gray-400">미선택 — 제조일자 열 공란</span>
+                  ) : (
+                    madeDate !== todayKst() && (
+                      <span className="ml-2 text-[11px] text-amber-600">오늘 날짜가 아닙니다</span>
+                    )
                   )}
                 </label>
                 <button
@@ -893,7 +907,7 @@ export default function CoupangB2BPage() {
 
             <RocketTable
               title={ROCKET_SHEETS['택배'].title}
-              note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1·송장은 공란`}
+              note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1 = 발주번호 · 송장은 공란`}
               rows={rocketParcel}
               truck={false}
             />
