@@ -257,7 +257,6 @@ export default function CoupangB2BPage() {
   const needPallet = useMemo(() => palletGroups.filter((g) => g.needsPallet), [palletGroups])
   const advisories = useMemo(() => buildCenterAdvisories(palletGroups), [palletGroups])
   const [openPos, setOpenPos] = useState<string[]>([]) // 팔레트 안내 펼친 발주(발주번호|출고지)
-  const palletPlan = useMemo(() => buildCoupangPalletPlan(palletGroups), [palletGroups])
   // 요금표 출고지 매핑 — 상품마스터 '요금표 출고지' 컬럼이 단일 소스(코드 하드코딩 없음)
   const priceOrigin = useMemo(() => priceOriginByShipFrom(products), [products])
   const priceOriginMissing = products.length > 0 && Object.keys(priceOrigin).length === 0
@@ -268,6 +267,18 @@ export default function CoupangB2BPage() {
     [palletGroups, milkrunPrices, priceOrigin],
   )
   const shipmentOf = useMemo(() => shipmentByPo(shipments), [shipments])
+  // 구성도 센터 합계 차량은 팔레트 필요 안내 표와 같은 값(ship.method || ship.vehicleLabel)을 그대로 넘긴다
+  const palletPlan = useMemo(
+    () =>
+      buildCoupangPalletPlan(palletGroups, {
+        gramByAlias,
+        vehicleOf: (g) => {
+          const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
+          return ship ? ship.method || ship.vehicleLabel : ''
+        },
+      }),
+    [palletGroups, gramByAlias, shipmentOf],
+  )
   const milkrunTotals = useMemo(() => sumMilkrun(shipments), [shipments])
   const palletSvg = useMemo(
     () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
