@@ -29,6 +29,7 @@ export function colName(i: number): string {
 const isNum = (v: CellValue): v is number => typeof v === 'number' && Number.isFinite(v)
 
 // s=1 헤더(굵게·노랑·테두리·가운데), s=2 본문(테두리), s=3 안내 제목(굵게·병합), s=4 본문 + 위 굵은 테두리(묶음 시작)
+// 열 서식(colStyles): s=5/6 가운데, s=7/8 가운데·굵게 — 짝수 = 위 굵은 테두리 아님, 홀수 +1 = 묶음 시작
 const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <fonts count="2">
@@ -46,12 +47,16 @@ const STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <border><left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right><top style="medium"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/></border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="5">
+<cellXfs count="9">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
 <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
 <xf numFmtId="0" fontId="0" fillId="0" borderId="2" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="2" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="0" borderId="2" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`
@@ -85,6 +90,7 @@ function safeSheetName(name: string): string {
 type SheetOpts = {
   merges?: string[] // 본문 병합 범위 ('A3:A7' …)
   blockStarts?: number[] // 위 테두리를 굵게 할 행(0-based, rows 기준)
+  colStyles?: Record<number, 'center' | 'centerBold'> // 본문 열 서식 (0-based 열)
 }
 
 function sheetXml(rows: CellValue[][], widths: number[], titleRows = 0, o: SheetOpts = {}): string {
@@ -101,12 +107,14 @@ function sheetXml(rows: CellValue[][], widths: number[], titleRows = 0, o: Sheet
   const body = rows
     .map((row, r) => {
       // 0..titleRows-1 = 안내 제목(s=3), 그다음 1행 = 헤더(s=1), 나머지 = 본문(s=2)
-      const s = r < titleRows ? 3 : r === titleRows ? 1 : blockStart.has(r) ? 4 : 2
+      const rowStyle = r < titleRows ? 3 : r === titleRows ? 1 : blockStart.has(r) ? 4 : 2
       const isBody = r > titleRows
       const line: CellValue[] = fillEmpty && isBody ? Array.from({ length: fullWidth }, (_, c) => row[c]) : row
       const cells = line
         .map((v, c) => {
           const ref = `${colName(c)}${r + 1}`
+          const cs = isBody ? o.colStyles?.[c] : undefined
+          const s = !cs ? rowStyle : (cs === 'center' ? 5 : 7) + (blockStart.has(r) ? 1 : 0)
           if (v === null || v === undefined || v === '') return fillEmpty && isBody ? `<c r="${ref}" s="${s}"/>` : ''
           return isNum(v)
             ? `<c r="${ref}" s="${s}"><v>${v}</v></c>`

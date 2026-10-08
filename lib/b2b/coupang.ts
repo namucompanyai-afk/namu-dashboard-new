@@ -423,7 +423,7 @@ export const ROCKET_HEADERS = [
   '송장',
 ] as const
 
-/** 트럭 발송분 컬럼 (8칸) — 배송메세지1·송장 없음. 센터·전화·주소·파렛 수는 묶음 병합 */
+/** 트럭 발송분 컬럼 (9칸) — 배송메세지1·송장 없음. 센터·전화·주소·총 박스·파렛 수는 묶음 병합 */
 export const TRUCK_HEADERS = [
   '입고 센터',
   '센터 전화번호',
@@ -432,10 +432,11 @@ export const TRUCK_HEADERS = [
   '수량',
   '박스수',
   '제조일자',
+  '총 박스',
   '파렛 수',
 ] as const
 /** 트럭 발송분에서 묶음(센터 × 입고예정일)마다 세로 병합하는 열 (0-based) */
-export const TRUCK_MERGE_COLS = [0, 1, 2, 7] as const
+export const TRUCK_MERGE_COLS = [0, 1, 2, 7, 8] as const
 
 export type RocketMode = '택배' | '트럭'
 
@@ -556,16 +557,19 @@ export function sortTruckRows(rows: RocketRow[]): RocketRow[] {
     .map((x) => x.r)
 }
 
-/** 정렬된 트럭 행 → 묶음(센터 × 입고예정일) 시작 위치·행 수·파렛 수 */
-export function truckBlocks(rows: RocketRow[]): { start: number; len: number; pallet: number | null }[] {
-  const out: { start: number; len: number; pallet: number | null }[] = []
+export type TruckBlock = { start: number; len: number; pallet: number | null; boxes: number }
+
+/** 정렬된 트럭 행 → 묶음(센터 × 입고예정일) 시작 위치·행 수·파렛 수·총 박스 */
+export function truckBlocks(rows: RocketRow[]): TruckBlock[] {
+  const out: TruckBlock[] = []
   rows.forEach((r, i) => {
     const last = out[out.length - 1]
     const prev = rows[i - 1]
     if (last && prev && prev.recipient === r.recipient && prev.dueDate === r.dueDate) {
       last.len += 1
+      last.boxes += r.boxes ?? 0
       if (last.pallet === null && r.pallet !== null) last.pallet = r.pallet
-    } else out.push({ start: i, len: 1, pallet: r.pallet })
+    } else out.push({ start: i, len: 1, pallet: r.pallet, boxes: r.boxes ?? 0 })
   })
   return out
 }
@@ -594,11 +598,16 @@ export function rocketAoa(rows: RocketRow[], mode: RocketMode): (string | number
  * 트럭 발송분 시트 — 제목 1행 + 헤더 + 데이터. 묶음마다 센터·전화·주소·파렛 수 세로 병합
  * (값은 묶음 첫 행에만), 묶음 시작 행은 위 테두리 굵게.
  */
-export function truckAoa(rows: RocketRow[]): { rows: (string | number)[][]; merges: string[]; blockStarts: number[] } {
+export function truckAoa(rows: RocketRow[]): {
+  rows: (string | number)[][]
+  merges: string[]
+  blockStarts: number[]
+  colStyles: Record<number, 'center' | 'centerBold'>
+} {
   const head = 2 // 제목 + 헤더
   const blocks = truckBlocks(rows)
   const firstOf = new Map(blocks.map((b) => [b.start, b]))
-  const cols = 'ABCDEFGH'
+  const cols = 'ABCDEFGHI'
   const merges = blocks
     .filter((b) => b.len > 1)
     .flatMap((b) => TRUCK_MERGE_COLS.map((c) => `${cols[c]}${head + b.start + 1}:${cols[c]}${head + b.start + b.len}`))
@@ -615,6 +624,7 @@ export function truckAoa(rows: RocketRow[]): { rows: (string | number)[][]; merg
       r.itemQty,
       r.boxes ?? '',
       r.madeDate,
+      lead ? (block?.boxes ?? '') : '',
       lead ? (block?.pallet ?? '') : '',
     ]
   })
@@ -622,6 +632,8 @@ export function truckAoa(rows: RocketRow[]): { rows: (string | number)[][]; merg
     rows: [[ROCKET_SHEETS['트럭'].title], [...TRUCK_HEADERS], ...data],
     merges,
     blockStarts: blocks.slice(1).map((b) => head + b.start),
+    // 병합 칸: 센터·전화 가운데, 총 박스·파렛 수 가운데·굵게 (주소는 한 줄·세로 가운데 그대로)
+    colStyles: { 0: 'center', 1: 'center', 7: 'centerBold', 8: 'centerBold' },
   }
 }
 

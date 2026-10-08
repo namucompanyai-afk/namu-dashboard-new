@@ -709,6 +709,7 @@ export default function CoupangB2BPage() {
             titleRows: 1,
             merges: t.merges,
             blockStarts: t.blockStarts,
+            colStyles: t.colStyles,
           },
         ])
         saveBlob(blob, rocketFileName([...parcel, ...truck].map((r) => r.dueDate), tag))
@@ -1798,8 +1799,8 @@ function RocketTable({
       {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">주소 없음</span>}
     </>
   )
-  const th = (label: string, right = false) => (
-    <th key={label} className={`px-3 py-2 font-medium ${right ? 'text-right' : 'text-left'}`}>
+  const th = (label: string, align: 'left' | 'right' | 'center' = 'left') => (
+    <th key={label} className={`px-3 py-2 font-medium text-${align}`}>
       {label}
     </th>
   )
@@ -1818,8 +1819,17 @@ function RocketTable({
             <thead className="sticky top-0 z-10 bg-gray-50 text-gray-600 shadow-[0_1px_0_#e5e7eb]">
               <tr>
                 {truck
-                  ? [...TRUCK_HEADERS].map((h) => th(h, h === '수량' || h === '박스수' || h === '파렛 수'))
-                  : [...ROCKET_HEADERS].map((h) => th(h, h === '내품수량' || h === '박스 수'))}
+                  ? [...TRUCK_HEADERS].map((h) =>
+                      th(
+                        h,
+                        h === '수량' || h === '박스수'
+                          ? 'right'
+                          : ['입고 센터', '센터 전화번호', '총 박스', '파렛 수'].includes(h)
+                            ? 'center'
+                            : 'left',
+                      ),
+                    )
+                  : [...ROCKET_HEADERS].map((h) => th(h, h === '내품수량' || h === '박스 수' ? 'right' : 'left'))}
               </tr>
             </thead>
             <tbody>
@@ -1838,10 +1848,10 @@ function RocketTable({
                     >
                       {b && (
                         <>
-                          <td rowSpan={span} className="px-3 py-2 align-middle font-semibold">
+                          <td rowSpan={span} className="px-3 py-2 align-middle text-center font-semibold">
                             {recipientCell(r)}
                           </td>
-                          <td rowSpan={span} className="px-3 py-2 align-middle text-gray-600">
+                          <td rowSpan={span} className="px-3 py-2 align-middle text-center text-gray-600">
                             {r.phone}
                           </td>
                           <td rowSpan={span} className="px-3 py-2 align-middle max-w-[26rem] truncate" title={r.address}>
@@ -1856,9 +1866,14 @@ function RocketTable({
                       {boxCell(r)}
                       <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
                       {b && (
-                        <td rowSpan={span} className="px-3 py-2 align-middle text-right font-medium border-l border-gray-100">
-                          {b.pallet ?? ''}
-                        </td>
+                        <>
+                          <td rowSpan={span} className="px-3 py-2 align-middle text-center font-bold border-l border-gray-100">
+                            {num(b.boxes)}
+                          </td>
+                          <td rowSpan={span} className="px-3 py-2 align-middle text-center font-bold border-l border-gray-100">
+                            {b.pallet ?? ''}
+                          </td>
+                        </>
                       )}
                     </tr>
                   )
