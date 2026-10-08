@@ -60,11 +60,11 @@ import {
 } from '@/lib/b2b/coupangMilkrun'
 import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
+  compareFreight,
+  freightCompareText,
   PARCEL_KEEP_BOXES,
-  PARCEL_REVIEW_MAX_BOXES,
-  PARCEL_REVIEW_MIN_BOXES,
-  parcelVerdictText,
   reviewParcel,
+  type FreightCompare,
   type ParcelSettings,
   type ParcelReview,
   type UnitCost,
@@ -300,19 +300,28 @@ export default function CoupangB2BPage() {
     [palletGroups, gramByAlias, shipmentOf],
   )
   const milkrunTotals = useMemo(() => sumMilkrun(shipments), [shipments])
-  // 택배 전환 검토(참고) — 진도팜 10~20박스 묶음을 9박스로 줄여 택배로 보낼 때 운임 vs 마진
+  // 개당 운임 (트럭 vs 택배, 참고) — 밀크런 운임이 있는 건마다(합산 발주는 한 건으로)
+  const freightOf = useMemo(() => {
+    const m: Record<string, FreightCompare> = {}
+    for (const s of shipments) {
+      if (s.fee === null) continue
+      const gs = palletGroups.filter((g) => shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`] === s)
+      m[s.key] = compareFreight(gs, s.fee, milkrunPrices, priceOrigin[s.shipFrom] ?? '', s.center, parcelSettings)
+    }
+    return m
+  }, [shipments, palletGroups, shipmentOf, milkrunPrices, priceOrigin, parcelSettings])
+  // 행 펼침(참고) — 진도팜 10~20박스 묶음을 9박스로 줄일 때 뺄 박스·잃는 마진(트럭 운임 차감)
   const parcelReviewOf = useMemo(() => {
     const m: Record<string, ParcelReview> = {}
     for (const g of palletGroups) {
       const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
-      const truckFee = ship && ship.poNumbers.length === 1 ? ship.fee : null
-      m[`${g.poNumber}|${g.shipFrom}`] = reviewParcel(g, truckFee, {
+      m[`${g.poNumber}|${g.shipFrom}`] = reviewParcel(g, ship ? freightOf[ship.key]?.truckPerBag ?? null : null, {
         unitCostByAlias,
         settings: parcelSettings,
       })
     }
     return m
-  }, [palletGroups, shipmentOf, unitCostByAlias, parcelSettings])
+  }, [palletGroups, shipmentOf, freightOf, unitCostByAlias, parcelSettings])
   const palletSvg = useMemo(
     () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
     [palletPlan],
@@ -705,8 +714,8 @@ export default function CoupangB2BPage() {
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">팔레트 필요 안내</h2>
               <span className="text-xs text-gray-500">
-                센터 × 입고예정일 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가 · 택배 전환 검토는 진도팜{' '}
-                {PARCEL_REVIEW_MIN_BOXES}~{PARCEL_REVIEW_MAX_BOXES}박스 (행 펼침 ▸)
+                센터 × 입고예정일 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가 · 개당 운임 = 밀크런 운임 ÷ 봉수 vs
+                택배 단가 ÷ 입수
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -722,7 +731,7 @@ export default function CoupangB2BPage() {
                     <th className="px-3 py-2 text-left font-medium">차량</th>
                     <th className="px-3 py-2 text-right font-medium">밀크런 운임(참고)</th>
                     <th className="px-3 py-2 text-left font-medium">판정</th>
-                    <th className="px-3 py-2 text-left font-medium">택배 전환</th>
+                    <th className="px-3 py-2 text-left font-medium">개당 운임 (트럭 vs 택배)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -732,6 +741,7 @@ export default function CoupangB2BPage() {
                     const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
                     const feeLead = ship && ship.poNumbers[0] === g.poNumber
                     const review = parcelReviewOf[key]
+                    const freight = ship ? freightOf[ship.key] : undefined
                     return (
                       <React.Fragment key={key}>
                         <tr
@@ -779,19 +789,12 @@ export default function CoupangB2BPage() {
                             )}
                           </td>
                           <td className="px-3 py-2 text-xs">
-                            {!review || review.status === 'na' ? (
+                            {!freight ? (
                               <span className="text-gray-400">—</span>
-                            ) : review.status === 'error' ? (
-                              <span className="text-amber-600">{review.reason}</span>
+                            ) : !feeLead ? (
+                              <span className="text-gray-400">↑ 합산</span>
                             ) : (
-                              <span
-                                className={
-                                  'font-semibold ' +
-                                  (review.stage2?.parcelWins ? 'text-emerald-700' : 'text-gray-700')
-                                }
-                              >
-                                {parcelVerdictText(review)}
-                              </span>
+                              <span className="text-gray-700">{freightCompareText(freight)}</span>
                             )}
                           </td>
                         </tr>
@@ -832,53 +835,53 @@ export default function CoupangB2BPage() {
                                   ))}
                                 </tbody>
                               </table>
-                              {review?.status === 'ok' && (
+                              {review && review.status !== 'na' && (
                                 <div className="mt-3 border-t border-gray-200 pt-2 text-xs text-gray-700 space-y-1">
-                                  <div className="font-semibold">택배 전환 검토</div>
-                                  <div>
-                                    <span className="text-gray-500">1단계 · 1봉당 운임 ({num(review.bags)}봉): </span>
-                                    트럭 {num(Math.round(review.truckPerBag))}원 / 택배{' '}
-                                    {num(Math.round(review.parcelPerBag))}원
-                                    {review.truckCheaper && (
-                                      <span className="font-semibold"> → 트럭 유리 (1봉당 운임이 더 쌈)</span>
-                                    )}
-                                  </div>
-                                  {review.stage2 && (
+                                  <div className="font-semibold">{PARCEL_KEEP_BOXES}박스로 줄일 때 (참고)</div>
+                                  {review.status === 'error' ? (
+                                    <div className="text-amber-600">{review.reason}</div>
+                                  ) : (
                                     <>
                                       <div>
-                                        <span className="text-gray-500">2단계 · 남길 박스: </span>
-                                        {review.stage2.keep.map((l) => `${l.label} ${l.boxes}박스`).join(' · ')}
+                                        <span className="text-gray-500">남길 박스: </span>
+                                        {review.keep.map((l) => `${l.label} ${l.boxes}박스`).join(' · ')}
                                       </div>
-                                      <div>
-                                        <span className="text-gray-500">뺄 박스: </span>
-                                        {review.stage2.drop
-                                          .map(
-                                            (l) =>
-                                              `${l.label} ${l.boxes}박스 (1박스 마진(봉투·박스비 차감) ${num(l.boxMargin)}원)`,
-                                          )
-                                          .join(' · ')}
-                                      </div>
-                                      <div>
-                                        <span className="text-gray-500">택배비 </span>
-                                        {num(review.stage2.parcelFee)}원
-                                        <span className="text-gray-500"> · 아끼는 비용 </span>
-                                        {num(review.stage2.saved)}원
-                                        <span className="text-gray-400">
-                                          {' '}
-                                          ({num(review.truckFee)} − {num(review.stage2.parcelFee)})
-                                        </span>
-                                        <span className="text-gray-500"> · 잃는 마진 </span>
-                                        {num(review.stage2.lost)}원
-                                      </div>
-                                      <div className="font-semibold">판정: {parcelVerdictText(review)}</div>
+                                      <table className="text-xs">
+                                        <thead className="text-gray-500">
+                                          <tr>
+                                            <th className="pr-4 py-1 text-left font-medium">뺄 박스</th>
+                                            <th className="px-2 py-1 text-right font-medium">박스 수</th>
+                                            <th className="px-2 py-1 text-right font-medium">잃는 매출</th>
+                                            <th className="px-2 py-1 text-right font-medium">1박스 마진(트럭 기준)</th>
+                                            <th className="px-2 py-1 text-right font-medium">잃는 마진</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {review.drop.map((l) => (
+                                            <tr key={l.label} className="border-t border-gray-200">
+                                              <td className="pr-4 py-1">{l.label}</td>
+                                              <td className="px-2 py-1 text-right">{num(l.boxes)}</td>
+                                              <td className="px-2 py-1 text-right">{num(l.lostSales)}원</td>
+                                              <td className="px-2 py-1 text-right">{num(l.boxMargin)}원</td>
+                                              <td className="px-2 py-1 text-right">
+                                                {num(l.boxMargin * l.boxes)}원
+                                              </td>
+                                            </tr>
+                                          ))}
+                                          <tr className="border-t border-gray-300 font-semibold">
+                                            <td className="pr-4 py-1">합계</td>
+                                            <td className="px-2 py-1 text-right">
+                                              {num(review.drop.reduce((sum, l) => sum + l.boxes, 0))}
+                                            </td>
+                                            <td className="px-2 py-1 text-right">{num(review.lostSales)}원</td>
+                                            <td className="px-2 py-1 text-right text-gray-400">—</td>
+                                            <td className="px-2 py-1 text-right">{num(review.lost)}원</td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+                                      <div className="text-amber-700">포장 전 {PARCEL_KEEP_BOXES}박스 확정 · 잡곡 포장 후 14일</div>
                                     </>
                                   )}
-                                  <div className="text-gray-500">
-                                    택배는 한 납품일 {PARCEL_KEEP_BOXES}박스까지라, 트럭이 비싸도 줄인 박스만큼 매출을 잃음
-                                  </div>
-                                  <div className="text-gray-500">
-                                    잃는 마진은 뺀 수량을 다시 못 판다고 본 최대치 — 미납이 쿠팡 평가에 주는 영향은 계산에 없음
-                                  </div>
                                 </div>
                               )}
                             </td>
