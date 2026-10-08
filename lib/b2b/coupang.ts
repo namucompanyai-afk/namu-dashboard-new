@@ -40,11 +40,11 @@ export type CoupangOrderItem = {
 const cellAt = (rows: unknown[][], r: number, c: number): unknown => rows[r]?.[c]
 
 /**
- * 상품 표 '제조일자관리 / 유통(소비)기한관리' 열 (Y/N, 못 찾으면 실측 위치 T열).
+ * 상품 표 '제조일자관리 / 유통(소비)기한관리' 열 (Y/N, 못 찾으면 실측 위치 Q열).
  * 날짜 칸('제조(수입)일자/유통(소비)기한')은 발주 확정 전 값이라 실제 제조일자가 아니므로 읽지 않는다.
  */
 const LOT_MGMT_HEADER = '제조일자관리'
-const LOT_MGMT_COL = 19
+const LOT_MGMT_COL = 16
 function lotMgmtCol(rows: unknown[][], prodIdx: number): number {
   const want = norm(LOT_MGMT_HEADER)
   for (const row of [rows[prodIdx + 2], rows[prodIdx + 3]]) {

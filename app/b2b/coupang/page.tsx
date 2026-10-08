@@ -277,6 +277,7 @@ export default function CoupangB2BPage() {
           const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
           return ship ? ship.method || ship.vehicleLabel : ''
         },
+        feeOf: (g) => shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]?.fee,
       }),
     [palletGroups, gramByAlias, shipmentOf],
   )
