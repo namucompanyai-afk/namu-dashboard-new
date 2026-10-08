@@ -271,6 +271,7 @@ export type PlanPanel = {
   over: boolean // 한도 초과 → 빨강 경고
   dimsUnknown: boolean // 치수 미등록 상품 포함
   lotMix: boolean // 소비기한관리 상품이 혼적 자리에 들어감 → 경고
+  skuSplit: boolean // 같은 상품이 여러 PLT 에 나뉨 → 경고 (쿠팡 매뉴얼 §4.2 회송 사유)
 }
 
 export type CoupangPalletPlan = {
@@ -322,29 +323,44 @@ const LOT_EXPIRY = '소비기한관리'
 
 /**
  * 진도팜 — PLT 수는 올림(박스 합 ÷ 30)으로 정해져 있고(pltCountOf), 그 장수 안에 채운다.
- * 박스 많은 상품부터 PLT 마다 30박스까지, PLT 안에서는 상품별 단수(5단) 자리 → 남는 박스는 빈 자리
+ * 같은 상품은 한 PLT 에 통째로 (쿠팡 입고 매뉴얼 §4.2): 박스 많은 상품부터, 통째로 들어가는 PLT 중
+ * 남은 칸이 가장 많은 곳(같으면 앞 PLT)에 넣는다(30박스 넘는 상품만 30박스 단위로 나눔). 들어갈 PLT 가 없을 때만
+ * 남은 칸 큰 PLT 부터 나눠 담는다. PLT 안에서는 상품별 단수(5단) 자리 → 남는 박스는 빈 자리
  * (소비기한관리 먼저) → 자리가 모자라면 여유 있는 자리에 아래→위로 혼적(소비기한관리 자리는 마지막).
  */
 export function grainPallets(skus: PlanSku[], total: number, slotsPerPlt: number): PlanSlot[][] {
+  const cap = GRAIN_MAX_BOXES_PER_PLT
   const order = [...skus].sort((a, b) => (b.boxes - a.boxes) || a.sku.localeCompare(b.sku))
   const shares: { s: PlanSku; n: number }[][] = Array.from({ length: Math.max(1, total) }, () => [])
-  let p = 0
-  let room = GRAIN_MAX_BOXES_PER_PLT
+  const room = shares.map(() => cap)
+  const put = (p: number, s: PlanSku, n: number) => {
+    const e = shares[p].find((x) => x.s === s)
+    if (e) e.n += n
+    else shares[p].push({ s, n })
+    room[p] -= n
+  }
   for (const s of order) {
-    let left = s.boxes
-    while (left > 0) {
-      if (room <= 0) {
-        if (p < shares.length - 1) {
-          p += 1
-          room = GRAIN_MAX_BOXES_PER_PLT
-        } else room = Infinity // 장수가 고정이라 넘치는 몫은 마지막 PLT 에 (박스 합 ÷ 30 올림이면 생기지 않음)
+    const pieces: number[] = []
+    for (let left = s.boxes; left > 0; left -= cap) pieces.push(Math.min(cap, left))
+    for (const piece of pieces) {
+      // 통째로 들어가는 PLT 중 남은 칸이 가장 많은 곳 (같으면 앞 PLT)
+      let best = -1
+      room.forEach((r, i) => {
+        if (r >= piece && (best < 0 || r > room[best])) best = i
+      })
+      if (best >= 0) {
+        put(best, s, piece)
+        continue
       }
-      const n = Math.min(left, room)
-      const e = shares[p].find((x) => x.s === s)
-      if (e) e.n += n
-      else shares[p].push({ s, n })
-      left -= n
-      room -= n
+      // 들어갈 PLT 가 없을 때만 남은 칸 큰 PLT 부터 나눠 담는다 (장수 고정 — 넘치면 마지막 PLT)
+      let left = piece
+      for (const i of room.map((_, k) => k).sort((a, b) => room[b] - room[a] || a - b)) {
+        if (left <= 0) break
+        const n = Math.min(left, Math.max(0, room[i]))
+        if (n > 0) put(i, s, n)
+        left -= n
+      }
+      if (left > 0) put(shares.length - 1, s, left)
     }
   }
   return shares.map((share) => grainSlots(share, slotsPerPlt))
@@ -566,6 +582,10 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
       chunks = bySku.length === seq.length ? bySku : seq
     }
     const total = Math.max(1, chunks.length)
+    // 두 PLT 이상에 나뉜 상품 (혼적 자리 안 상품 포함)
+    const namesOf = (c: PlanSlot[]) => new Set(c.flatMap((x) => (x.parts ?? [x]).map((pt) => pt.fullName)))
+    const pltSets = chunks.map(namesOf)
+    const split = new Set([...new Set(pltSets.flatMap((x) => [...x]))].filter((f) => pltSets.filter((x) => x.has(f)).length > 1))
     const lotOf = new Map(skus.map((x) => [x.fullName, x.lotKey]))
 
     // 상품별 제품 중량(매출 요약과 같은 식) → 박스당 kg 로 팔레트에 나눈다
@@ -645,6 +665,7 @@ export function buildCoupangPalletPlan(groups: PoPalletGroup[], opts: PlanOption
         over: heightMm > LIMIT_MM,
         dimsUnknown,
         lotMix: mine.some((x) => x.parts?.some((pt) => lotOf.get(pt.fullName) === LOT_EXPIRY)),
+        skuSplit: grain && [...pltSets[i]].some((f) => split.has(f)),
       })
     }
   }
@@ -709,6 +730,7 @@ export const panelWarnsOf = (p: PlanPanel): string[] => [
   ...(p.dimsUnknown ? [`⚠ 치수 미등록 — ${DEFAULT_BOX_MM}mm 가정`] : []),
   ...(p.kg > PLT_KG_WARN ? [`⚠ 제품 중량 ${PLT_KG_WARN.toLocaleString('en-US')}kg 초과 — 중량 확인 필요`] : []),
   ...(p.lotMix ? ['⚠ 소비기한관리 상품 혼적 — 세로 구분 확인'] : []),
+  ...(p.skuSplit ? ['⚠ 같은 상품 분산 — 적재리스트에 PLT별 수량 기재'] : []),
 ]
 /** 패널 세로 배치 — 같은 센터 줄의 최대 상품 수·경고 수 기준 */
 function panelLayout(nItems: number, nWarns: number) {
