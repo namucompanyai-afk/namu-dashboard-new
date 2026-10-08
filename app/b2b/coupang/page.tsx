@@ -61,7 +61,7 @@ import {
 import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
-  freightCompareText,
+  isParcelReviewTarget,
   PARCEL_KEEP_BOXES,
   reviewParcel,
   type FreightCompare,
@@ -86,6 +86,42 @@ type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 // 로켓 양식 열 너비 (받는분성명 … 송장)
 const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
 const TRUCK_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 10, 14]
+
+/** 팔레트 필요 안내 '개당 운임' 칸 — 1줄 트럭 vs 택배(최저 입수), 2줄 손익분기 · 나머지 입수 */
+function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; parcelTarget: boolean }) {
+  const [best, ...others] = f.parcelPerBag // 입수 큰 순 = 1봉당 택배비 싼 순
+  const truckCheaper = best ? f.truckPerBag < best.perBag : false
+  const truckColor = truckCheaper ? 'text-emerald-600' : 'text-rose-600'
+  const parcelColor = truckCheaper ? 'text-rose-600' : 'text-emerald-600'
+  const b = f.breakeven
+  return (
+    <div className="space-y-0.5">
+      <div className="flex items-baseline gap-1.5 whitespace-nowrap">
+        <span className={`text-base font-bold ${truckColor}`}>트럭 {num(Math.round(f.truckPerBag))}원</span>
+        <span className="text-gray-400">vs</span>
+        {best && (
+          <span className={`text-base font-bold ${parcelColor}`}>택배 {num(Math.round(best.perBag))}원</span>
+        )}
+        <span className="text-xs text-gray-400">/봉</span>
+        {parcelTarget && (
+          <span className="ml-1 rounded bg-blue-100 px-2 text-xs font-semibold text-blue-800">
+            택배 전환 가능 · {PARCEL_KEEP_BOXES}박스
+          </span>
+        )}
+      </div>
+      <div className="text-xs text-gray-500 whitespace-nowrap">
+        {b === null
+          ? '트럭이 항상 불리'
+          : b && `${num(b.boxes)}박스(${num(b.bags)}봉)↑부터 트럭 유리 · ${b.vehicle}`}
+        {others.length > 0 && (
+          <span className="ml-1 text-gray-400">
+            ({others.map((o) => `${o.boxQty}입 ${num(Math.round(o.perBag))}`).join(' · ')})
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 export default function CoupangB2BPage() {
   const [products, setProducts] = useState<ProductMaster[]>([])
@@ -677,7 +713,7 @@ export default function CoupangB2BPage() {
                         </div>
                       </td>
                       <td className="px-3 py-2 text-right">{num(r.qty)}</td>
-                      <td className={'px-3 py-2 text-right ' + (r.boxesKnown ? '' : 'text-amber-600')}>
+                      <td className={'px-3 py-2 text-right font-semibold ' + (r.boxesKnown ? '' : 'text-amber-600')}>
                         {r.boxesKnown ? num(r.boxes) : '—'}
                       </td>
                       <td className={'px-3 py-2 text-right ' + (r.kgKnown ? '' : 'text-amber-600')}>
@@ -693,10 +729,10 @@ export default function CoupangB2BPage() {
                           <span className="block text-[11px] text-red-600">단가 미확인</span>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right">{num(r.totalIncl)}</td>
+                      <td className="px-3 py-2 text-right font-semibold">{num(r.totalIncl)}</td>
                     </tr>
                   ))}
-                  <tr className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
+                  <tr className="border-t-2 border-gray-300 bg-gray-50 font-bold">
                     <td className="px-3 py-2">합계</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalQty)}</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalBoxes)}</td>
@@ -751,24 +787,29 @@ export default function CoupangB2BPage() {
                             )
                           }
                           aria-expanded={open}
-                          className={
-                            'border-t border-gray-100 cursor-pointer hover:bg-gray-50 ' +
-                            (g.needsPallet ? 'bg-amber-50' : '')
-                          }
+                          className="border-t border-gray-100 cursor-pointer bg-white hover:bg-gray-50"
                         >
-                          <td className="px-3 py-2 text-gray-600">
-                            <span className="inline-block w-4 text-gray-400">{open ? '▾' : '▸'}</span>
-                            {g.poNumber}
+                          <td className="px-3 py-2 text-sm text-gray-500 align-top">
+                            <div className="flex">
+                              <span className="inline-block w-4 shrink-0 text-gray-400">{open ? '▾' : '▸'}</span>
+                              <span>
+                                {g.poNumber.split('/').map((po) => (
+                                  <span key={po} className="block">
+                                    {po}
+                                  </span>
+                                ))}
+                              </span>
+                            </div>
                           </td>
-                          <td className="px-3 py-2">{g.center}</td>
+                          <td className="px-3 py-2 font-semibold">{g.center}</td>
                           <td className="px-3 py-2 text-gray-600">{g.dueDate}</td>
                           <td className="px-3 py-2">{g.shipFrom}</td>
-                          <td className="px-3 py-2 text-right">{num(g.boxes)}</td>
-                          <td className="px-3 py-2 text-right">{pltCountOf(g)}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-gray-900">{num(g.boxes)}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-gray-900">{pltCountOf(g)}</td>
                           <td className="px-3 py-2 text-gray-600">
                             {ship ? ship.method || ship.vehicleLabel : <span className="text-gray-400">—</span>}
                           </td>
-                          <td className="px-3 py-2 text-right">
+                          <td className="px-3 py-2 text-right font-semibold text-gray-900">
                             {!ship ? (
                               <span className="text-gray-400">—</span>
                             ) : !feeLead ? (
@@ -781,11 +822,13 @@ export default function CoupangB2BPage() {
                           </td>
                           <td className="px-3 py-2">
                             {g.needsPallet ? (
-                              <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 text-xs font-semibold">
+                              <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-semibold">
                                 팔레트 필요 ({PALLET_BOX_LIMIT}박스 초과)
                               </span>
                             ) : (
-                              <span className="text-xs text-gray-400">택배 가능</span>
+                              <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-semibold">
+                                택배 가능
+                              </span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-xs">
@@ -794,7 +837,7 @@ export default function CoupangB2BPage() {
                             ) : !feeLead ? (
                               <span className="text-gray-400">↑ 합산</span>
                             ) : (
-                              <span className="text-gray-700">{freightCompareText(freight)}</span>
+                              <FreightCell freight={freight} parcelTarget={isParcelReviewTarget(g)} />
                             )}
                           </td>
                         </tr>
@@ -842,44 +885,55 @@ export default function CoupangB2BPage() {
                                     <div className="text-amber-600">{review.reason}</div>
                                   ) : (
                                     <>
-                                      <div>
-                                        <span className="text-gray-500">남길 박스: </span>
-                                        {review.keep.map((l) => `${l.label} ${l.boxes}박스`).join(' · ')}
-                                      </div>
-                                      <table className="text-xs">
-                                        <thead className="text-gray-500">
-                                          <tr>
-                                            <th className="pr-4 py-1 text-left font-medium">뺄 박스</th>
-                                            <th className="px-2 py-1 text-right font-medium">박스 수</th>
-                                            <th className="px-2 py-1 text-right font-medium">잃는 매출</th>
-                                            <th className="px-2 py-1 text-right font-medium">1박스 마진(트럭 기준)</th>
-                                            <th className="px-2 py-1 text-right font-medium">잃는 마진</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {review.drop.map((l) => (
-                                            <tr key={l.label} className="border-t border-gray-200">
-                                              <td className="pr-4 py-1">{l.label}</td>
-                                              <td className="px-2 py-1 text-right">{num(l.boxes)}</td>
-                                              <td className="px-2 py-1 text-right">{num(l.lostSales)}원</td>
-                                              <td className="px-2 py-1 text-right">{num(l.boxMargin)}원</td>
-                                              <td className="px-2 py-1 text-right">
-                                                {num(l.boxMargin * l.boxes)}원
-                                              </td>
-                                            </tr>
+                                      <div className="flex flex-col md:flex-row gap-4">
+                                        <div>
+                                          <div className="font-semibold mb-1">남길 박스</div>
+                                          {review.keep.map((l) => (
+                                            <div key={l.label}>
+                                              {l.label} {l.boxes}박스
+                                            </div>
                                           ))}
-                                          <tr className="border-t border-gray-300 font-semibold">
-                                            <td className="pr-4 py-1">합계</td>
-                                            <td className="px-2 py-1 text-right">
-                                              {num(review.drop.reduce((sum, l) => sum + l.boxes, 0))}
-                                            </td>
-                                            <td className="px-2 py-1 text-right">{num(review.lostSales)}원</td>
-                                            <td className="px-2 py-1 text-right text-gray-400">—</td>
-                                            <td className="px-2 py-1 text-right">{num(review.lost)}원</td>
-                                          </tr>
-                                        </tbody>
-                                      </table>
-                                      <div className="text-amber-700">포장 전 {PARCEL_KEEP_BOXES}박스 확정 · 잡곡 포장 후 14일</div>
+                                        </div>
+                                        <div>
+                                          <div className="font-semibold mb-1">뺄 박스</div>
+                                          <table className="text-xs">
+                                            <thead className="text-gray-500">
+                                              <tr>
+                                                <th className="pr-4 py-1 text-left font-medium">상품</th>
+                                                <th className="px-2 py-1 text-right font-medium">박스 수</th>
+                                                <th className="px-2 py-1 text-right font-medium">잃는 매출</th>
+                                                <th className="px-2 py-1 text-right font-medium">1박스 마진(트럭 기준)</th>
+                                                <th className="px-2 py-1 text-right font-medium">잃는 마진</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {review.drop.map((l) => (
+                                                <tr key={l.label} className="border-t border-gray-200">
+                                                  <td className="pr-4 py-1">{l.label}</td>
+                                                  <td className="px-2 py-1 text-right">{num(l.boxes)}</td>
+                                                  <td className="px-2 py-1 text-right text-rose-600 font-semibold">
+                                                    {num(l.lostSales)}원
+                                                  </td>
+                                                  <td className="px-2 py-1 text-right">{num(l.boxMargin)}원</td>
+                                                  <td className="px-2 py-1 text-right text-rose-600 font-semibold">
+                                                    {num(l.boxMargin * l.boxes)}원
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                              <tr className="border-t-2 border-gray-400 font-bold">
+                                                <td className="pr-4 py-1">합계</td>
+                                                <td className="px-2 py-1 text-right">
+                                                  {num(review.drop.reduce((sum, l) => sum + l.boxes, 0))}
+                                                </td>
+                                                <td className="px-2 py-1 text-right text-rose-600">{num(review.lostSales)}원</td>
+                                                <td className="px-2 py-1 text-right text-gray-400">—</td>
+                                                <td className="px-2 py-1 text-right text-rose-600">{num(review.lost)}원</td>
+                                              </tr>
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </div>
+                                      <div className="bg-amber-50 border-l-4 border-amber-400 text-amber-900 font-semibold px-3 py-2">포장 전 {PARCEL_KEEP_BOXES}박스 확정 · 잡곡 포장 후 14일</div>
                                     </>
                                   )}
                                 </div>
@@ -906,7 +960,7 @@ export default function CoupangB2BPage() {
                     <span className="text-gray-400"> (곰표 PLT·운임은 아래 곰표 표에서 합산)</span>
                   )}
                 </span>
-                <span className="font-semibold">
+                <span className="text-lg font-bold">
                   운임 합계 {num(milkrunTotals.totalFee)}원
                   {milkrunTotals.unpriced > 0 && (
                     <span className="ml-2 text-xs font-normal text-amber-600">
@@ -918,32 +972,37 @@ export default function CoupangB2BPage() {
             )}
             <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs">
               {advisories.map((a) => (
-                <p key={`${a.shipFrom}-${a.center}-${a.dueDate}`} className="text-amber-700">
+                <p key={`${a.shipFrom}-${a.center}-${a.dueDate}`} className="text-amber-700 font-semibold">
                   ※ {a.center} · {a.dueDate}: 발주 {a.poCount}건 합산 {num(a.boxes)}박스 — 트럭
                   발송분(팔레트)으로 판정
-                </p>
-              ))}
-              {[...new Set(needPallet.map((g) => g.shipFrom))].map((sf) => (
-                <p key={sf} className="text-gray-600">
-                  · {SHIP_FROM_GUIDE[sf]}
                 </p>
               ))}
               {needPallet.length === 0 && advisories.length === 0 && (
                 <p className="text-gray-400">전 발주 {PALLET_BOX_LIMIT}박스 이하 — 택배 발송 가능</p>
               )}
-              <p className="text-gray-500">
-                · PLT는 상품마스터 실측 박스 치수 기준 (1,100×1,100 자리 수 × 자리당 단수, 높이
-                한도 {LIMIT_MM.toLocaleString('ko-KR')}mm — 팔레트 {PALLET_MM}mm 포함) · 같은 센터·같은
-                입고예정일 발주는 PLT 합산 후 차량 배정 ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
-              </p>
-              <p className="text-gray-500">
-                · 운임은 참고용 — 밀크런 트럭 요금표 기준
-              </p>
-              <p className="text-gray-500">
-                · 자리당 단수는 SKU 실측 높이로 계산 — 진도팜(곡물) 출고만 {GRAIN_MAX_TIERS}단으로 묶는다
-                (위킵·곰표 출고는 실측 단수). PLT 수는 적재 구성도와 같은 기준
-              </p>
-              <p className="text-gray-500">· {SCRAP_NOTE}</p>
+              <details className="text-xs text-gray-500">
+                <summary className="cursor-pointer select-none">운영 규칙 ▸</summary>
+                <div className="mt-1 space-y-1">
+                  {[...new Set(needPallet.map((g) => g.shipFrom))].map((sf) => (
+                    <p key={sf}>
+                      · {SHIP_FROM_GUIDE[sf]}
+                    </p>
+                  ))}
+                  <p>
+                    · PLT는 상품마스터 실측 박스 치수 기준 (1,100×1,100 자리 수 × 자리당 단수, 높이
+                    한도 {LIMIT_MM.toLocaleString('ko-KR')}mm — 팔레트 {PALLET_MM}mm 포함) · 같은 센터·같은
+                    입고예정일 발주는 PLT 합산 후 차량 배정 ({PALLET_BOX_LIMIT}박스 이하 발주는 택배라 운임 계산 제외)
+                  </p>
+                  <p>
+                    · 운임은 참고용 — 밀크런 트럭 요금표 기준
+                  </p>
+                  <p>
+                    · 자리당 단수는 SKU 실측 높이로 계산 — 진도팜(곡물) 출고만 {GRAIN_MAX_TIERS}단으로 묶는다
+                    (위킵·곰표 출고는 실측 단수). PLT 수는 적재 구성도와 같은 기준
+                  </p>
+                  <p>· {SCRAP_NOTE}</p>
+                </div>
+              </details>
             </div>
           </div>
 
