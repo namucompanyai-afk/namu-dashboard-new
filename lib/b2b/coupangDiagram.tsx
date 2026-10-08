@@ -873,6 +873,21 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, itemsH: number, panelH: 
   return out
 }
 
+/**
+ * 부착물 안내 — 진도팜(밀크런 트럭)은 밀크런 접수 내역에서 출력하는 팔레트 부착리스트(밀크런 접수 가이드 ver8),
+ * 직접 배차(트럭 쉽먼트) 출고지는 쉽먼트 라벨. 한 도면에 둘 다 있으면 출고지를 붙여 두 줄.
+ */
+const ATTACH_MILKRUN =
+  '부착물: 적재리스트 2면 + 밀크런 팔레트 부착리스트(서플라이어 허브 → 물류 → 밀크런 → 접수 내역에서 출력)'
+const ATTACH_SHIPMENT = '부착물: 적재리스트(2면) + 쉽먼트 라벨(앞·옆면), 발주서·거래명세서는 기사 전달'
+function attachLinesOf(panels: PlanPanel[]): string[] {
+  const milkrun = panels.some((p) => p.shipFrom === '진도팜')
+  const others = [...new Set(panels.filter((p) => p.shipFrom !== '진도팜').map((p) => p.shipFrom))]
+  if (milkrun && !others.length) return [ATTACH_MILKRUN]
+  if (!milkrun) return [ATTACH_SHIPMENT]
+  return [`[진도팜] ${ATTACH_MILKRUN}`, `[${others.join('·')}] ${ATTACH_SHIPMENT}`]
+}
+
 export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
   const panels = plan.panels
   if (!panels.length) return ''
@@ -914,7 +929,8 @@ export function renderCoupangPalletPlanSvg(plan: CoupangPalletPlan): string {
     '랩핑 필수',
     'SKU별 자리(더미) 분리 — 더미 외부에 품목 스티커 부착',
     '같은 SKU 블록은 현장에서 교차 적재 + 랩핑',
-    '부착물: 적재리스트(2면) + 쉽먼트 라벨(앞·옆면), 발주서·거래명세서는 기사 전달',
+    ...attachLinesOf(panels),
+    '거래명세서 2부 출력 — 1부 기사 전달, 1부 물류센터 제출',
     `자리당 단수는 SKU 실측 높이 기준 (진도팜 곡물만 ${GRAIN_MAX_TIERS}단 캡) · 높이 = 팔레트 ${PALLET_MM}mm + 박스높이 × 단수`,
   ]
   foots.push(
