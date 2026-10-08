@@ -59,6 +59,15 @@ import {
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
 import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
+import {
+  PARCEL_KEEP_BOXES,
+  PARCEL_REVIEW_MAX_BOXES,
+  PARCEL_REVIEW_MIN_BOXES,
+  reviewParcel,
+  type ParcelFees,
+  type ParcelReview,
+  type UnitCost,
+} from '@/lib/b2b/coupangParcel'
 
 /**
  * B2B 발주 변환 — 쿠팡
@@ -82,6 +91,9 @@ export default function CoupangB2BPage() {
   const [centers, setCenters] = useState<CenterAddress[]>([])
   const [milkrunPrices, setMilkrunPrices] = useState<CoupangMilkrunRow[]>([])
   const [gramByAlias, setGramByAlias] = useState<Record<string, number>>({})
+  const [unitCostByAlias, setUnitCostByAlias] = useState<Record<string, UnitCost>>({})
+  const [bagFee, setBagFee] = useState<number | null>(null)
+  const [parcelFees, setParcelFees] = useState<ParcelFees>({})
   const [sheetState, setSheetState] = useState<SheetState>('idle')
   const [sheetError, setSheetError] = useState('')
 
@@ -106,6 +118,9 @@ export default function CoupangB2BPage() {
       setCenters(json.centers || [])
       setMilkrunPrices(json.coupangPrices || [])
       setGramByAlias(json.gramByAlias || {})
+      setUnitCostByAlias(json.unitCostByAlias || {})
+      setBagFee(typeof json.bagFee === 'number' ? json.bagFee : null)
+      setParcelFees(json.parcelFees || {})
       setSheetState('loaded')
     } catch (e: unknown) {
       setSheetError(e instanceof Error ? e.message : String(e))
@@ -282,6 +297,21 @@ export default function CoupangB2BPage() {
     [palletGroups, gramByAlias, shipmentOf],
   )
   const milkrunTotals = useMemo(() => sumMilkrun(shipments), [shipments])
+  // 택배 전환 검토(참고) — 진도팜 10~20박스 묶음을 9박스로 줄여 택배로 보낼 때 운임 vs 마진
+  const parcelReviewOf = useMemo(() => {
+    const m: Record<string, ParcelReview> = {}
+    for (const g of palletGroups) {
+      const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
+      const truckFee = ship && ship.poNumbers.length === 1 ? ship.fee : null
+      m[`${g.poNumber}|${g.shipFrom}`] = reviewParcel(g, truckFee, {
+        unitCostByAlias,
+        bagFee,
+        parcelFees,
+        gramByAlias,
+      })
+    }
+    return m
+  }, [palletGroups, shipmentOf, unitCostByAlias, bagFee, parcelFees, gramByAlias])
   const palletSvg = useMemo(
     () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
     [palletPlan],
@@ -674,7 +704,8 @@ export default function CoupangB2BPage() {
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">팔레트 필요 안내</h2>
               <span className="text-xs text-gray-500">
-                센터 × 입고예정일 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가
+                센터 × 입고예정일 박스 합계 기준 · {PALLET_BOX_LIMIT}박스 초과 시 택배 불가 · 택배 전환 검토는 진도팜{' '}
+                {PARCEL_REVIEW_MIN_BOXES}~{PARCEL_REVIEW_MAX_BOXES}박스 (행 펼침 ▸)
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -690,6 +721,7 @@ export default function CoupangB2BPage() {
                     <th className="px-3 py-2 text-left font-medium">차량</th>
                     <th className="px-3 py-2 text-right font-medium">밀크런 운임(참고)</th>
                     <th className="px-3 py-2 text-left font-medium">판정</th>
+                    <th className="px-3 py-2 text-left font-medium">택배 전환</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -698,6 +730,7 @@ export default function CoupangB2BPage() {
                     const open = openPos.includes(key)
                     const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
                     const feeLead = ship && ship.poNumbers[0] === g.poNumber
+                    const review = parcelReviewOf[key]
                     return (
                       <React.Fragment key={key}>
                         <tr
@@ -744,10 +777,25 @@ export default function CoupangB2BPage() {
                               <span className="text-xs text-gray-400">택배 가능</span>
                             )}
                           </td>
+                          <td className="px-3 py-2 text-xs">
+                            {!review || review.status === 'na' ? (
+                              <span className="text-gray-400">—</span>
+                            ) : review.status === 'error' ? (
+                              <span className="text-amber-600">{review.reason}</span>
+                            ) : (
+                              <span
+                                className={
+                                  'font-semibold ' + (review.parcelWins ? 'text-emerald-700' : 'text-gray-700')
+                                }
+                              >
+                                {review.parcelWins ? '택배 유리' : '트럭 유리'} · {num(review.diff)}원
+                              </span>
+                            )}
+                          </td>
                         </tr>
                         {open && (
                           <tr className="border-t border-gray-100">
-                            <td colSpan={9} className="px-3 py-3 bg-gray-50">
+                            <td colSpan={10} className="px-3 py-3 bg-gray-50">
                               <table className="w-full text-xs">
                                 <thead className="text-gray-500">
                                   <tr>
@@ -782,6 +830,38 @@ export default function CoupangB2BPage() {
                                   ))}
                                 </tbody>
                               </table>
+                              {review?.status === 'ok' && (
+                                <div className="mt-3 border-t border-gray-200 pt-2 text-xs text-gray-700 space-y-1">
+                                  <div className="font-semibold">
+                                    택배 전환 검토 — {PARCEL_KEEP_BOXES}박스만 남기고 택배로 보낼 때
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">남길 박스: </span>
+                                    {review.keep.map((l) => `${l.label} ${l.boxes}박스 (${l.size})`).join(' · ')}
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">뺄 박스: </span>
+                                    {review.drop
+                                      .map((l) => `${l.label} ${l.boxes}박스 (1박스 마진 ${num(l.boxMargin)}원)`)
+                                      .join(' · ')}
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500">택배비 합계 </span>
+                                    {num(review.parcelFee)}원
+                                    <span className="text-gray-500"> · 아끼는 운임 </span>
+                                    {num(review.saved)}원
+                                    <span className="text-gray-400"> ({num(review.truckFee)} − {num(review.parcelFee)})</span>
+                                    <span className="text-gray-500"> · 잃는 마진 </span>
+                                    {num(review.lost)}원
+                                  </div>
+                                  <div className="font-semibold">
+                                    판정: {review.parcelWins ? '택배 유리' : '트럭 유리'} · {num(review.diff)}원
+                                  </div>
+                                  <div className="text-gray-500">
+                                    잃는 마진은 뺀 수량을 다시 못 판다고 본 최대치. 다음 발주로 다시 들어오면 손해는 줄어듦
+                                  </div>
+                                </div>
+                              )}
                             </td>
                           </tr>
                         )}
