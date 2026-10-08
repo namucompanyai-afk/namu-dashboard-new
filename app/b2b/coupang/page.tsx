@@ -16,6 +16,7 @@ import {
   ROCKET_SHEETS,
   summarizeCoupang,
   todayKst,
+  unitKgOf,
   type CenterAddress,
   type CoupangOrderItem,
   type RocketRow,
@@ -63,6 +64,7 @@ import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPal
 import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
+  DEFAULT_PARCEL_FEE,
   isParcelReviewTarget,
   PARCEL_KEEP_BOXES,
   reviewParcel,
@@ -463,6 +465,37 @@ export default function CoupangB2BPage() {
     }
     return m
   }, [palletGroups, shipmentOf, freightOf, unitCostByAlias, parcelSettings])
+  // 택배 전환 시(참고) — '택배 전환 가능' 행의 뺄 박스·밀크런 운임을 빼고 남는 박스 택배비를 더한다 (결과만 합산)
+  const parcelSwitch = useMemo(() => {
+    const parcelUnit = parcelSettings.parcelFee ?? DEFAULT_PARCEL_FEE
+    const centers: string[] = []
+    const ships = new Set<string>()
+    let bags = 0
+    let boxes = 0
+    let kg = 0
+    let sales = 0
+    let truckFee = 0
+    let parcelFee = 0
+    for (const g of palletGroups) {
+      const r = parcelReviewOf[`${g.poNumber}|${g.shipFrom}`]
+      if (!isParcelReviewTarget(g) || r?.status !== 'ok') continue
+      centers.push(g.center)
+      for (const l of r.drop) {
+        bags += l.boxes * l.boxQty
+        boxes += l.boxes
+        kg += l.boxes * l.boxQty * (unitKgOf(l.item.master?.alias || '', l.item.productName, gramByAlias) ?? 0)
+        sales += l.lostSales
+      }
+      parcelFee += r.keep.reduce((a, l) => a + l.boxes, 0) * parcelUnit
+      const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
+      if (ship && ship.fee !== null && !ships.has(ship.key)) {
+        ships.add(ship.key)
+        truckFee += ship.fee
+      }
+    }
+    if (!centers.length) return null
+    return { label: `${centers.join('·')} ${PARCEL_KEEP_BOXES}박스 택배`, bags, boxes, kg, sales, feeDiff: parcelFee - truckFee }
+  }, [palletGroups, parcelReviewOf, shipmentOf, parcelSettings, gramByAlias])
   const palletSvg = useMemo(
     () => (palletPlan.panels.length ? renderCoupangPalletPlanSvg(palletPlan) : ''),
     [palletPlan],
@@ -861,6 +894,24 @@ export default function CoupangB2BPage() {
                     <td className="px-3 py-2 text-right text-gray-400">—</td>
                     <td className="px-3 py-2 text-right">{num(summary.totalIncl)}원</td>
                   </tr>
+                  {parcelSwitch && (
+                    <>
+                      <tr className="bg-emerald-50 font-bold text-emerald-800">
+                        <td className="px-3 py-2">택배 전환 시 합계</td>
+                        <td className="px-3 py-2 text-right">{num(summary.totalQty - parcelSwitch.bags)}</td>
+                        <td className="px-3 py-2 text-right">{num(summary.totalBoxes - parcelSwitch.boxes)}</td>
+                        <td className="px-3 py-2 text-right">{kgFmt(summary.totalKg - parcelSwitch.kg)}</td>
+                        <td className="px-3 py-2 text-right text-gray-400">—</td>
+                        <td className="px-3 py-2 text-right">{num(summary.totalIncl - parcelSwitch.sales)}원</td>
+                      </tr>
+                      <tr>
+                        <td colSpan={6} className="px-3 py-1 text-right text-xs text-gray-500">
+                          {parcelSwitch.label} · −{num(parcelSwitch.bags)}봉 · −{num(parcelSwitch.boxes)}박스 · −
+                          {kgFmt(parcelSwitch.kg)}kg · −{num(parcelSwitch.sales)}원
+                        </td>
+                      </tr>
+                    </>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1047,6 +1098,28 @@ export default function CoupangB2BPage() {
                   )}
                   {milkrunSales > 0 && (
                     <span className="block text-xs text-gray-400">분모: 해당 발주 매출 {num(milkrunSales)}원</span>
+                  )}
+                  {parcelSwitch && milkrunSales - parcelSwitch.sales > 0 && (
+                    <>
+                      <span className="block mt-1">
+                        <span className="text-lg font-bold text-emerald-700">
+                          택배 전환 시 {num(milkrunTotals.totalFee + parcelSwitch.feeDiff)}원
+                        </span>
+                        <span className="ml-1 text-sm font-semibold text-gray-600">
+                          · 매출 대비{' '}
+                          {(
+                            ((milkrunTotals.totalFee + parcelSwitch.feeDiff) / (milkrunSales - parcelSwitch.sales)) *
+                            100
+                          ).toFixed(1)}
+                          %
+                        </span>
+                      </span>
+                      <span className="block text-xs text-gray-500">
+                        {parcelSwitch.label} · 운임 {parcelSwitch.feeDiff < 0 ? '−' : '+'}
+                        {num(Math.abs(parcelSwitch.feeDiff))}원 · 매출 −{num(parcelSwitch.sales)}원 · 분모{' '}
+                        {num(milkrunSales - parcelSwitch.sales)}원
+                      </span>
+                    </>
                   )}
                 </span>
               </div>
