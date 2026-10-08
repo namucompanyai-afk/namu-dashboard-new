@@ -33,43 +33,39 @@ export type CoupangOrderItem = {
   skuId: string // 상품 표 B열 상품코드 (= 쿠팡 SKU ID) — 상품마스터 추가·중복 확인용
   centerAddress: string // 발주서 '주소' 셀 (택배수령담당자 괄호부 제거)
   centerPhone: string // 주소 괄호부에서 분리한 택배수령담당자 번호
-  lotKey: string // 발주서 '제조(수입)일자/유통(소비)기한' 날짜 묶음 — 진도팜 자투리 자리 묶음 키 (못 읽으면 '')
+  lotKey: LotMgmt // 발주서 관리 구분('제조일자관리'/'소비기한관리') — 진도팜 자투리 판정용 (못 읽으면 '')
   sourceFile: string
 }
 
 const cellAt = (rows: unknown[][], r: number, c: number): unknown => rows[r]?.[c]
 
 /**
- * 상품 표 '제조(수입)일자 / 유통(소비)기한' 열 (못 찾으면 실측 위치 U열).
- * 헤더는 두 줄이 한 셀에 들어 있고, 바로 왼쪽에 'Y/N' 값의 '제조일자관리' 열이 있어
- * 부분 일치가 아니라 '제조(수입)일자' 로 시작하는 셀만 인정한다.
+ * 상품 표 '제조일자관리 / 유통(소비)기한관리' 열 (Y/N, 못 찾으면 실측 위치 T열).
+ * 날짜 칸('제조(수입)일자/유통(소비)기한')은 발주 확정 전 값이라 실제 제조일자가 아니므로 읽지 않는다.
  */
-const LOT_DATE_HEADER = '제조(수입)일자'
-const LOT_DATE_COL = 20
-function lotDateCol(rows: unknown[][], prodIdx: number): number {
-  const want = norm(LOT_DATE_HEADER)
+const LOT_MGMT_HEADER = '제조일자관리'
+const LOT_MGMT_COL = 19
+function lotMgmtCol(rows: unknown[][], prodIdx: number): number {
+  const want = norm(LOT_MGMT_HEADER)
   for (const row of [rows[prodIdx + 2], rows[prodIdx + 3]]) {
     const i = (row || []).findIndex((v) => norm(v).startsWith(want))
     if (i >= 0) return i
   }
-  return LOT_DATE_COL
+  return LOT_MGMT_COL
 }
 
+export type LotMgmt = '제조일자관리' | '소비기한관리' | ''
+
 /**
- * 상품 2행(윗행 제조일자·아랫행 소비기한, 또는 한 셀 두 줄)의 날짜들 → 묶음 키.
- * 날짜를 하나도 못 읽으면 '' — 자투리 자리에 섞지 않는다(단독 자리).
+ * 같은 상품 2행의 관리 구분 → 묶음 키. 윗행 '제조일자관리' Y/N, 아랫행 '유통(소비)기한관리' Y/N.
+ * 소비기한관리 Y 면 '소비기한관리', 아니고 제조일자관리 Y 면 '제조일자관리', 그 외 ''(못 읽음).
  * 로켓 양식 제조일자는 이 값을 쓰지 않는다(화면 입력칸 일괄 적용 그대로).
  */
-export function lotKeyOf(...cells: unknown[]): string {
-  const dates: string[] = []
-  for (const v of cells) {
-    const parts = typeof v === 'string' ? v.split(/[\r\n~]+/) : [v]
-    for (const part of parts) {
-      const d = fmtDate(typeof part === 'string' ? part.trim() : part)
-      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) dates.push(d)
-    }
-  }
-  return dates.join('|')
+export function lotKeyOf(madeFlag: unknown, expFlag: unknown): LotMgmt {
+  const yes = (v: unknown) => norm(v).toUpperCase() === 'Y'
+  if (yes(expFlag)) return '소비기한관리'
+  if (yes(madeFlag)) return '제조일자관리'
+  return ''
 }
 
 const textAt = (rows: unknown[][], r: number, c: number): string =>
@@ -143,7 +139,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   const prodIdx = findRow((s) => norm(s).startsWith('3.상품정보'))
   if (prodIdx < 0) return []
   const priceCol = supplyPriceCol(rows, prodIdx)
-  const lotCol = lotDateCol(rows, prodIdx)
+  const lotCol = lotMgmtCol(rows, prodIdx)
 
   const raw: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {

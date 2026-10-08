@@ -32,7 +32,7 @@ export const SCRAP_MIN_BOXES = 5 // 진도팜 그룹 합계가 이 값 미만인
 export const SCRAP_MAX_BOXES = 5 // 자투리 자리 1개 박스 상한
 export const SCRAP_MAX_STACK_MM = LIMIT_MM - PALLET_MM // 자투리 자리 박스 높이 합 상한 (1,550mm)
 export const SCRAP_NOTE =
-  '진도팜 소량 상품(5박스 미만)은 제조일자가 같은 것끼리 자투리 자리에 함께 적재 — 적재리스트 부착 필수'
+  '진도팜 소량 상품(5박스 미만)은 자투리 자리에 함께 적재 — 실제 제조일자가 같은 것끼리만 묶고, 다르면 단독 자리로. 적재리스트 부착 필수'
 export const PLT_KG_WARN = 1000 // 팔레트 1장 제품 중량 경고 기준(kg)
 
 /** 출고지별 안내 — 운송수단은 자동 판정하지 않고 문구만 낸다 */
@@ -215,7 +215,7 @@ export type PlanSku = {
   boxes: number
   dims: BoxDims
   tiersPerSlot: number // 이 박스가 이 출고지에서 쌓이는 최대 단수
-  lotKey: string // 발주서 제조일자·소비기한 묶음 키 ('' = 못 읽음 → 자투리에 섞지 않음)
+  lotKey: string // 발주서 관리 구분 ('제조일자관리'만 자투리 대상, '소비기한관리'·'' 는 단독 자리)
 }
 
 /** 자투리 자리 안의 상품 한 칸 (아래 → 위 순서) */
@@ -258,7 +258,7 @@ export type PlanPanel = {
     boxes: number
     slots: number // 단독 자리 수
     scrapLabels: string[] // 들어간 자투리 자리 이름 (A, B …)
-    dateText: string // 진도팜만 — '제조 … · 소비기한 …' / '날짜 확인 필요', 그 외 ''
+    dateText: string // 진도팜만 — '제조일자 관리' / '소비기한 관리' (못 읽으면·그 외 출고지 '')
   }[]
   boxes: number // 이 PLT 박스 수
   kg: number // 이 PLT 제품 중량 — 매출 요약과 같은 식(수량 × unitKgOf)을 박스 비율로 나눈 값
@@ -287,12 +287,9 @@ export type PlanOptions = {
   vehicleOf?: (g: PoPalletGroup) => string // 팔레트 필요 안내 표의 차량 값 (새로 계산하지 않음)
 }
 
-/** 묶음 키(lotKey) → 상품 목록 날짜 표기 */
-export const lotDateText = (lotKey: string): string => {
-  const [made, exp] = String(lotKey || '').split('|').filter(Boolean)
-  if (!made) return '날짜 확인 필요'
-  return exp ? `제조 ${made} · 소비기한 ${exp}` : `제조 ${made}`
-}
+/** 관리 구분(lotKey) → 상품 목록 표기. 발주서 날짜는 확정 전 값이라 표시하지 않는다 */
+export const lotDateText = (lotKey: string): string =>
+  lotKey === '제조일자관리' ? '제조일자 관리' : lotKey === '소비기한관리' ? '소비기한 관리' : ''
 
 /**
  * 박스 많은 순 → 자리 배분. 자리당 단수는 SKU별 실측 단수(tiersPerSlot)까지,
@@ -323,12 +320,12 @@ export function allocateSlots(skus: PlanSku[], shipFrom?: string): PlanSlot[] {
   return [...out, ...scrapSlots(scrap)]
 }
 
-/** 자투리 대상 — 소량이고, 묶음 키(제조일자·소비기한)를 읽었고, 혼자 쌓아도 높이 한도 안 */
+/** 자투리 대상 — 소량이고, 발주서 관리 구분이 '제조일자관리'이고, 혼자 쌓아도 높이 한도 안 */
 const isScrapSku = (s: PlanSku): boolean =>
-  s.boxes < SCRAP_MIN_BOXES && !!s.lotKey && s.boxes * s.dims.h <= SCRAP_MAX_STACK_MM
+  s.boxes < SCRAP_MIN_BOXES && s.lotKey === '제조일자관리' && s.boxes * s.dims.h <= SCRAP_MAX_STACK_MM
 
 /**
- * 진도팜 자투리 자리 — 제조일자·소비기한이 같은 상품끼리만, 자리당 SCRAP_MAX_BOXES 박스·
+ * 진도팜 자투리 자리 — 관리 구분(제조일자관리)이 같은 상품끼리만, 자리당 SCRAP_MAX_BOXES 박스·
  * 높이 합 SCRAP_MAX_STACK_MM 이하로 박스 많은 상품부터 앞 자리에 채운다(상품은 쪼개지 않음).
  * 자리 안에서는 바닥 면적이 큰 박스가 아래. 상품이 하나뿐인 자리는 일반 자리로 둔다.
  */
@@ -485,7 +482,7 @@ export function planSkusOf(g: PoPalletGroup, colorOf?: Map<string, string>): Pla
       }
       byKey.set(k, p)
     }
-    // 같은 상품인데 발주마다 날짜가 다르면 묶음 키를 비워 자투리에 섞지 않는다
+    // 같은 상품인데 발주마다 관리 구분이 다르면 묶음 키를 비워 자투리에 섞지 않는다
     if (p.lotKey !== (it.lotKey ?? '')) p.lotKey = ''
     p.boxes += it.boxes ?? 0
   }
@@ -658,7 +655,7 @@ const ART_X = (PANEL_W - ART_W) / 2
 const PAL = ART_W // 팔레트 1,100mm 을 그리는 폭
 const SIDE_H = 210
 const ITEM_LH = 15
-const DATE_LH = 13 // 진도팜 상품 목록 날짜 줄
+const DATE_LH = 13 // 진도팜 상품 목록 관리 구분 줄
 const ITEMS_Y = 94 // 패널 안 상품 목록 첫 줄 (제목·센터 합계·센터·출고지 4줄 아래)
 const itemLH = (p: PlanPanel) => ITEM_LH + (p.shipFrom === '진도팜' ? DATE_LH : 0)
 const itemsHOf = (p: PlanPanel) => Math.max(1, p.items.length) * itemLH(p)
@@ -837,10 +834,7 @@ function panelSvg(p: PlanPanel, ox: number, oy: number, itemsH: number, panelH: 
       size: 10, fill: '#374151',
     })
     if (it.dateText) {
-      const miss = it.dateText === '날짜 확인 필요'
-      out += text({
-        x: ox + 24, y: y + DATE_LH, s: it.dateText, size: 9, bold: miss, fill: miss ? '#B45309' : '#6B7280',
-      })
+      out += text({ x: ox + 24, y: y + DATE_LH, s: it.dateText, size: 9, fill: '#6B7280' })
     }
     out += rect(ox + PANEL_W - 24, y - 8, 10, 10, { fill: it.color, stroke: '#111827', sw: 1 })
   })
