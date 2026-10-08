@@ -423,19 +423,19 @@ export const ROCKET_HEADERS = [
   '송장',
 ] as const
 
-/** 트럭 발송분 컬럼 — 송장 앞에 '파렛트 수' 추가 */
+/** 트럭 발송분 컬럼 (8칸) — 배송메세지1·송장 없음. 센터·전화·주소·파렛 수는 묶음 병합 */
 export const TRUCK_HEADERS = [
-  '받는분성명',
-  '받는분전화번호',
-  '받는분주소',
-  '배송메세지1',
+  '입고 센터',
+  '센터 전화번호',
+  '센터 주소',
   '내품명',
-  '내품수량',
-  '박스 수',
+  '수량',
+  '박스수',
   '제조일자',
-  '파렛트 수',
-  '송장',
+  '파렛 수',
 ] as const
+/** 트럭 발송분에서 묶음(센터 × 입고예정일)마다 세로 병합하는 열 (0-based) */
+export const TRUCK_MERGE_COLS = [0, 1, 2, 7] as const
 
 export type RocketMode = '택배' | '트럭'
 
@@ -541,31 +541,88 @@ export function formatKrPhone(raw: string): string {
 export function splitRocketRows(rows: RocketRow[]): { parcel: RocketRow[]; truck: RocketRow[] } {
   return {
     parcel: rows.filter((r) => r.mode === '택배'),
-    truck: rows.filter((r) => r.mode === '트럭'),
+    truck: sortTruckRows(rows.filter((r) => r.mode === '트럭')),
   }
+}
+
+/** 트럭 발송분 정렬 — 입고 센터 가나다순 → 입고예정일, 같은 묶음 안은 발주서 순서 (안정 정렬) */
+export function sortTruckRows(rows: RocketRow[]): RocketRow[] {
+  return rows
+    .map((r, i) => ({ r, i }))
+    .sort(
+      (a, b) =>
+        a.r.recipient.localeCompare(b.r.recipient, 'ko') || a.r.dueDate.localeCompare(b.r.dueDate) || a.i - b.i,
+    )
+    .map((x) => x.r)
+}
+
+/** 정렬된 트럭 행 → 묶음(센터 × 입고예정일) 시작 위치·행 수·파렛 수 */
+export function truckBlocks(rows: RocketRow[]): { start: number; len: number; pallet: number | null }[] {
+  const out: { start: number; len: number; pallet: number | null }[] = []
+  rows.forEach((r, i) => {
+    const last = out[out.length - 1]
+    const prev = rows[i - 1]
+    if (last && prev && prev.recipient === r.recipient && prev.dueDate === r.dueDate) {
+      last.len += 1
+      if (last.pallet === null && r.pallet !== null) last.pallet = r.pallet
+    } else out.push({ start: i, len: 1, pallet: r.pallet })
+  })
+  return out
 }
 
 /** 안내 제목 1행 + 헤더 + 데이터 (xlsx 소스) */
 export function rocketAoa(rows: RocketRow[], mode: RocketMode): (string | number)[][] {
-  const truck = mode === '트럭'
-  const headers = truck ? TRUCK_HEADERS : ROCKET_HEADERS
+  if (mode === '트럭') return truckAoa(rows).rows
   return [
     [ROCKET_SHEETS[mode].title],
-    [...headers],
-    ...rows.map((r) => {
-      const base: (string | number)[] = [
-        r.recipient,
-        r.phone,
-        r.address,
-        r.memo,
-        r.itemName,
-        r.itemQty,
-        r.boxes ?? '',
-        r.madeDate,
-      ]
-      return truck ? [...base, r.pallet ?? '', r.invoice] : [...base, r.invoice]
-    }),
+    [...ROCKET_HEADERS],
+    ...rows.map((r) => [
+      r.recipient,
+      r.phone,
+      r.address,
+      r.memo,
+      r.itemName,
+      r.itemQty,
+      r.boxes ?? '',
+      r.madeDate,
+      r.invoice,
+    ]),
   ]
+}
+
+/**
+ * 트럭 발송분 시트 — 제목 1행 + 헤더 + 데이터. 묶음마다 센터·전화·주소·파렛 수 세로 병합
+ * (값은 묶음 첫 행에만), 묶음 시작 행은 위 테두리 굵게.
+ */
+export function truckAoa(rows: RocketRow[]): { rows: (string | number)[][]; merges: string[]; blockStarts: number[] } {
+  const head = 2 // 제목 + 헤더
+  const blocks = truckBlocks(rows)
+  const firstOf = new Map(blocks.map((b) => [b.start, b]))
+  const cols = 'ABCDEFGH'
+  const merges = blocks
+    .filter((b) => b.len > 1)
+    .flatMap((b) => TRUCK_MERGE_COLS.map((c) => `${cols[c]}${head + b.start + 1}:${cols[c]}${head + b.start + b.len}`))
+  let block = blocks[0]
+  const data = rows.map((r, i) => {
+    const b = firstOf.get(i)
+    if (b) block = b
+    const lead = !!b
+    return [
+      lead ? r.recipient : '',
+      lead ? r.phone : '',
+      lead ? r.address : '',
+      r.itemName,
+      r.itemQty,
+      r.boxes ?? '',
+      r.madeDate,
+      lead ? (block?.pallet ?? '') : '',
+    ]
+  })
+  return {
+    rows: [[ROCKET_SHEETS['트럭'].title], [...TRUCK_HEADERS], ...data],
+    merges,
+    blockStarts: blocks.slice(1).map((b) => head + b.start),
+  }
 }
 
 /** coupang_rocket[_wikip|_gompyo]_{가장 빠른 입고예정일}[_외].xlsx — 입고예정일이 없을 때만 nodate */

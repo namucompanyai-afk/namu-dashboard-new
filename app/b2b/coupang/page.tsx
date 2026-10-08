@@ -9,11 +9,15 @@ import {
   GOMPYO_UNITS_PER_PLT,
   indexByBarcode,
   rocketAoa,
+  truckAoa,
+  truckBlocks,
   rocketFileName,
   routeItems,
   splitRocketRows,
   summarizeCoupangFiles,
+  ROCKET_HEADERS,
   ROCKET_SHEETS,
+  TRUCK_HEADERS,
   summarizeCoupang,
   todayKst,
   unitKgOf,
@@ -90,7 +94,17 @@ type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
 const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
-const TRUCK_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 10, 14]
+/** 열 너비 = 내용 폭(한글 2칸) + 여백, 8~60 */
+const fitWidths = (rows: (string | number)[][]): number[] => {
+  const w: number[] = []
+  for (const r of rows)
+    r.forEach((v, c) => {
+      let n = 0
+      for (const ch of String(v ?? '')) n += /[가-힯]/.test(ch) ? 2 : 1
+      w[c] = Math.max(w[c] ?? 0, n)
+    })
+  return w.map((n) => Math.min(60, Math.max(8, n + 2)))
+}
 
 /** 행 펼침 — 9박스로 줄일 때 SUPPLIER HUB 에 넣을 납품가능수량 (발주서 순서) */
 function ParcelReduceTable({
@@ -679,27 +693,26 @@ export default function CoupangB2BPage() {
 
   // 출고지별 전달 엑셀 — 진도팜과 같은 템플릿. 파일명 날짜는 입고예정일(가장 빠른 날, 여러 개면 _외)
   const saveRocketXlsx = useCallback(
-    async (parcel: RocketRow[] | null, truck: RocketRow[], tag: string) => {
+    async (parcel: RocketRow[], truck: RocketRow[], tag: string) => {
       try {
+        const t = truckAoa(truck)
         const blob = await buildStyledXlsxSheets([
-          ...(parcel
-            ? [
-                {
-                  name: ROCKET_SHEETS['택배'].sheetName,
-                  rows: rocketAoa(parcel, '택배'),
-                  widths: ROCKET_WIDTHS,
-                  titleRows: 1,
-                },
-              ]
-            : []),
           {
-            name: ROCKET_SHEETS['트럭'].sheetName,
-            rows: rocketAoa(truck, '트럭'),
-            widths: TRUCK_WIDTHS,
+            name: ROCKET_SHEETS['택배'].sheetName,
+            rows: rocketAoa(parcel, '택배'),
+            widths: ROCKET_WIDTHS,
             titleRows: 1,
           },
+          {
+            name: ROCKET_SHEETS['트럭'].sheetName,
+            rows: t.rows,
+            widths: fitWidths(t.rows.slice(1)),
+            titleRows: 1,
+            merges: t.merges,
+            blockStarts: t.blockStarts,
+          },
         ])
-        saveBlob(blob, rocketFileName([...(parcel ?? []), ...truck].map((r) => r.dueDate), tag))
+        saveBlob(blob, rocketFileName([...parcel, ...truck].map((r) => r.dueDate), tag))
       } catch (e: unknown) {
         setFileError('xlsx 생성 실패: ' + (e instanceof Error ? e.message : String(e)))
       }
@@ -1348,7 +1361,7 @@ export default function CoupangB2BPage() {
             />
             <RocketTable
               title={ROCKET_SHEETS['트럭'].title}
-              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 실측 적재 기준(자리 수 × 단수), 발주 첫 행에만 기입`}
+              note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 센터 가나다순 · 센터·전화·주소·파렛 수는 묶음(센터 × 입고예정일)별 병합 · 파렛 수는 실측 적재 기준(자리 수 × 단수)`}
               rows={rocketTruck}
               truck
             />
@@ -1562,7 +1575,7 @@ export default function CoupangB2BPage() {
               />
               <RocketTable
                 title={ROCKET_SHEETS['트럭'].title}
-                note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 실측 적재 기준, 발주 첫 행에만 기입`}
+                note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 센터 가나다순 · 센터·전화·주소·파렛 수는 묶음(센터 × 입고예정일)별 병합 · 파렛 수는 실측 적재 기준`}
                 rows={wikeepRocket.truck}
                 truck
               />
@@ -1767,6 +1780,30 @@ function RocketTable({
   rows: RocketRow[]
   truck: boolean
 }) {
+  // 트럭 발송분 — 묶음(센터 × 입고예정일)마다 센터·전화·주소·파렛 수를 rowSpan (엑셀 병합과 같은 범위)
+  const blockAt = new Map(truck ? truckBlocks(rows).map((b) => [b.start, b]) : [])
+  const qtyCell = (r: RocketRow) => (
+    <td className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}>
+      {num(r.itemQty)}
+      {r.qtyUnconfirmed && (
+        <span className="ml-1 text-[11px]">납품가능 미확정 — 발주수량 {num(r.orderQty)}</span>
+      )}
+    </td>
+  )
+  const boxCell = (r: RocketRow) => (
+    <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>{r.boxes ?? '—'}</td>
+  )
+  const recipientCell = (r: RocketRow) => (
+    <>
+      {r.recipient}
+      {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">주소 없음</span>}
+    </>
+  )
+  const th = (label: string, right = false) => (
+    <th key={label} className={`px-3 py-2 font-medium ${right ? 'text-right' : 'text-left'}`}>
+      {label}
+    </th>
+  )
   return (
     <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50">
@@ -1781,54 +1818,70 @@ function RocketTable({
           <table className="w-full text-sm whitespace-nowrap">
             <thead className="sticky top-0 z-10 bg-gray-50 text-gray-600 shadow-[0_1px_0_#e5e7eb]">
               <tr>
-                <th className="px-3 py-2 text-left font-medium">받는분성명</th>
-                <th className="px-3 py-2 text-left font-medium">받는분전화번호</th>
-                <th className="px-3 py-2 text-left font-medium">받는분주소</th>
-                <th className="px-3 py-2 text-left font-medium">배송메세지1</th>
-                <th className="px-3 py-2 text-left font-medium">내품명</th>
-                <th className="px-3 py-2 text-right font-medium">내품수량</th>
-                <th className="px-3 py-2 text-right font-medium">박스 수</th>
-                <th className="px-3 py-2 text-left font-medium">제조일자</th>
-                {truck && <th className="px-3 py-2 text-right font-medium">파렛트 수</th>}
-                <th className="px-3 py-2 text-left font-medium">송장</th>
+                {truck
+                  ? [...TRUCK_HEADERS].map((h) => th(h, h === '수량' || h === '박스수' || h === '파렛 수'))
+                  : [...ROCKET_HEADERS].map((h) => th(h, h === '내품수량' || h === '박스 수'))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => (
-                <tr
-                  key={`${r.poNumber}-${r.itemName}-${i}`}
-                  className={'border-t border-gray-100 ' + (r.centerKnown ? '' : 'bg-red-50')}
-                >
-                  <td className="px-3 py-2">
-                    {r.recipient}
-                    {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">주소 없음</span>}
-                  </td>
-                  <td className="px-3 py-2 text-gray-600">{r.phone}</td>
-                  <td className="px-3 py-2 max-w-[26rem] truncate" title={r.address}>
-                    {r.address}
-                  </td>
-                  <td className="px-3 py-2 text-gray-600">{r.memo}</td>
-                  <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
-                    {r.itemName}
-                  </td>
-                  <td
-                    className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}
-                  >
-                    {num(r.itemQty)}
-                    {r.qtyUnconfirmed && (
-                      <span className="ml-1 text-[11px]">
-                        납품가능 미확정 — 발주수량 {num(r.orderQty)}
-                      </span>
-                    )}
-                  </td>
-                  <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
-                    {r.boxes ?? '—'}
-                  </td>
-                  <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
-                  {truck && <td className="px-3 py-2 text-right font-medium">{r.pallet ?? ''}</td>}
-                  <td className="px-3 py-2" />
-                </tr>
-              ))}
+              {rows.map((r, i) => {
+                const key = `${r.poNumber}-${r.itemName}-${i}`
+                if (truck) {
+                  const b = blockAt.get(i)
+                  const span = b?.len ?? 1
+                  return (
+                    <tr
+                      key={key}
+                      className={
+                        (b && i > 0 ? 'border-t-2 border-gray-300 ' : 'border-t border-gray-100 ') +
+                        (r.centerKnown ? '' : 'bg-red-50')
+                      }
+                    >
+                      {b && (
+                        <>
+                          <td rowSpan={span} className="px-3 py-2 align-middle font-semibold">
+                            {recipientCell(r)}
+                          </td>
+                          <td rowSpan={span} className="px-3 py-2 align-middle text-gray-600">
+                            {r.phone}
+                          </td>
+                          <td rowSpan={span} className="px-3 py-2 align-middle max-w-[26rem] truncate" title={r.address}>
+                            {r.address}
+                          </td>
+                        </>
+                      )}
+                      <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
+                        {r.itemName}
+                      </td>
+                      {qtyCell(r)}
+                      {boxCell(r)}
+                      <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
+                      {b && (
+                        <td rowSpan={span} className="px-3 py-2 align-middle text-right font-medium border-l border-gray-100">
+                          {b.pallet ?? ''}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                }
+                return (
+                  <tr key={key} className={'border-t border-gray-100 ' + (r.centerKnown ? '' : 'bg-red-50')}>
+                    <td className="px-3 py-2">{recipientCell(r)}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.phone}</td>
+                    <td className="px-3 py-2 max-w-[26rem] truncate" title={r.address}>
+                      {r.address}
+                    </td>
+                    <td className="px-3 py-2 text-gray-600">{r.memo}</td>
+                    <td className="px-3 py-2 max-w-[22rem] truncate" title={r.itemName}>
+                      {r.itemName}
+                    </td>
+                    {qtyCell(r)}
+                    {boxCell(r)}
+                    <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
+                    <td className="px-3 py-2" />
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
