@@ -572,6 +572,66 @@ export default function CoupangB2BPage() {
     [gompyo, milkrunPrices, priceOrigin],
   )
   const gompyoTotals = useMemo(() => sumGompyo(gompyoShipments), [gompyoShipments])
+  // 위킵·곰표 전달 양식 — 진도팜과 같은 로켓 양식(택배/트럭 판정·주소 규칙은 buildRocketRows 그대로)
+  // 제조일자 선택은 진도팜분 전용이라 위킵·곰표는 공란
+  const wikeepRocket = useMemo(() => {
+    const plt: Record<string, number> = {}
+    for (const g of palletGroups) if (g.shipFrom === '위킵') plt[g.key] = pltCountOf(g)
+    return splitRocketRows(buildRocketRows(wikeep, centers, '', plt))
+  }, [palletGroups, wikeep, centers])
+  const gompyoRocket = useMemo(
+    () =>
+      buildRocketRows(gompyo, centers, '', Object.fromEntries(gompyoShipments.map((s) => [s.key, s.plt])), true),
+    [gompyo, centers, gompyoShipments],
+  )
+  // 출고지 섹션 운임 표 — 팔레트 필요 안내와 같은 컬럼 (값은 기존 계산 결과 그대로)
+  const wikeepFreightRows = useMemo((): FreightRow[] => {
+    return palletGroups
+      .filter((g) => g.shipFrom === '위킵')
+      .map((g) => {
+        const ship = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
+        const freight = ship ? freightOf[ship.key] : undefined
+        const lead = !!ship && ship.poNumbers[0] === g.poNumber
+        return {
+          key: `${g.poNumber}|${g.shipFrom}`,
+          poNumber: g.poNumber,
+          center: g.center,
+          dueDate: g.dueDate,
+          shipFrom: g.shipFrom,
+          boxes: g.boxes,
+          plt: pltCountOf(g),
+          vehicle: ship ? ship.method || ship.vehicleLabel : '',
+          fee: !ship ? undefined : lead ? ship.fee : 'merged',
+          verdict: g.needsPallet ? 'pallet' : 'parcel',
+          freight: !freight ? null : !lead ? 'merged' : <FreightCell freight={freight} parcelTarget={false} />,
+        }
+      })
+  }, [palletGroups, shipmentOf, freightOf])
+  const gompyoFreightRows = useMemo(
+    (): FreightRow[] =>
+      gompyoShipments.map((s) => ({
+        key: s.key,
+        poNumber: s.poNumbers.join('/'),
+        center: s.center,
+        dueDate: s.dueDate,
+        shipFrom: '곰표',
+        boxes: s.boxes,
+        plt: s.plt,
+        vehicle: s.fare.method,
+        fee: s.fare.fee,
+        verdict: 'milkrun',
+        freight:
+          s.fare.fee === null || s.units <= 0 ? null : (
+            <div className="space-y-0.5">
+              <div className="text-base font-bold text-gray-900 whitespace-nowrap">
+                트럭 {num(Math.round(s.fare.fee / s.units))}원/봉
+              </div>
+              <div className="text-xs text-gray-500 whitespace-nowrap">{num(s.units)}봉 · 택배 불가</div>
+            </div>
+          ),
+      })),
+    [gompyoShipments],
+  )
   // 이번 발주 운송비 총합 = 밀크런 + 곰표 + 택배 가능 행 박스 × 택배 단가 (분모는 매출 요약 합계)
   const transport = useMemo(() => {
     const parcelBoxes = palletGroups.filter((g) => !g.needsPallet).reduce((a, g) => a + g.boxes, 0)
@@ -613,27 +673,39 @@ export default function CoupangB2BPage() {
     }
   }, [wikeep])
 
-  const downloadXlsx = useCallback(async () => {
-    try {
-      const blob = await buildStyledXlsxSheets([
-        {
-          name: ROCKET_SHEETS['택배'].sheetName,
-          rows: rocketAoa(rocketParcel, '택배'),
-          widths: ROCKET_WIDTHS,
-          titleRows: 1,
-        },
-        {
-          name: ROCKET_SHEETS['트럭'].sheetName,
-          rows: rocketAoa(rocketTruck, '트럭'),
-          widths: TRUCK_WIDTHS,
-          titleRows: 1,
-        },
-      ])
-      saveBlob(blob, rocketFileName(madeDate))
-    } catch (e: unknown) {
-      setFileError('xlsx 생성 실패: ' + (e instanceof Error ? e.message : String(e)))
-    }
-  }, [rocketParcel, rocketTruck, madeDate])
+  // 출고지별 전달 엑셀 — 진도팜과 같은 템플릿. 파일명 날짜는 입고예정일(가장 빠른 날, 여러 개면 _외)
+  const saveRocketXlsx = useCallback(
+    async (parcel: RocketRow[] | null, truck: RocketRow[], tag: string) => {
+      try {
+        const blob = await buildStyledXlsxSheets([
+          ...(parcel
+            ? [
+                {
+                  name: ROCKET_SHEETS['택배'].sheetName,
+                  rows: rocketAoa(parcel, '택배'),
+                  widths: ROCKET_WIDTHS,
+                  titleRows: 1,
+                },
+              ]
+            : []),
+          {
+            name: ROCKET_SHEETS['트럭'].sheetName,
+            rows: rocketAoa(truck, '트럭'),
+            widths: TRUCK_WIDTHS,
+            titleRows: 1,
+          },
+        ])
+        saveBlob(blob, rocketFileName([...(parcel ?? []), ...truck].map((r) => r.dueDate), tag))
+      } catch (e: unknown) {
+        setFileError('xlsx 생성 실패: ' + (e instanceof Error ? e.message : String(e)))
+      }
+    },
+    [],
+  )
+  const downloadXlsx = useCallback(
+    () => saveRocketXlsx(rocketParcel, rocketTruck, ''),
+    [saveRocketXlsx, rocketParcel, rocketTruck],
+  )
 
   const totalQty = routed.reduce((s, r) => s + r.confirmQty, 0)
 
@@ -1222,6 +1294,7 @@ export default function CoupangB2BPage() {
           )}
 
           {/* 진도팜분 — 로켓 양식 (택배 발송분 / 트럭 발송분 2분할) */}
+          {jindo.length > 0 && (
           <div className="space-y-4">
             <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-sm font-semibold">
@@ -1276,6 +1349,7 @@ export default function CoupangB2BPage() {
               truck
             />
           </div>
+          )}
 
           {/* 진도팜 송장 회신 대사 */}
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
@@ -1439,188 +1513,226 @@ export default function CoupangB2BPage() {
             )}
           </div>
 
-          {/* 위킵분 — 조회용 */}
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">위킵분 ({wikeep.length}행)</h2>
-              <div className="flex flex-wrap items-center gap-3">
-                {labelPlan.skipped.map((s) => (
-                  <span key={s.label} className="text-xs text-amber-700">
-                    {s.label} {num(s.boxes)}박스 라벨 생략(기인쇄)
-                  </span>
-                ))}
-                <button
-                  onClick={copyNotice}
-                  disabled={wikeep.length === 0}
-                  className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
-                >
-                  {copied ? '✅ 복사됨' : '위킵 안내문 복사'}
-                </button>
-                <button
-                  onClick={printLabels}
-                  disabled={labelPlan.labels.length === 0}
-                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
-                >
-                  부착 라벨 인쇄 ({labelPlan.labels.length}장)
-                </button>
+          {/* 위킵분 — 진도팜과 같은 양식 (운임 표 + 택배/트럭 전달 양식) */}
+          {wikeep.length > 0 && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold">
+                  위킵분 — 쿠팡 로켓 양식 (택배 {wikeepRocket.parcel.length}행 · 트럭 {wikeepRocket.truck.length}행)
+                </h2>
+                <div className="flex flex-wrap items-center gap-3">
+                  {labelPlan.skipped.map((s) => (
+                    <span key={s.label} className="text-xs text-amber-700">
+                      {s.label} {num(s.boxes)}박스 라벨 생략(기인쇄)
+                    </span>
+                  ))}
+                  <button
+                    onClick={copyNotice}
+                    className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
+                  >
+                    {copied ? '✅ 복사됨' : '위킵 안내문 복사'}
+                  </button>
+                  <button
+                    onClick={printLabels}
+                    disabled={labelPlan.labels.length === 0}
+                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                  >
+                    부착 라벨 인쇄 ({labelPlan.labels.length}장)
+                  </button>
+                  <button
+                    onClick={() => saveRocketXlsx(wikeepRocket.parcel, wikeepRocket.truck, 'wikip')}
+                    disabled={wikeepRocket.parcel.length + wikeepRocket.truck.length === 0}
+                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                  >
+                    xlsx 다운로드 (2시트)
+                  </button>
+                </div>
               </div>
+              <FreightRowsTable title="위킵분 운임" rows={wikeepFreightRows} />
+              <RocketTable
+                title={ROCKET_SHEETS['택배'].title}
+                note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1 = 발주번호 · 송장은 공란`}
+                rows={wikeepRocket.parcel}
+                truck={false}
+              />
+              <RocketTable
+                title={ROCKET_SHEETS['트럭'].title}
+                note={`${PALLET_BOX_LIMIT}박스 초과 발주 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 실측 적재 기준, 발주 첫 행에만 기입`}
+                rows={wikeepRocket.truck}
+                truck
+              />
             </div>
-            {wikeep.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-gray-400">위킵 출고 상품 없음</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm whitespace-nowrap">
-                  <thead className="bg-gray-50 text-gray-600">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-medium">발주번호</th>
-                      <th className="px-3 py-2 text-left font-medium">센터</th>
-                      <th className="px-3 py-2 text-left font-medium">입고예정일</th>
-                      <th className="px-3 py-2 text-left font-medium">상품명</th>
-                      <th className="px-3 py-2 text-right font-medium">납품가능수량</th>
-                      <th className="px-3 py-2 text-right font-medium">박스 수</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {wikeep.map((r, i) => (
-                      <tr key={`${r.poNumber}-${r.barcode}-${i}`} className="border-t border-gray-100">
-                        <td className="px-3 py-2 text-gray-600">{r.poNumber}</td>
-                        <td className="px-3 py-2">{r.center}</td>
-                        <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
-                        <td className="px-3 py-2 max-w-[24rem] truncate" title={r.productName}>
-                          {r.productName}
-                        </td>
-                        <td
-                          className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}
-                        >
-                          {num(r.displayQty)}
-                          {r.qtyUnconfirmed && (
-                            <span className="ml-1 text-[11px]">미확정 — 발주수량 기준</span>
-                          )}
-                          {r.notDelivered && (
-                            <span className="ml-1 text-[11px] text-gray-400">미납품</span>
-                          )}
-                        </td>
-                        <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
-                          {r.boxes ?? '—'}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          )}
 
-          {/* 곰표분 — 전 발주 밀크런 (택배 판정 없음) */}
-          <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">곰표분 ({gompyo.length}행)</h2>
-              <button
-                onClick={copyGompyoNotice}
-                disabled={gompyoShipments.length === 0}
-                className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
-              >
-                {gompyoCopied ? '✅ 복사됨' : '곰표 상차 안내문 복사'}
-              </button>
-            </div>
-            {gompyo.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-gray-400">곰표 출고 상품 없음</p>
-            ) : (
-              <>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm whitespace-nowrap">
-                    <thead className="bg-gray-50 text-gray-600">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium">발주번호</th>
-                        <th className="px-3 py-2 text-left font-medium">센터</th>
-                        <th className="px-3 py-2 text-left font-medium">입고예정일</th>
-                        <th className="px-3 py-2 text-left font-medium">상품명</th>
-                        <th className="px-3 py-2 text-right font-medium">봉</th>
-                        <th className="px-3 py-2 text-right font-medium">박스</th>
-                        <th className="px-3 py-2 text-right font-medium">PLT</th>
-                        <th className="px-3 py-2 text-right font-medium">운임(참고)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {gompyoShipments.map((s) =>
-                        s.items.map((r, i) => (
-                          <tr key={`${s.key}-${r.poNumber}-${r.barcode}-${i}`} className="border-t border-gray-100">
-                            <td className="px-3 py-2 text-gray-600">{r.poNumber}</td>
-                            <td className="px-3 py-2">{r.center}</td>
-                            <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
-                            <td className="px-3 py-2 max-w-[24rem] truncate" title={r.productName}>
-                              {r.master?.alias || r.productName}
-                            </td>
-                            <td
-                              className={'px-3 py-2 text-right ' + (r.qtyUnconfirmed ? 'text-amber-700' : '')}
-                            >
-                              {num(r.displayQty)}
-                              {r.qtyUnconfirmed && (
-                                <span className="ml-1 text-[11px]">미확정 — 발주수량 기준</span>
-                              )}
-                              {r.notDelivered && (
-                                <span className="ml-1 text-[11px] text-gray-400">미납품</span>
-                              )}
-                            </td>
-                            <td className={'px-3 py-2 text-right ' + (r.boxes === null ? 'text-amber-600' : '')}>
-                              {r.boxes ?? '—'}
-                            </td>
-                            {i === 0 && (
-                              <>
-                                <td
-                                  rowSpan={s.items.length}
-                                  className="px-3 py-2 text-right font-medium align-top border-l border-gray-100"
-                                >
-                                  {num(s.plt)}
-                                </td>
-                                <td rowSpan={s.items.length} className="px-3 py-2 text-right align-top">
-                                  {s.fare.fee === null ? (
-                                    <span className="text-amber-600">요금 미등록</span>
-                                  ) : (
-                                    <>
-                                      <span className="font-medium">{num(s.fare.fee)}원</span>
-                                      <span className="block text-[11px] text-gray-500">{s.fare.method}</span>
-                                    </>
-                                  )}
-                                </td>
-                              </>
-                            )}
-                          </tr>
-                        )),
-                      )}
-                    </tbody>
-                  </table>
+          {/* 곰표분 — 전 발주 밀크런 트럭(팔레트), 택배 없음 */}
+          {gompyo.length > 0 && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold">곰표분 — 쿠팡 로켓 양식 (트럭 {gompyoRocket.length}행)</h2>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={copyGompyoNotice}
+                    disabled={gompyoShipments.length === 0}
+                    className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
+                  >
+                    {gompyoCopied ? '✅ 복사됨' : '곰표 상차 안내문 복사'}
+                  </button>
+                  <button
+                    onClick={() => saveRocketXlsx(null, gompyoRocket, 'gompyo')}
+                    disabled={gompyoRocket.length === 0}
+                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                  >
+                    xlsx 다운로드
+                  </button>
                 </div>
-                <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
-                  <span className="text-gray-600">
-                    밀크런 {gompyoShipments.length}건 · 총 {num(gompyoTotals.totalPlt)} PLT (
-                    {num(gompyoTotals.totalUnits)}봉)
-                  </span>
-                  <span className="font-semibold">
-                    운임 합계 {num(gompyoTotals.totalFee)}원
-                    {gompyoTotals.unpriced > 0 && (
-                      <span className="ml-2 text-xs font-normal text-amber-600">
-                        (요금 미등록 {gompyoTotals.unpriced}건 제외)
+              </div>
+              <FreightRowsTable
+                title="곰표분 운임"
+                rows={gompyoFreightRows}
+                footer={
+                  <>
+                    <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
+                      <span className="text-gray-600">
+                        밀크런 {gompyoShipments.length}건 · 총 {num(gompyoTotals.totalPlt)} PLT (
+                        {num(gompyoTotals.totalUnits)}봉)
                       </span>
-                    )}
-                  </span>
-                </div>
-                <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs text-gray-500">
-                  <p>
-                    · 1PLT = {GOMPYO_UNITS_PER_PLT}봉({GOMPYO_BOXES_PER_PLT}박스) 올림 · 같은 센터·같은
-                    입고예정일 발주는 봉 수를 합산해 한 건으로 묶는다
-                  </p>
-                  <p>· 곰표분은 전 발주 밀크런 — 택배 판정·로켓 양식·부착 라벨 대상이 아니다</p>
-                  <p>
-                    · 운임은 참고용 — 매 PLT 마다 BASIC(1pt 당)×PLT 와 차량 구간 요금을 계산해 싼 쪽을 적용한다
-                    (적용 방식은 운임 칸에 표기)
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
+                      <span className="text-lg font-bold">
+                        운임 합계 {num(gompyoTotals.totalFee)}원
+                        {gompyoTotals.unpriced > 0 && (
+                          <span className="ml-2 text-xs font-normal text-amber-600">
+                            (요금 미등록 {gompyoTotals.unpriced}건 제외)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="px-4 py-3 border-t border-gray-100 text-xs">
+                      <details className="text-xs text-gray-500">
+                        <summary className="cursor-pointer select-none">운영 규칙 ▸</summary>
+                        <div className="mt-1 space-y-1">
+                          <p>
+                            · 1PLT = {GOMPYO_UNITS_PER_PLT}봉({GOMPYO_BOXES_PER_PLT}박스) 올림 · 같은 센터·같은
+                            입고예정일 발주는 봉 수를 합산해 한 건으로 묶는다
+                          </p>
+                          <p>· 곰표분은 전 발주 밀크런 — 택배 불가 — 밀크런 트럭(팔레트)만</p>
+                          <p>
+                            · 운임은 참고용 — 매 PLT 마다 BASIC(1pt 당)×PLT 와 차량 구간 요금을 계산해 싼 쪽을
+                            적용한다 (적용 방식은 차량 칸에 표기)
+                          </p>
+                        </div>
+                      </details>
+                    </div>
+                  </>
+                }
+              />
+              <RocketTable
+                title={ROCKET_SHEETS['트럭'].title}
+                note={`곰표는 박스 수와 관계없이 밀크런 트럭 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 ${GOMPYO_UNITS_PER_PLT}봉 단위 올림, 묶음 첫 행에만 기입`}
+                rows={gompyoRocket}
+                truck
+              />
+            </div>
+          )}
         </>
       )}
+    </div>
+  )
+}
+
+/** 출고지 섹션 운임 표 한 줄 — 팔레트 필요 안내와 같은 컬럼, 값은 계산 결과를 받아 표시만 */
+type FreightRow = {
+  key: string
+  poNumber: string
+  center: string
+  dueDate: string
+  shipFrom: string
+  boxes: number
+  plt: number
+  vehicle: string
+  fee: number | null | undefined | 'merged' // undefined = 운임 대상 아님(택배), 'merged' = 위 행에 합산
+  verdict: 'pallet' | 'parcel' | 'milkrun'
+  freight: React.ReactNode | 'merged' | null
+}
+
+function FreightRowsTable({ title, rows, footer }: { title: string; rows: FreightRow[]; footer?: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50">
+        <span className="text-sm font-semibold">{title}</span>
+        <span className="ml-2 text-xs text-gray-500">{rows.length}행</span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm whitespace-nowrap">
+          <thead className="bg-gray-50 text-gray-600">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium">발주번호</th>
+              <th className="px-3 py-2 text-left font-medium">센터</th>
+              <th className="px-3 py-2 text-left font-medium">입고예정일</th>
+              <th className="px-3 py-2 text-left font-medium">출고지</th>
+              <th className="px-3 py-2 text-right font-medium">박스</th>
+              <th className="px-3 py-2 text-right font-medium">PLT</th>
+              <th className="px-3 py-2 text-left font-medium">차량</th>
+              <th className="px-3 py-2 text-right font-medium">밀크런 운임(참고)</th>
+              <th className="px-3 py-2 text-left font-medium">판정</th>
+              <th className="px-3 py-2 text-left font-medium">개당 운임 (트럭 vs 택배)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.key} className="border-t border-gray-100 bg-white hover:bg-gray-50 [&>td]:align-middle">
+                <td className="px-3 py-2 text-sm text-gray-500">
+                  {r.poNumber.split('/').map((po) => (
+                    <span key={po} className="block">
+                      {po}
+                    </span>
+                  ))}
+                </td>
+                <td className="px-3 py-2 font-semibold">{r.center}</td>
+                <td className="px-3 py-2 text-gray-600">{r.dueDate}</td>
+                <td className="px-3 py-2">{r.shipFrom}</td>
+                <td className="px-3 py-2 text-right font-semibold text-gray-900">{num(r.boxes)}</td>
+                <td className="px-3 py-2 text-right font-semibold text-gray-900">{r.plt}</td>
+                <td className="px-3 py-2 text-gray-600">{r.vehicle || <span className="text-gray-400">—</span>}</td>
+                <td className="px-3 py-2 text-right font-semibold text-gray-900">
+                  {r.fee === undefined ? (
+                    <span className="text-gray-400">—</span>
+                  ) : r.fee === 'merged' ? (
+                    <span className="text-xs text-gray-400">↑ 합산</span>
+                  ) : r.fee === null ? (
+                    <span className="text-xs text-amber-600">요금 미등록</span>
+                  ) : (
+                    num(r.fee) + '원'
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {r.verdict === 'milkrun' ? (
+                    <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">
+                      밀크런 (팔레트)
+                    </span>
+                  ) : r.verdict === 'pallet' ? (
+                    <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-semibold">
+                      팔레트 필요 ({PALLET_BOX_LIMIT}박스 초과)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-semibold">
+                      택배 가능
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {r.freight === null ? (
+                    <span className="text-gray-400">—</span>
+                  ) : r.freight === 'merged' ? (
+                    <span className="text-gray-400">↑ 합산</span>
+                  ) : (
+                    r.freight
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {footer}
     </div>
   )
 }

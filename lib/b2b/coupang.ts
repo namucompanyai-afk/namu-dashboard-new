@@ -481,6 +481,7 @@ export function buildRocketRows(
   centers: CenterAddress[],
   madeDate: string,
   pltByGroup: Record<string, number>,
+  allTruck = false, // 곰표 — 박스 수와 관계없이 전 발주 밀크런 트럭(팔레트)
 ): RocketRow[] {
   const shipping = items.filter((it) => !it.notDelivered)
   const groupOf = new Map(groupByCenterDue(shipping).map((g) => [g.key, g]))
@@ -488,7 +489,7 @@ export function buildRocketRows(
   return shipping.map((it) => {
     const c = findCenter(centers, it.center)
     const g = groupOf.get(shipGroupKey(it))
-    const truck = g?.needsPallet ?? false
+    const truck = allTruck || (g?.needsPallet ?? false)
     const address = truck ? it.centerAddress || c?.address || '' : c?.address || ''
     const phone = formatKrPhone(truck ? it.centerPhone || c?.phone || '' : c?.phone || '')
     let pallet: number | null = null
@@ -564,10 +565,11 @@ export function rocketAoa(rows: RocketRow[], mode: RocketMode): (string | number
   ]
 }
 
-/** coupang_rocket_{YYYYMMDD}.xlsx */
-export function rocketFileName(madeDate: string): string {
-  const ymd = String(madeDate || '').replace(/[^0-9]/g, '').slice(0, 8)
-  return `coupang_rocket_${ymd || 'nodate'}.xlsx`
+/** coupang_rocket[_wikip|_gompyo]_{가장 빠른 입고예정일}[_외].xlsx — 입고예정일이 없을 때만 nodate */
+export function rocketFileName(dueDates: string[], tag = ''): string {
+  const days = [...new Set(dueDates.map((d) => String(d || '').replace(/[^0-9]/g, '').slice(0, 8)).filter(Boolean))].sort()
+  const ymd = days.length ? days[0] + (days.length > 1 ? '_외' : '') : 'nodate'
+  return `coupang_rocket_${tag ? tag + '_' : ''}${ymd}.xlsx`
 }
 
 /** 오늘(KST) YYYY-MM-DD */
