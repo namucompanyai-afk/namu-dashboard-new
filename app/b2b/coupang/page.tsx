@@ -436,13 +436,6 @@ export default function CoupangB2BPage() {
     [palletGroups, gramByAlias, shipmentOf],
   )
   const milkrunTotals = useMemo(() => sumMilkrun(shipments), [shipments])
-  // 운임 합계에 들어간 발주(밀크런 운임 계산된 행)의 매출 — 매출 요약과 같은 기준(부가포함, 발주서 매입가)
-  const milkrunSales = useMemo(() => {
-    const priced = palletGroups.filter(
-      (g) => shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]?.fee != null,
-    )
-    return summarizeCoupang(priced.flatMap((g) => g.items), gramByAlias).totalIncl
-  }, [palletGroups, shipmentOf, gramByAlias])
   // 개당 운임 (트럭 vs 택배, 참고) — 밀크런 운임이 있는 건마다(합산 발주는 한 건으로)
   const freightOf = useMemo(() => {
     const m: Record<string, FreightCompare> = {}
@@ -579,6 +572,16 @@ export default function CoupangB2BPage() {
     [gompyo, milkrunPrices, priceOrigin],
   )
   const gompyoTotals = useMemo(() => sumGompyo(gompyoShipments), [gompyoShipments])
+  // 이번 발주 운송비 총합 = 밀크런 + 곰표 + 택배 가능 행 박스 × 택배 단가 (분모는 매출 요약 합계)
+  const transport = useMemo(() => {
+    const parcelBoxes = palletGroups.filter((g) => !g.needsPallet).reduce((a, g) => a + g.boxes, 0)
+    const parts = {
+      milkrun: milkrunTotals.totalFee,
+      gompyo: gompyoTotals.totalFee,
+      parcel: parcelBoxes * (parcelSettings.parcelFee ?? DEFAULT_PARCEL_FEE),
+    }
+    return { ...parts, total: parts.milkrun + parts.gompyo + parts.parcel }
+  }, [palletGroups, milkrunTotals, gompyoTotals, parcelSettings])
   const [gompyoCopied, setGompyoCopied] = useState(false)
 
   const copyGompyoNotice = useCallback(async () => {
@@ -1085,10 +1088,10 @@ export default function CoupangB2BPage() {
                   )}
                 </span>
                 <span className="text-right">
-                  <span className="text-lg font-bold">운임 합계 {num(milkrunTotals.totalFee)}원</span>
-                  {milkrunSales > 0 && (
+                  <span className="text-lg font-bold">운송비 합계 {num(transport.total)}원</span>
+                  {summary.totalIncl > 0 && (
                     <span className="ml-1 text-sm text-gray-600 font-semibold">
-                      · 매출 대비 {((milkrunTotals.totalFee / milkrunSales) * 100).toFixed(1)}%
+                      · 매출 대비 {((transport.total / summary.totalIncl) * 100).toFixed(1)}%
                     </span>
                   )}
                   {milkrunTotals.unpriced > 0 && (
@@ -1096,28 +1099,35 @@ export default function CoupangB2BPage() {
                       (요금 미등록 {milkrunTotals.unpriced}건 제외)
                     </span>
                   )}
-                  {milkrunSales > 0 && (
-                    <span className="block text-xs text-gray-400">분모: 해당 발주 매출 {num(milkrunSales)}원</span>
-                  )}
-                  {parcelSwitch && milkrunSales - parcelSwitch.sales > 0 && (
+                  <span className="block text-xs text-gray-500">
+                    {[
+                      transport.milkrun ? `밀크런 ${num(transport.milkrun)}` : '',
+                      transport.gompyo ? `곰표 ${num(transport.gompyo)}` : '',
+                      transport.parcel ? `택배 ${num(transport.parcel)}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' + ')}{' '}
+                    · 매출 {num(summary.totalIncl)}원(이번 발주 총합)
+                  </span>
+                  {parcelSwitch && summary.totalIncl - parcelSwitch.sales > 0 && (
                     <>
                       <span className="block mt-1">
                         <span className="text-lg font-bold text-emerald-700">
-                          택배 전환 시 {num(milkrunTotals.totalFee + parcelSwitch.feeDiff)}원
+                          택배 전환 시 {num(transport.total + parcelSwitch.feeDiff)}원
                         </span>
                         <span className="ml-1 text-sm font-semibold text-gray-600">
                           · 매출 대비{' '}
                           {(
-                            ((milkrunTotals.totalFee + parcelSwitch.feeDiff) / (milkrunSales - parcelSwitch.sales)) *
+                            ((transport.total + parcelSwitch.feeDiff) / (summary.totalIncl - parcelSwitch.sales)) *
                             100
                           ).toFixed(1)}
                           %
                         </span>
                       </span>
                       <span className="block text-xs text-gray-500">
-                        {parcelSwitch.label} · 운임 {parcelSwitch.feeDiff < 0 ? '−' : '+'}
-                        {num(Math.abs(parcelSwitch.feeDiff))}원 · 매출 −{num(parcelSwitch.sales)}원 · 분모{' '}
-                        {num(milkrunSales - parcelSwitch.sales)}원
+                        {parcelSwitch.label} · 운송비 {parcelSwitch.feeDiff < 0 ? '−' : '+'}
+                        {num(Math.abs(parcelSwitch.feeDiff))}원 · 매출 −{num(parcelSwitch.sales)}원 · 매출{' '}
+                        {num(summary.totalIncl - parcelSwitch.sales)}원(이번 발주 총합)
                       </span>
                     </>
                   )}
