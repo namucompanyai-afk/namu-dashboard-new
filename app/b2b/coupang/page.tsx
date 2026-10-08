@@ -59,6 +59,7 @@ import {
   sumMilkrun,
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
+import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPalletPdf'
 import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
@@ -477,6 +478,22 @@ export default function CoupangB2BPage() {
       setPlanJpgBusy(false)
     }
   }, [palletSvg, palletPlan.dueDate])
+  const [planOpen, setPlanOpen] = useState(false)
+  const lowBoxPanels = useMemo(
+    () => palletPlan.panels.filter((p) => p.boxes < LOW_BOX_PLT_WARN),
+    [palletPlan],
+  )
+  const [planPdfBusy, setPlanPdfBusy] = useState(false)
+  const savePlanPdf = useCallback(async () => {
+    setPlanPdfBusy(true)
+    try {
+      await downloadCoupangPalletPdf(palletPlan)
+    } catch (e: unknown) {
+      setFileError('PDF 저장 실패: ' + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setPlanPdfBusy(false)
+    }
+  }, [palletPlan])
 
   // 진도팜 송장 회신 대사 (한진 파일접수 상세내역)
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
@@ -1073,17 +1090,49 @@ export default function CoupangB2BPage() {
           {/* 팔레트 적재 구성도 — 팔레트 필요 발주만 */}
           {palletSvg && (
             <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-              <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold">팔레트 적재 구성도</h2>
-                <button
-                  onClick={savePlanJpg}
-                  disabled={planJpgBusy}
-                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
-                >
-                  {planJpgBusy ? '변환 중…' : 'JPG 다운로드'}
-                </button>
+              <div
+                className={
+                  'px-4 py-3 flex flex-wrap items-center justify-between gap-3 ' +
+                  (planOpen ? 'border-b border-gray-200' : '')
+                }
+              >
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <button
+                    onClick={() => setPlanOpen((v) => !v)}
+                    aria-expanded={planOpen}
+                    className="text-sm font-semibold hover:text-gray-600"
+                  >
+                    팔레트 적재 구성도 {planOpen ? '▾' : '▸'}
+                  </button>
+                  <span className="text-sm text-gray-600">
+                    PLT {palletPlan.panels.length}장 · 총 {num(palletPlan.panels.reduce((a, p) => a + p.boxes, 0))}박스
+                  </span>
+                  {lowBoxPanels.length > 0 && (
+                    <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-xs font-semibold">
+                      ⚠{' '}
+                      {lowBoxPanels.map((p) => `${p.center} PLT ${p.index}/${p.total} · ${num(p.boxes)}박스`).join(' · ')}
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={savePlanPdf}
+                    disabled={planPdfBusy}
+                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                  >
+                    {planPdfBusy ? '변환 중…' : 'PDF 다운로드(A4)'}
+                  </button>
+                  <button
+                    onClick={savePlanJpg}
+                    disabled={planJpgBusy}
+                    className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+                  >
+                    {planJpgBusy ? '변환 중…' : 'JPG 다운로드'}
+                  </button>
+                </div>
               </div>
-              <div className="p-4">
+              {/* 접혀도 DOM 은 유지 — 내보내기는 도면 데이터에서 새로 그린다 */}
+              <div className={planOpen ? 'p-4' : 'hidden'}>
                 <CoupangPalletPlanView svg={palletSvg} />
               </div>
             </div>

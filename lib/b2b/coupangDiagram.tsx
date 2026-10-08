@@ -664,7 +664,7 @@ const ITEMS_Y = 46 // 상품 목록 첫 줄 (한 상품 = 한 줄)
 const HEIGHT_WARN_MM = 50 // 높이 여유가 이 값 미만이면 빨간 경고
 const ROW_HEAD_H = 26 // 센터 제목 줄 높이
 const ROW_GAP = 22
-const panelWarnsOf = (p: PlanPanel): string[] => [
+export const panelWarnsOf = (p: PlanPanel): string[] => [
   ...(p.slackMm < HEIGHT_WARN_MM
     ? [p.over ? `⚠ 높이 ${cm(p.heightMm)}mm — 한도 ${cm(LIMIT_MM)}mm 초과, 단수 조정 필요` : `⚠ 높이 여유 ${cm(p.slackMm)}mm — 한도 ${cm(LIMIT_MM)}mm 근접`]
     : []),
