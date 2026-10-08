@@ -1646,9 +1646,10 @@ function RocketTable({
       {rows.length === 0 ? (
         <p className="px-4 py-6 text-xs text-gray-400">해당 발주 없음</p>
       ) : (
-        <div className="overflow-x-auto">
+        // 본문 10행까지만 보이고 넘치면 세로 스크롤 — 헤더는 고정 (xlsx 는 전체 행)
+        <div className="overflow-x-auto overflow-y-auto max-h-[406px]">
           <table className="w-full text-sm whitespace-nowrap">
-            <thead className="bg-gray-50 text-gray-600">
+            <thead className="sticky top-0 z-10 bg-gray-50 text-gray-600 shadow-[0_1px_0_#e5e7eb]">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">받는분성명</th>
                 <th className="px-3 py-2 text-left font-medium">받는분전화번호</th>

@@ -490,7 +490,7 @@ export function buildRocketRows(
     const g = groupOf.get(shipGroupKey(it))
     const truck = g?.needsPallet ?? false
     const address = truck ? it.centerAddress || c?.address || '' : c?.address || ''
-    const phone = truck ? it.centerPhone || c?.phone || '' : c?.phone || ''
+    const phone = formatKrPhone(truck ? it.centerPhone || c?.phone || '' : c?.phone || '')
     let pallet: number | null = null
     if (truck && g && !palletDone.has(g.key)) {
       palletDone.add(g.key)
@@ -516,6 +516,21 @@ export function buildRocketRows(
       dueDate: it.dueDate,
     }
   })
+}
+
+/**
+ * 전화번호 국내 형식 — '+8270…' → '070-…', 하이픈은 국번(02 는 2자리, 그 외 3자리)·가운데 3~4자리·끝 4자리.
+ * 변환할 수 없는 형식은 원문 그대로.
+ */
+export function formatKrPhone(raw: string): string {
+  const src = String(raw ?? '').trim()
+  let d = src.replace(/[\s\-().]/g, '')
+  if (/^\+82\d+$/.test(d)) d = '0' + d.slice(3).replace(/^0/, '')
+  if (!/^0\d{8,10}$/.test(d)) return src
+  const area = d.startsWith('02') ? 2 : 3
+  const rest = d.slice(area)
+  if (rest.length < 7 || rest.length > 8) return src
+  return `${d.slice(0, area)}-${rest.slice(0, rest.length - 4)}-${rest.slice(-4)}`
 }
 
 /** 택배분/트럭분 분리 (순서 유지) */
