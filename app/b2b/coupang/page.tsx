@@ -61,7 +61,7 @@ import {
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
 import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPalletPdf'
-import { buildGompyoNotice, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
+import { buildGompyoMessage, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
   DEFAULT_PARCEL_FEE,
@@ -245,6 +245,10 @@ export default function CoupangB2BPage() {
 
   // 제조일자는 대표님이 고르기 전까지 공란 — 빈 값이면 로켓 표·xlsx 제조일자 열도 공란
   const [madeDate, setMadeDate] = useState('')
+  // 위킵·곰표 날짜도 출고지별로 따로 — 대표가 고를 때만 반영, 업로드마다 공란
+  const [wikeepMadeDate, setWikeepMadeDate] = useState('')
+  const [gompyoLoadDate, setGompyoLoadDate] = useState('')
+  const [gompyoMadeDate, setGompyoMadeDate] = useState('')
   const [copied, setCopied] = useState(false)
 
   const loadSheets = useCallback(async () => {
@@ -282,6 +286,9 @@ export default function CoupangB2BPage() {
       // 업로드마다 공란으로 되돌린다 — 지난 발주의 날짜가 새 발주에 따라가지 않게.
       // 업로드 뒤 고른 값은 다음 업로드 전까지 유지된다.
       setMadeDate('')
+      setWikeepMadeDate('')
+      setGompyoLoadDate('')
+      setGompyoMadeDate('')
       setFileNames(files.map((f) => f.name))
       setSkipped(skip)
       setHistoryMsg('')
@@ -573,17 +580,12 @@ export default function CoupangB2BPage() {
   )
   const gompyoTotals = useMemo(() => sumGompyo(gompyoShipments), [gompyoShipments])
   // 위킵·곰표 전달 양식 — 진도팜과 같은 로켓 양식(택배/트럭 판정·주소 규칙은 buildRocketRows 그대로)
-  // 제조일자 선택은 진도팜분 전용이라 위킵·곰표는 공란
+  // 위킵 제조일자는 위킵 섹션에서 따로 지정 (곰표는 엑셀 없이 카톡 멘트만)
   const wikeepRocket = useMemo(() => {
     const plt: Record<string, number> = {}
     for (const g of palletGroups) if (g.shipFrom === '위킵') plt[g.key] = pltCountOf(g)
-    return splitRocketRows(buildRocketRows(wikeep, centers, '', plt))
-  }, [palletGroups, wikeep, centers])
-  const gompyoRocket = useMemo(
-    () =>
-      buildRocketRows(gompyo, centers, '', Object.fromEntries(gompyoShipments.map((s) => [s.key, s.plt])), true),
-    [gompyo, centers, gompyoShipments],
-  )
+    return splitRocketRows(buildRocketRows(wikeep, centers, wikeepMadeDate, plt))
+  }, [palletGroups, wikeep, centers, wikeepMadeDate])
   // 출고지 섹션 운임 표 — 팔레트 필요 안내와 같은 컬럼 (값은 기존 계산 결과 그대로)
   const wikeepFreightRows = useMemo((): FreightRow[] => {
     return palletGroups
@@ -646,13 +648,15 @@ export default function CoupangB2BPage() {
 
   const copyGompyoNotice = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(buildGompyoNotice(gompyoShipments))
+      await navigator.clipboard.writeText(
+        buildGompyoMessage(gompyoShipments, { loadDate: gompyoLoadDate, madeDate: gompyoMadeDate, centers }),
+      )
       setGompyoCopied(true)
       setTimeout(() => setGompyoCopied(false), 2000)
     } catch {
       setFileError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
     }
-  }, [gompyoShipments])
+  }, [gompyoShipments, gompyoLoadDate, gompyoMadeDate, centers])
 
   // 위킵분 — 부착 라벨(즉석밥은 박스 기표기라 제외) + 전달 안내문
   const labelPlan = useMemo(() => buildCoupangLabelPlan(wikeep), [wikeep])
@@ -1521,6 +1525,7 @@ export default function CoupangB2BPage() {
                   위킵분 — 쿠팡 로켓 양식 (택배 {wikeepRocket.parcel.length}행 · 트럭 {wikeepRocket.truck.length}행)
                 </h2>
                 <div className="flex flex-wrap items-center gap-3">
+                  <DatePick label="제조일자" value={wikeepMadeDate} onChange={setWikeepMadeDate} />
                   {labelPlan.skipped.map((s) => (
                     <span key={s.label} className="text-xs text-amber-700">
                       {s.label} {num(s.boxes)}박스 라벨 생략(기인쇄)
@@ -1568,21 +1573,16 @@ export default function CoupangB2BPage() {
           {gompyo.length > 0 && (
             <div className="space-y-4">
               <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-sm font-semibold">곰표분 — 쿠팡 로켓 양식 (트럭 {gompyoRocket.length}행)</h2>
+                <h2 className="text-sm font-semibold">곰표분 — 밀크런 ({gompyoShipments.length}건 · 카톡 전달)</h2>
                 <div className="flex flex-wrap items-center gap-3">
+                  <DatePick label="상차일" value={gompyoLoadDate} onChange={setGompyoLoadDate} />
+                  <DatePick label="제조일자" value={gompyoMadeDate} onChange={setGompyoMadeDate} />
                   <button
                     onClick={copyGompyoNotice}
                     disabled={gompyoShipments.length === 0}
-                    className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:text-gray-300 disabled:border-gray-200"
-                  >
-                    {gompyoCopied ? '✅ 복사됨' : '곰표 상차 안내문 복사'}
-                  </button>
-                  <button
-                    onClick={() => saveRocketXlsx(null, gompyoRocket, 'gompyo')}
-                    disabled={gompyoRocket.length === 0}
                     className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
                   >
-                    xlsx 다운로드
+                    {gompyoCopied ? '✅ 복사됨' : '곰표 전달 멘트 복사'}
                   </button>
                 </div>
               </div>
@@ -1624,17 +1624,35 @@ export default function CoupangB2BPage() {
                   </>
                 }
               />
-              <RocketTable
-                title={ROCKET_SHEETS['트럭'].title}
-                note={`곰표는 박스 수와 관계없이 밀크런 트럭 · 주소·전화는 발주서 자동 출력값 · 파렛트 수는 ${GOMPYO_UNITS_PER_PLT}봉 단위 올림, 묶음 첫 행에만 기입`}
-                rows={gompyoRocket}
-                truck
-              />
             </div>
           )}
         </>
       )}
     </div>
+  )
+}
+
+/** 출고지별 날짜 선택 — 기본 공란, 지정할 때만 반영 */
+function DatePick({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="text-xs text-gray-600">
+      {label}
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="ml-2 px-2 py-1 border border-gray-300 rounded text-xs"
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className="ml-1 px-1.5 py-0.5 rounded border border-gray-300 text-[11px] text-gray-600 hover:bg-gray-50"
+        >
+          지우기
+        </button>
+      )}
+    </label>
   )
 }
 

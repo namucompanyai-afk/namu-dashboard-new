@@ -10,9 +10,10 @@
  *   ① BASIC(1pt 당) × PLT
  *   ② 해당 PLT 를 커버하는 차량 구간 요금 (구간은 가격표 라벨에서 읽는다)
  *
+ * 곰표는 엑셀 없이 카톡 전달 멘트로만 넘긴다(buildGompyoMessage).
  * 파싱·출고지 분기·진도팜 로켓 양식·위킵 라벨 로직은 소비만 하고 건드리지 않는다.
  */
-import { GOMPYO_BOXES_PER_PLT, GOMPYO_UNITS_PER_PLT, gompyoPltOf, type RoutedItem } from './coupang'
+import { findCenter, formatKrPhone, gompyoPltOf, type CenterAddress, type RoutedItem } from './coupang'
 import {
   chooseFare,
   type CoupangMilkrunRow,
@@ -97,30 +98,59 @@ export function sumGompyo(shipments: GompyoShipment[]): GompyoTotals {
   }
 }
 
-// ── 상차 안내문 ──────────────────────────────────────────────────
-const num = (n: number) => n.toLocaleString('ko-KR')
+// ── 전달 멘트 (카톡) ─────────────────────────────────────────────
+const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토']
 
-/** 입고예정일별 블록 — 곰표에 그대로 붙여넣는 상차 안내 */
-export function buildGompyoNotice(shipments: GompyoShipment[]): string {
-  const dates = [...new Set(shipments.map((s) => s.dueDate))]
-  return dates
-    .map((date) => {
-      const day = shipments.filter((s) => s.dueDate === date)
-      const plt = day.reduce((a, s) => a + s.plt, 0)
-      const units = day.reduce((a, s) => a + s.units, 0)
-      const boxes = day.reduce((a, s) => a + s.boxes, 0)
-      const lines = day.flatMap((s) =>
-        s.items.map(
-          (it) =>
-            `${s.center} (발주 ${it.poNumber}) - ${it.master?.alias || it.productName} ` +
-            `${num(it.confirmQty)}봉(${num(it.boxes ?? 0)}박스)`,
-        ),
-      )
+/** 'YYYY-MM-DD' → '10월 12일' (미지정 '○월 ○일') */
+const mdOf = (ymd: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '')
+  return m ? `${Number(m[2])}월 ${Number(m[3])}일` : '○월 ○일'
+}
+/** 'YYYY-MM-DD' → '월' (미지정 '○') */
+const weekdayOf = (ymd: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || '')
+  return m ? WEEKDAYS[new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay()] : '○'
+}
+
+/** 별칭에서 [브랜드]·용량·원산지(…산) 를 뺀 짧은 이름. 남는 게 없으면 별칭 그대로 */
+export function gompyoShortName(alias: string): string {
+  const short = String(alias || '')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\d+(?:\.\d+)?\s*(?:kg|g|ml|l|개|입|봉)\b/gi, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !/^\S+산$/.test(w))
+    .join(' ')
+    .trim()
+  return short || String(alias || '').trim()
+}
+
+/**
+ * 곰표 전달 멘트 — 하차지(센터 × 입고예정일)마다 블록. 상차일·제조일자는 대표 지정값(미지정 ○).
+ * 주소·전화는 트럭 규칙(발주서 주소 → 없으면 주소록), 우편번호는 주소록 '밀크런 우편번호'.
+ */
+export function buildGompyoMessage(
+  shipments: GompyoShipment[],
+  o: { loadDate: string; madeDate: string; centers: CenterAddress[] },
+): string {
+  const totalPlt = shipments.reduce((a, s) => a + s.plt, 0)
+  const load = mdOf(o.loadDate)
+  return shipments
+    .map((s) => {
+      const c = findCenter(o.centers, s.center)
+      const first = s.items[0]
+      const names = [...new Set(s.items.map((it) => gompyoShortName(it.master?.alias || it.productName)))].join('·')
+      const address = first?.centerAddress || c?.address || ''
+      const phone = formatKrPhone(first?.centerPhone || c?.phone || '')
       return [
-        `[쿠팡 로켓 ${date} 입고 — 곰표 상차 안내]`,
-        `총 ${num(plt)}PLT (${num(units)}봉/${num(boxes)}박스) 밀크런 상차 부탁드립니다.`,
-        ...lines,
-        `※ 1팔레트 = ${GOMPYO_UNITS_PER_PLT}봉(${GOMPYO_BOXES_PER_PLT}박스) / ※ 밀크런 접수 D-1 영업일 14:00`,
+        `${load} ${names} 상차건`,
+        `상차일 ${load} ${weekdayOf(o.loadDate)}요일`,
+        `제조일자 ${mdOf(o.madeDate)}`,
+        `수량 ${s.plt}P /  ${s.units}봉 ${s.boxes}박스 / 총 ${totalPlt}P`,
+        `하차지 : ${s.center}`,
+        '',
+        `주소   ${address}`,
+        `우편번호   ${c?.truckZip ?? ''}`,
+        `전화번호   ${phone}`,
       ].join('\n')
     })
     .join('\n\n')

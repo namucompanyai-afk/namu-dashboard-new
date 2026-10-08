@@ -217,12 +217,14 @@ export type CenterAddress = {
   name: string // 물류센터명
   address: string // 택배 주소
   phone: string // 연락처(송장입력용)
+  truckZip: string // 밀크런(트럭) 우편번호 — 컬럼 없으면 ''
 }
 
 const CENTER_COLS = {
   name: ['물류센터명', '센터명', '물류센터'],
   address: ['택배주소', '택배배송주소', '주소'],
   phone: ['연락처(송장입력용)', '송장입력용연락처', '연락처', '전화번호', '전화'],
+  truckZip: ['밀크런 우편번호', '트럭 우편번호'],
 }
 
 /** 센터 주소록 rows(헤더 1행 포함) → CenterAddress[] */
@@ -238,6 +240,7 @@ export function parseCenters(rows: unknown[][]): CenterAddress[] {
       name,
       address: String((c.address >= 0 ? r[c.address] : '') ?? '').trim(),
       phone: String((c.phone >= 0 ? r[c.phone] : '') ?? '').trim(),
+      truckZip: String((c.truckZip >= 0 ? r[c.truckZip] : '') ?? '').trim(),
     })
   }
   return out
