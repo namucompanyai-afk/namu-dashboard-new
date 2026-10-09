@@ -687,7 +687,7 @@ export default function CoupangB2BPage() {
       }),
     [gompyo, gompyoTotals, parcelSettings, unitCostByAlias],
   )
-  // 슬랙 매출 보고 (#공유-데일리세일즈) — 화면 집계값을 그대로 문장·표로만 만든다
+  // 슬랙 매출 보고 (#손익, 비공개) — 화면 집계값을 그대로 문장·표로만 만든다
   const slackReport = useMemo(() => {
     const ship = (items: RoutedItem[]) => items.filter((it) => !it.notDelivered && it.confirmQty > 0)
     const kgSum = (items: RoutedItem[]) =>
@@ -1808,7 +1808,7 @@ function SlackReportModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
       <div className="w-full max-w-xl rounded-lg bg-white shadow-xl">
         <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">슬랙 매출 보고 — #공유-데일리세일즈</h3>
+          <h3 className="text-sm font-semibold">슬랙 매출 보고 — #손익</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm" aria-label="닫기">
             ✕
           </button>

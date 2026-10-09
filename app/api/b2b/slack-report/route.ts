@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/server-auth'
 
 /**
- * POST /api/b2b/slack-report  { text, body, dry? } — 쿠팡 발주 매출 보고를 #공유-데일리세일즈 로 보낸다.
+ * POST /api/b2b/slack-report  { text, body, dry? } — 쿠팡 발주 매출 보고를 #손익(비공개) 으로 보낸다.
  *
  * payload = { text: 알림용 한 줄, blocks: [{ type: 'markdown', text: body }] } — markdown 블록이 표를 그린다.
  * 슬랙이 거부(4xx)하면 슬랙 응답 문구를 그대로 돌려준다(다른 형식으로 자동 재전송하지 않는다).
