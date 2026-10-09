@@ -67,6 +67,7 @@ import {
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
 import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPalletPdf'
+import { buildCoupangSlackReport, slackReportKey, type SlackPalletRow } from '@/lib/b2b/coupangSlack'
 import { buildGompyoMessage, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
@@ -686,6 +687,88 @@ export default function CoupangB2BPage() {
       }),
     [gompyo, gompyoTotals, parcelSettings, unitCostByAlias],
   )
+  // 슬랙 매출 보고 (#공유-데일리세일즈) — 화면 집계값을 그대로 문장으로만 만든다
+  const slackReport = useMemo(() => {
+    const ship = (items: RoutedItem[]) => items.filter((it) => !it.notDelivered && it.confirmQty > 0)
+    const pallet: SlackPalletRow[] = []
+    for (const g of palletGroups) {
+      if (!g.needsPallet) continue
+      const s = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
+      pallet.push({ center: g.center, shipFrom: g.shipFrom, boxes: g.boxes, plt: pltCountOf(g), vehicle: s ? s.method || s.vehicleLabel : '' })
+    }
+    for (const s of gompyoShipments) pallet.push({ center: s.center, shipFrom: '곰표', boxes: s.boxes, plt: s.plt, vehicle: '' })
+    const madeDates = (
+      [
+        ['진도팜', jindo],
+        ['위킵', wikeep],
+        ['곰표', gompyo],
+      ] as [string, RoutedItem[]][]
+    )
+      .filter(([, items]) => ship(items).length > 0)
+      .map(([shipFrom, items]) => ({ shipFrom, dates: ship(items).map((it) => it.madeDate).filter(Boolean) }))
+    const text = buildCoupangSlackReport({
+      dueDates: routed.map((r) => r.dueDate),
+      poCount: new Set(routed.map((r) => r.poNumber)).size,
+      totalSales: summary.totalIncl,
+      totalQty: summary.totalQty,
+      totalBoxes: summary.totalBoxes,
+      shipFroms: [
+        { name: '진도팜', ...jindoSummary },
+        { name: '곰표', ...gompyoSummary },
+      ],
+      pallet,
+      parcel: palletGroups.filter((g) => !g.needsPallet).map((g) => ({ center: g.center, boxes: g.boxes })),
+      top: summary.rows.map((r) => ({ name: r.name, qty: r.qty, amount: r.totalIncl })),
+      madeDates,
+    })
+    return {
+      text,
+      key: slackReportKey(routed.map((r) => r.poNumber)),
+      blankMade: ship(routed).filter((it) => !it.madeDate).length,
+    }
+  }, [palletGroups, shipmentOf, gompyoShipments, jindo, wikeep, gompyo, routed, summary, jindoSummary, gompyoSummary])
+  const [slackOpen, setSlackOpen] = useState(false)
+  const [slackState, setSlackState] = useState<{ busy: boolean; msg: string; ok: boolean | null; confirmResend: boolean }>({
+    busy: false,
+    msg: '',
+    ok: null,
+    confirmResend: false,
+  })
+  const slackSentAt = (key: string): string | null => {
+    try {
+      return (JSON.parse(localStorage.getItem(SLACK_SENT_KEY) || '{}') as Record<string, string>)[key] ?? null
+    } catch {
+      return null
+    }
+  }
+  const sendSlack = async () => {
+    const prev = slackSentAt(slackReport.key)
+    if (prev && !slackState.confirmResend) {
+      setSlackState((x) => ({ ...x, confirmResend: true, msg: '', ok: null }))
+      return
+    }
+    setSlackState({ busy: true, msg: '', ok: null, confirmResend: false })
+    try {
+      const res = await fetch('/api/b2b/slack-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: slackReport.text }),
+      })
+      const j = await res.json().catch(() => null)
+      if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`)
+      try {
+        const all = JSON.parse(localStorage.getItem(SLACK_SENT_KEY) || '{}') as Record<string, string>
+        all[slackReport.key] = new Date().toISOString()
+        localStorage.setItem(SLACK_SENT_KEY, JSON.stringify(all))
+      } catch {
+        /* 기록 실패는 무시 — 전송은 끝났다 */
+      }
+      setSlackState({ busy: false, msg: '전송 완료', ok: true, confirmResend: false })
+    } catch (e: unknown) {
+      setSlackState({ busy: false, msg: '전송 실패: ' + (e instanceof Error ? e.message : String(e)), ok: false, confirmResend: false })
+    }
+  }
+
   const settingsMissing = useMemo(
     () => (sheetState === 'loaded' ? missingSettings(parcelSettings) : []),
     [sheetState, parcelSettings],
@@ -762,6 +845,16 @@ export default function CoupangB2BPage() {
 
   return (
     <div className="space-y-6">
+      {slackOpen && (
+        <SlackReportModal
+          text={slackReport.text}
+          blankMade={slackReport.blankMade}
+          sentAt={slackSentAt(slackReport.key)}
+          state={slackState}
+          onSend={sendSlack}
+          onClose={() => setSlackOpen(false)}
+        />
+      )}
       <div>
         <h1 className="text-2xl font-semibold">B2B 발주 변환 — 쿠팡</h1>
         <p className="text-sm text-gray-500 mt-1">
@@ -960,8 +1053,17 @@ export default function CoupangB2BPage() {
           <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 flex items-baseline justify-between">
               <h2 className="text-sm font-semibold">이번 발주 매출 요약</h2>
-              <span className="text-xs text-gray-500">
+              <span className="flex items-center gap-3 text-xs text-gray-500">
                 부가포함 매출 (과세 ×1.1, 발주서 매입가 기준)
+                <button
+                  onClick={() => {
+                    setSlackState({ busy: false, msg: '', ok: null, confirmResend: false })
+                    setSlackOpen(true)
+                  }}
+                  className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700"
+                >
+                  슬랙 매출 보고
+                </button>
               </span>
             </div>
             <div className="overflow-x-auto">
@@ -1662,6 +1764,75 @@ export default function CoupangB2BPage() {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+const SLACK_SENT_KEY = 'coupangSlackReportSent' // 발주번호 묶음 → 보낸 시각 (브라우저별 기록)
+
+/** 슬랙 매출 보고 미리보기 — 보낼 텍스트 그대로 + 확정 전·중복 경고 */
+function SlackReportModal({
+  text,
+  blankMade,
+  sentAt,
+  state,
+  onSend,
+  onClose,
+}: {
+  text: string
+  blankMade: number
+  sentAt: string | null
+  state: { busy: boolean; msg: string; ok: boolean | null; confirmResend: boolean }
+  onSend: () => void
+  onClose: () => void
+}) {
+  const sentText = sentAt
+    ? new Date(sentAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : ''
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
+      <div className="w-full max-w-xl rounded-lg bg-white shadow-xl">
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+          <h3 className="text-sm font-semibold">슬랙 매출 보고 — #공유-데일리세일즈</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm" aria-label="닫기">
+            ✕
+          </button>
+        </div>
+        <div className="p-4 space-y-2">
+          {blankMade > 0 && (
+            <p className="rounded bg-amber-50 border-l-4 border-amber-400 px-3 py-2 text-xs font-semibold text-amber-900">
+              확정 전 발주서입니다 — 제조일자 공란 {blankMade}행
+            </p>
+          )}
+          {sentAt && (
+            <p className="rounded bg-rose-50 border-l-4 border-rose-400 px-3 py-2 text-xs font-semibold text-rose-800">
+              이미 보낸 보고입니다 ({sentText})
+              {state.confirmResend && ' — 한 번 더 보내려면 아래 버튼을 다시 누르세요'}
+            </p>
+          )}
+          <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed text-gray-800">
+            {text}
+          </pre>
+          {state.msg && (
+            <p className={'text-xs font-semibold ' + (state.ok ? 'text-emerald-700' : 'text-red-600')}>{state.msg}</p>
+          )}
+        </div>
+        <div className="px-4 py-3 border-t border-gray-200 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
+          >
+            취소
+          </button>
+          <button
+            onClick={onSend}
+            disabled={state.busy || state.ok === true}
+            className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
+          >
+            {state.busy ? '보내는 중…' : state.confirmResend ? '그래도 보내기' : '보내기'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
