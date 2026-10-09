@@ -11,7 +11,7 @@
  *
  * 기준정보 (나무_마스터, /api/b2b/sheets 가 내려줌. 금액은 부가세 포함):
  *   1봉 원가 = 단가DB '소포장 공급가' · 봉투 여부 = 단가DB '봉투'(Y만 봉투비)
- *   설정 탭 J~M '항목 | 값' 표 — 봉투 단가 · 쿠팡 박스 단가 · 쿠팡 택배 단가 (없으면 아래 기본값)
+ *   설정 탭 J~M '항목 | 값' 표 — 봉투 단가 · 입고박스 진도팜·곰표 · 쿠팡 택배 단가 (없으면 아래 기본값 + 화면 경고)
  */
 import { norm, resolveCols, toNum } from './kurly'
 import { PALLET_BOX_LIMIT, type RoutedItem, type ShipFrom, type ShipGroup } from './coupang'
@@ -21,14 +21,15 @@ export const PARCEL_REVIEW_MIN_BOXES = PALLET_BOX_LIMIT + 1 // 10박스부터 �
 export const PARCEL_REVIEW_MAX_BOXES = 20
 export const PARCEL_KEEP_BOXES = PALLET_BOX_LIMIT // 남길 박스 수 (택배 한도)
 export const DEFAULT_BAG_FEE = 150 // 봉투 1봉
-export const DEFAULT_BOX_FEE = 1495 // 쿠팡 납품 박스 1개 (입수 18·16·9 공통)
+export const DEFAULT_BOX_FEE = 1495 // 진도팜 쿠팡 입고 박스 1개 (입수 18·16·9 공통) — 설정 탭 못 읽을 때만
+export const DEFAULT_GOMPYO_BOX_FEE = 1000 // 곰표 쿠팡 입고 10개입 박스 1개 — 설정 탭 못 읽을 때만
 export const DEFAULT_PARCEL_FEE = 4000 // 택배 1박스 (무게·크기 구분 없음)
 /** PLT 1장 최대 박스 — 손익분기 차량의 최대 적재 박스 = 최대 PLT × 이 값 */
 export const BOXES_PER_PLT: Partial<Record<ShipFrom, number>> = { 진도팜: 30, 곰표: 40 }
 
-// 설정 탭 항목명
+// 설정 탭 항목명 (J열 라벨 → K열 값). 박스 단가는 마진계산 탭과 같은 '입고박스 ' + 출고지
 export const SETTING_BAG_FEE = '봉투 단가'
-export const SETTING_BOX_FEE = '쿠팡 박스 단가'
+export const SETTING_BOX_FEE_PREFIX = '입고박스 '
 export const SETTING_PARCEL_FEE = '쿠팡 택배 단가'
 
 export type UnitCost = { cost: number; bag: boolean } // 1봉 원가 · 봉투비 적용 여부
@@ -61,17 +62,27 @@ export function settingValue(rows: unknown[][], label: string): number | null {
 
 export type ParcelSettings = {
   bagFee: number | null
-  boxFee: number | null
-  parcelFee: number | null
+  boxFee: number | null // 입고박스 진도팜
+  gompyoBoxFee: number | null // 입고박스 곰표
+  parcelFee: number | null // 쿠팡 택배 단가
 }
 
 export function parseParcelSettings(rows: unknown[][]): ParcelSettings {
   return {
     bagFee: settingValue(rows, SETTING_BAG_FEE),
-    boxFee: settingValue(rows, SETTING_BOX_FEE),
+    boxFee: settingValue(rows, SETTING_BOX_FEE_PREFIX + '진도팜'),
+    gompyoBoxFee: settingValue(rows, SETTING_BOX_FEE_PREFIX + '곰표'),
     parcelFee: settingValue(rows, SETTING_PARCEL_FEE),
   }
 }
+
+/** 설정 탭에서 못 읽은 단가 항목 (기본값으로 대신 계산 중) — 화면 경고용 */
+export const missingSettings = (s: ParcelSettings): string[] =>
+  [
+    s.boxFee === null ? `${SETTING_BOX_FEE_PREFIX}진도팜` : '',
+    s.gompyoBoxFee === null ? `${SETTING_BOX_FEE_PREFIX}곰표` : '',
+    s.parcelFee === null ? SETTING_PARCEL_FEE : '',
+  ].filter(Boolean)
 
 export type ParcelLine = {
   item: RoutedItem

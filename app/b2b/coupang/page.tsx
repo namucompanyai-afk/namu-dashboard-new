@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { MASTER_SHEET_ID } from '@/lib/sheet-ids'
-import type { ProductMaster } from '@/lib/b2b/kurly'
+import { norm, type ProductMaster } from '@/lib/b2b/kurly'
 import {
   buildRocketRows,
   GOMPYO_BOXES_PER_PLT,
@@ -70,7 +70,11 @@ import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPal
 import { buildGompyoMessage, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
+  DEFAULT_BAG_FEE,
+  DEFAULT_BOX_FEE,
+  DEFAULT_GOMPYO_BOX_FEE,
   DEFAULT_PARCEL_FEE,
+  missingSettings,
   isParcelReviewTarget,
   PARCEL_KEEP_BOXES,
   reviewParcel,
@@ -250,6 +254,7 @@ export default function CoupangB2BPage() {
   const [parcelSettings, setParcelSettings] = useState<ParcelSettings>({
     bagFee: null,
     boxFee: null,
+    gompyoBoxFee: null,
     parcelFee: null,
   })
   const [sheetState, setSheetState] = useState<SheetState>('idle')
@@ -654,16 +659,37 @@ export default function CoupangB2BPage() {
       })),
     [gompyoShipments, gramByAlias],
   )
-  // 이번 발주 운송비 총합 = 밀크런 + 곰표 + 택배 가능 행 박스 × 택배 단가 (분모는 매출 요약 합계)
-  const transport = useMemo(() => {
-    const parcelBoxes = palletGroups.filter((g) => !g.needsPallet).reduce((a, g) => a + g.boxes, 0)
-    const parts = {
-      milkrun: milkrunTotals.totalFee,
-      gompyo: gompyoTotals.totalFee,
-      parcel: parcelBoxes * (parcelSettings.parcelFee ?? DEFAULT_PARCEL_FEE),
-    }
-    return { ...parts, total: parts.milkrun + parts.gompyo + parts.parcel }
-  }, [palletGroups, milkrunTotals, gompyoTotals, parcelSettings])
+  // 출고지별 매출·운송비·마진 (위킵 제외). 운임·박스 수·원가는 기존 계산 결과를 읽어 합산만 한다
+  const jindoSummary = useMemo(() => {
+    const milkrun = shipments.filter((x) => x.shipFrom === '진도팜').reduce((a, x) => a + (x.fee ?? 0), 0)
+    const parcelBoxes = palletGroups
+      .filter((g) => g.shipFrom === '진도팜' && !g.needsPallet)
+      .reduce((a, g) => a + g.boxes, 0)
+    const parcel = parcelBoxes * (parcelSettings.parcelFee ?? DEFAULT_PARCEL_FEE)
+    return shipFromMarginOf(jindo, {
+      freightParts: [
+        ['밀크런', milkrun],
+        ['택배', parcel],
+      ],
+      boxFee: parcelSettings.boxFee ?? DEFAULT_BOX_FEE,
+      bagFee: parcelSettings.bagFee ?? DEFAULT_BAG_FEE,
+      unitCostByAlias,
+    })
+  }, [shipments, palletGroups, jindo, parcelSettings, unitCostByAlias])
+  const gompyoSummary = useMemo(
+    () =>
+      shipFromMarginOf(gompyo, {
+        freightParts: [['밀크런', gompyoTotals.totalFee]],
+        boxFee: parcelSettings.gompyoBoxFee ?? DEFAULT_GOMPYO_BOX_FEE,
+        bagFee: parcelSettings.bagFee ?? DEFAULT_BAG_FEE,
+        unitCostByAlias,
+      }),
+    [gompyo, gompyoTotals, parcelSettings, unitCostByAlias],
+  )
+  const settingsMissing = useMemo(
+    () => (sheetState === 'loaded' ? missingSettings(parcelSettings) : []),
+    [sheetState, parcelSettings],
+  )
   const [gompyoCopied, setGompyoCopied] = useState(false)
 
   const copyGompyoNotice = useCallback(async () => {
@@ -1178,50 +1204,33 @@ export default function CoupangB2BPage() {
             {shipments.length > 0 && (
               <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
                 <span className="text-gray-600">
-                  {/* 출고지별 — 진도팜·위킵 밀크런 건·PLT / 곰표 건·PLT (값은 기존 집계 그대로) */}
-                  {[
-                    ...countByShipFrom(shipments).map(
+                  {/* 출고지별 밀크런 건·PLT (곰표는 아래 곰표분 표) — 값은 기존 집계 그대로 */}
+                  {countByShipFrom(shipments)
+                    .map(
                       (c) =>
                         `${c.shipFrom} 팔레트 ${c.count}건 · ${shipments
                           .filter((x) => x.shipFrom === c.shipFrom)
                           .reduce((a, x) => a + x.plt, 0)} PLT`,
-                    ),
-                    ...(gompyoShipments.length ? [`곰표 ${gompyoShipments.length}건 · ${gompyoTotals.totalPlt} PLT`] : []),
-                  ].join(' / ')}
-                  {gompyoShipments.length > 0 && <span className="text-gray-400"> (곰표 운임은 아래 곰표 표)</span>}
+                    )
+                    .join(' / ')}
                 </span>
                 <span className="text-right">
-                  <span className="text-lg font-bold">운송비 합계 {num(transport.total)}원</span>
-                  {summary.totalIncl > 0 && (
-                    <span className="ml-1 text-sm text-gray-600 font-semibold">
-                      · 매출 대비 {((transport.total / summary.totalIncl) * 100).toFixed(1)}%
-                    </span>
-                  )}
+                  <ShipFromSummaryView summary={jindoSummary} label="진도팜분" settingsMissing={settingsMissing} />
                   {milkrunTotals.unpriced > 0 && (
-                    <span className="ml-2 text-xs font-normal text-amber-600">
+                    <span className="block text-xs font-normal text-amber-600">
                       (요금 미등록 {milkrunTotals.unpriced}건 제외)
                     </span>
                   )}
-                  <span className="block text-xs text-gray-500">
-                    {[
-                      transport.milkrun ? `밀크런 ${num(transport.milkrun)}` : '',
-                      transport.gompyo ? `곰표 ${num(transport.gompyo)}` : '',
-                      transport.parcel ? `택배 ${num(transport.parcel)}` : '',
-                    ]
-                      .filter(Boolean)
-                      .join(' + ')}{' '}
-                    · 매출 {num(summary.totalIncl)}원(이번 발주 총합)
-                  </span>
-                  {parcelSwitch && summary.totalIncl - parcelSwitch.sales > 0 && (
+                  {parcelSwitch && jindoSummary.sales - parcelSwitch.sales > 0 && (
                     <>
                       <span className="block mt-1">
                         <span className="text-lg font-bold text-emerald-700">
-                          택배 전환 시 {num(transport.total + parcelSwitch.feeDiff)}원
+                          택배 전환 시 {num(jindoSummary.freight + parcelSwitch.feeDiff)}원
                         </span>
                         <span className="ml-1 text-sm font-semibold text-gray-600">
                           · 매출 대비{' '}
                           {(
-                            ((transport.total + parcelSwitch.feeDiff) / (summary.totalIncl - parcelSwitch.sales)) *
+                            ((jindoSummary.freight + parcelSwitch.feeDiff) / (jindoSummary.sales - parcelSwitch.sales)) *
                             100
                           ).toFixed(1)}
                           %
@@ -1230,7 +1239,7 @@ export default function CoupangB2BPage() {
                       <span className="block text-xs text-gray-500">
                         {parcelSwitch.label} · 운송비 {parcelSwitch.feeDiff < 0 ? '−' : '+'}
                         {num(Math.abs(parcelSwitch.feeDiff))}원 · 매출 −{num(parcelSwitch.sales)}원 · 매출{' '}
-                        {num(summary.totalIncl - parcelSwitch.sales)}원(이번 발주 총합)
+                        {num(jindoSummary.sales - parcelSwitch.sales)}원(진도팜분)
                       </span>
                     </>
                   )}
@@ -1621,10 +1630,10 @@ export default function CoupangB2BPage() {
                         밀크런 {gompyoShipments.length}건 · 총 {num(gompyoTotals.totalPlt)} PLT (
                         {num(gompyoTotals.totalUnits)}봉)
                       </span>
-                      <span className="text-lg font-bold">
-                        운임 합계 {num(gompyoTotals.totalFee)}원
+                      <span className="text-right">
+                        <ShipFromSummaryView summary={gompyoSummary} label="곰표분" settingsMissing={settingsMissing} />
                         {gompyoTotals.unpriced > 0 && (
-                          <span className="ml-2 text-xs font-normal text-amber-600">
+                          <span className="block text-xs font-normal text-amber-600">
                             (요금 미등록 {gompyoTotals.unpriced}건 제외)
                           </span>
                         )}
@@ -1654,6 +1663,107 @@ export default function CoupangB2BPage() {
         </>
       )}
     </div>
+  )
+}
+
+/** 출고지별 매출·운송비·마진 — 매출은 부가세 별도(과세 ×10/11 = 발주서 매입가), 원가는 단가DB 1봉 원가 + 봉투비(VAT 포함 그대로) */
+type ShipFromSummary = {
+  sales: number // 출고지 매출 (전 상품)
+  freight: number
+  freightParts: [string, number][]
+  boxes: number
+  box: number // 박스 수 × 입고박스 단가
+  marginSales: number // 원가 있는 상품 매출
+  cost: number
+  margin: number
+  missing: string[] // 원가 못 찾은 상품 (마진 계산에서 제외)
+}
+
+function shipFromMarginOf(
+  items: RoutedItem[],
+  o: {
+    freightParts: [string, number][]
+    boxFee: number
+    bagFee: number
+    unitCostByAlias: Record<string, UnitCost>
+  },
+): ShipFromSummary {
+  let sales = 0
+  let marginSales = 0
+  let cost = 0
+  let boxes = 0
+  const missing = new Set<string>()
+  for (const it of items) {
+    if (it.notDelivered || it.confirmQty <= 0) continue
+    // 발주서 매입가는 부가세 별도 — 매출 요약(과세 ×1.1)을 ×10/11 한 값과 같다
+    const net = it.confirmQty * it.unitPrice
+    sales += net
+    boxes += it.boxes ?? 0
+    const uc = it.master ? o.unitCostByAlias[norm(it.master.alias)] : undefined
+    if (!uc) {
+      missing.add(it.master?.alias || it.productName)
+      continue
+    }
+    marginSales += net
+    cost += it.confirmQty * (uc.cost + (uc.bag ? o.bagFee : 0))
+  }
+  const freight = o.freightParts.reduce((a, [, v]) => a + v, 0)
+  const box = boxes * o.boxFee
+  return {
+    sales,
+    freight,
+    freightParts: o.freightParts,
+    boxes,
+    box,
+    marginSales,
+    cost: Math.round(cost), // 단가DB 원가에 소수(예: 4,148.1)가 있어 원 단위로
+    margin: Math.round(marginSales - cost - box - freight),
+    missing: [...missing],
+  }
+}
+
+const pct = (n: number, d: number): string => (d > 0 ? ((n / d) * 100).toFixed(1) : '0.0')
+
+function ShipFromSummaryView({
+  summary: x,
+  label,
+  settingsMissing,
+}: {
+  summary: ShipFromSummary
+  label: string
+  settingsMissing: string[]
+}) {
+  return (
+    <>
+      <span className="block">
+        <span className="text-lg font-bold">운송비 합계 {num(x.freight)}원</span>
+        <span className="ml-1 text-sm text-gray-600 font-semibold">· 매출 대비 {pct(x.freight, x.sales)}%</span>
+      </span>
+      <span className="block text-xs text-gray-500">
+        {x.freightParts
+          .filter(([, v]) => v)
+          .map(([k, v]) => `${k} ${num(v)}`)
+          .join(' + ') || '운송비 없음'}{' '}
+        · 매출 {num(x.sales)}원({label})
+      </span>
+      <span className="block mt-1">
+        <span className="text-lg font-bold">마진 {num(x.margin)}원</span>
+        <span className="ml-1 text-sm text-gray-600 font-semibold">· 마진율 {pct(x.margin, x.marginSales)}%</span>
+        {x.missing.length > 0 && (
+          <span className="ml-2 text-xs font-semibold text-amber-600" title={x.missing.join(', ')}>
+            원가 없음 {x.missing.length}개 상품 제외
+          </span>
+        )}
+      </span>
+      <span className="block text-xs text-gray-500">
+        매출 {num(x.marginSales)} − 원가 {num(x.cost)} − 박스 {num(x.box)} − 운송비 {num(x.freight)}
+      </span>
+      {settingsMissing.length > 0 && (
+        <span className="block text-xs font-semibold text-amber-600">
+          ⚠ 설정 탭 값 못 읽음 ({settingsMissing.join(', ')}) — 기본값으로 계산
+        </span>
+      )}
+    </>
   )
 }
 
