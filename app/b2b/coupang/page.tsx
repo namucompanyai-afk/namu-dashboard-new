@@ -67,6 +67,7 @@ import {
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
 import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPalletPdf'
+import { useCLevel } from '@/lib/useCLevel'
 import { buildCoupangSlackReport, slackReportKey, vehicleKgOf, type SlackCenterRow } from '@/lib/b2b/coupangSlack'
 import { buildGompyoMessage, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
@@ -120,9 +121,11 @@ const fitWidths = (rows: (string | number)[][]): number[] => {
 function ParcelReduceTable({
   items,
   review,
+  cLevel,
 }: {
   items: RoutedItem[]
   review: Extract<ParcelReview, { status: 'ok' }>
+  cLevel: boolean // C레벨만 잃는 마진(이번 발주 합계) — 직원은 상품별 1박스 마진만
 }) {
   const dropOf = new Map<RoutedItem, ParcelLine>(review.drop.map((l) => [l.item, l]))
   const rows = items.map((it) => {
@@ -144,7 +147,7 @@ function ParcelReduceTable({
             <th className="px-2 py-1 text-right font-medium">입력할 납품가능수량</th>
             <th className="px-2 py-1 text-right font-medium">박스</th>
             <th className="px-2 py-1 text-right font-medium">잃는 매출</th>
-            <th className="px-2 py-1 text-right font-medium">잃는 마진</th>
+            <th className="px-2 py-1 text-right font-medium">{cLevel ? '잃는 마진' : '1박스 마진(트럭 기준)'}</th>
           </tr>
         </thead>
         <tbody>
@@ -175,7 +178,9 @@ function ParcelReduceTable({
                 {d ? <span className="text-rose-600 font-semibold">{num(d.lostSales)}원</span> : '—'}
               </td>
               <td className="px-2 py-1 text-right">
-                {d ? (
+                {!d ? (
+                  '—'
+                ) : cLevel ? (
                   <span
                     className="text-rose-600 font-semibold cursor-help"
                     title={`1박스 마진(트럭 기준) ${num(d.boxMargin)}원`}
@@ -183,7 +188,7 @@ function ParcelReduceTable({
                     {num(d.boxMargin * d.boxes)}원
                   </span>
                 ) : (
-                  '—'
+                  <span>{num(d.boxMargin)}원</span>
                 )}
               </td>
             </tr>
@@ -197,7 +202,11 @@ function ParcelReduceTable({
               {num(sum((r) => r.it.boxes ?? 0))} → {num(sum((r) => r.keepBoxes ?? 0))}
             </td>
             <td className="px-2 py-1 text-right text-rose-600">{num(review.lostSales)}원</td>
-            <td className="px-2 py-1 text-right text-rose-600">{num(review.lost)}원</td>
+            {cLevel ? (
+              <td className="px-2 py-1 text-right text-rose-600">{num(review.lost)}원</td>
+            ) : (
+              <td className="px-2 py-1 text-right text-gray-400">—</td>
+            )}
           </tr>
         </tbody>
       </table>
@@ -349,6 +358,8 @@ export default function CoupangB2BPage() {
     }
     return out
   }, [items, products])
+  // C레벨(서버 역할 admin) — 건별 마진 표시는 이 값으로만 (localStorage 역할로 판단하지 않는다)
+  const cLevel = useCLevel()
   const [isAdmin, setIsAdmin] = useState(false)
   useEffect(() => {
     try { setIsAdmin(JSON.parse(localStorage.getItem('user') || '{}')?.role === '관리자') } catch { /* 무시 */ }
@@ -742,13 +753,10 @@ export default function CoupangB2BPage() {
       blankMade: ship(routed).filter((it) => !it.madeDate).length,
     }
   }, [palletGroups, shipmentOf, gompyoShipments, gramByAlias, routed, summary, jindoSummary, gompyoSummary])
+  // 슬랙 보고 — 버튼 → 간단한 확인창(본문 미리보기 없음) → 전송 → 화면 알림
   const [slackOpen, setSlackOpen] = useState(false)
-  const [slackState, setSlackState] = useState<{ busy: boolean; msg: string; ok: boolean | null; confirmResend: boolean }>({
-    busy: false,
-    msg: '',
-    ok: null,
-    confirmResend: false,
-  })
+  const [slackBusy, setSlackBusy] = useState(false)
+  const [slackToast, setSlackToast] = useState<{ ok: boolean; msg: string } | null>(null)
   const slackSentAt = (key: string): string | null => {
     try {
       return (JSON.parse(localStorage.getItem(SLACK_SENT_KEY) || '{}') as Record<string, string>)[key] ?? null
@@ -757,12 +765,7 @@ export default function CoupangB2BPage() {
     }
   }
   const sendSlack = async () => {
-    const prev = slackSentAt(slackReport.key)
-    if (prev && !slackState.confirmResend) {
-      setSlackState((x) => ({ ...x, confirmResend: true, msg: '', ok: null }))
-      return
-    }
-    setSlackState({ busy: true, msg: '', ok: null, confirmResend: false })
+    setSlackBusy(true)
     try {
       const res = await fetch('/api/b2b/slack-report', {
         method: 'POST',
@@ -778,9 +781,12 @@ export default function CoupangB2BPage() {
       } catch {
         /* 기록 실패는 무시 — 전송은 끝났다 */
       }
-      setSlackState({ busy: false, msg: '전송 완료', ok: true, confirmResend: false })
+      setSlackToast({ ok: true, msg: '#손익으로 보냈습니다' })
     } catch (e: unknown) {
-      setSlackState({ busy: false, msg: '전송 실패: ' + (e instanceof Error ? e.message : String(e)), ok: false, confirmResend: false })
+      setSlackToast({ ok: false, msg: '슬랙 전송 실패: ' + (e instanceof Error ? e.message : String(e)) })
+    } finally {
+      setSlackBusy(false)
+      setSlackOpen(false)
     }
   }
 
@@ -861,14 +867,27 @@ export default function CoupangB2BPage() {
   return (
     <div className="space-y-6">
       {slackOpen && (
-        <SlackReportModal
-          text={slackReport.body}
+        <SlackConfirmDialog
           blankMade={slackReport.blankMade}
           sentAt={slackSentAt(slackReport.key)}
-          state={slackState}
+          busy={slackBusy}
           onSend={sendSlack}
           onClose={() => setSlackOpen(false)}
         />
+      )}
+      {slackToast && (
+        <div
+          role="status"
+          className={
+            'fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-md px-4 py-3 text-sm font-semibold shadow-lg ' +
+            (slackToast.ok ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white')
+          }
+        >
+          {slackToast.msg}
+          <button onClick={() => setSlackToast(null)} className="text-white/80 hover:text-white" aria-label="닫기">
+            ✕
+          </button>
+        </div>
       )}
       <div>
         <h1 className="text-2xl font-semibold">B2B 발주 변환 — 쿠팡</h1>
@@ -1072,7 +1091,7 @@ export default function CoupangB2BPage() {
                 부가포함 매출 (과세 ×1.1, 발주서 매입가 기준)
                 <button
                   onClick={() => {
-                    setSlackState({ busy: false, msg: '', ok: null, confirmResend: false })
+                    setSlackToast(null)
                     setSlackOpen(true)
                   }}
                   className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700"
@@ -1264,7 +1283,7 @@ export default function CoupangB2BPage() {
                           <tr className="border-t border-gray-100">
                             <td colSpan={11} className="px-3 py-3 bg-gray-50">
                               {review?.status === 'ok' ? (
-                                <ParcelReduceTable items={g.items} review={review} />
+                                <ParcelReduceTable items={g.items} review={review} cLevel={cLevel} />
                               ) : (
                                 <>
                                   <table className="w-full text-xs">
@@ -1332,7 +1351,12 @@ export default function CoupangB2BPage() {
                     .join(' / ')}
                 </span>
                 <span className="text-right">
-                  <ShipFromSummaryView summary={jindoSummary} label="진도팜분" settingsMissing={settingsMissing} />
+                  <ShipFromSummaryView
+                    summary={jindoSummary}
+                    label="진도팜분"
+                    settingsMissing={settingsMissing}
+                    cLevel={cLevel}
+                  />
                   {milkrunTotals.unpriced > 0 && (
                     <span className="block text-xs font-normal text-amber-600">
                       (요금 미등록 {milkrunTotals.unpriced}건 제외)
@@ -1748,7 +1772,12 @@ export default function CoupangB2BPage() {
                         {num(gompyoTotals.totalUnits)}봉)
                       </span>
                       <span className="text-right">
-                        <ShipFromSummaryView summary={gompyoSummary} label="곰표분" settingsMissing={settingsMissing} />
+                        <ShipFromSummaryView
+                          summary={gompyoSummary}
+                          label="곰표분"
+                          settingsMissing={settingsMissing}
+                          cLevel={cLevel}
+                        />
                         {gompyoTotals.unpriced > 0 && (
                           <span className="block text-xs font-normal text-amber-600">
                             (요금 미등록 {gompyoTotals.unpriced}건 제외)
@@ -1785,19 +1814,17 @@ export default function CoupangB2BPage() {
 
 const SLACK_SENT_KEY = 'coupangSlackReportSent' // 발주번호 묶음 → 보낸 시각 (브라우저별 기록)
 
-/** 슬랙 매출 보고 미리보기 — 보낼 텍스트 그대로 + 확정 전·중복 경고 */
-function SlackReportModal({
-  text,
+/** 슬랙 매출 보고 확인창 — 본문 미리보기 없이 확정 전·이미 보낸 보고 경고만 */
+function SlackConfirmDialog({
   blankMade,
   sentAt,
-  state,
+  busy,
   onSend,
   onClose,
 }: {
-  text: string
   blankMade: number
   sentAt: string | null
-  state: { busy: boolean; msg: string; ok: boolean | null; confirmResend: boolean }
+  busy: boolean
   onSend: () => void
   onClose: () => void
 }) {
@@ -1806,14 +1833,9 @@ function SlackReportModal({
     : ''
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-xl rounded-lg bg-white shadow-xl">
-        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">슬랙 매출 보고 — #손익</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm" aria-label="닫기">
-            ✕
-          </button>
-        </div>
+      <div className="w-full max-w-sm rounded-lg bg-white shadow-xl">
         <div className="p-4 space-y-2">
+          <p className="text-sm font-semibold text-gray-900">이번 발주 매출 보고를 #손익으로 보낼까요?</p>
           {blankMade > 0 && (
             <p className="rounded bg-amber-50 border-l-4 border-amber-400 px-3 py-2 text-xs font-semibold text-amber-900">
               확정 전 발주서입니다 — 제조일자 공란 {blankMade}행
@@ -1822,29 +1844,23 @@ function SlackReportModal({
           {sentAt && (
             <p className="rounded bg-rose-50 border-l-4 border-rose-400 px-3 py-2 text-xs font-semibold text-rose-800">
               이미 보낸 보고입니다 ({sentText})
-              {state.confirmResend && ' — 한 번 더 보내려면 아래 버튼을 다시 누르세요'}
             </p>
-          )}
-          <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed text-gray-800">
-            {text}
-          </pre>
-          {state.msg && (
-            <p className={'text-xs font-semibold ' + (state.ok ? 'text-emerald-700' : 'text-red-600')}>{state.msg}</p>
           )}
         </div>
         <div className="px-4 py-3 border-t border-gray-200 flex justify-end gap-2">
           <button
             onClick={onClose}
+            disabled={busy}
             className="px-3 py-1.5 rounded-md border border-gray-300 text-gray-700 text-xs hover:bg-gray-50"
           >
             취소
           </button>
           <button
             onClick={onSend}
-            disabled={state.busy || state.ok === true}
+            disabled={busy}
             className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs hover:bg-gray-700 disabled:bg-gray-300"
           >
-            {state.busy ? '보내는 중…' : state.confirmResend ? '그래도 보내기' : '보내기'}
+            {busy ? '보내는 중…' : '보내기'}
           </button>
         </div>
       </div>
@@ -1914,10 +1930,12 @@ function ShipFromSummaryView({
   summary: x,
   label,
   settingsMissing,
+  cLevel,
 }: {
   summary: ShipFromSummary
   label: string
   settingsMissing: string[]
+  cLevel: boolean // C레벨만 마진 세트(건별 마진) — 직원은 렌더링하지 않는다
 }) {
   return (
     <>
@@ -1932,18 +1950,22 @@ function ShipFromSummaryView({
           .join(' + ') || '운송비 없음'}{' '}
         · 매출 {num(x.sales)}원({label})
       </span>
-      <span className="block mt-1">
-        <span className="text-lg font-bold">마진 {num(x.margin)}원</span>
-        <span className="ml-1 text-sm text-gray-600 font-semibold">· 마진율 {pct(x.margin, x.marginSales)}%</span>
-        {x.missing.length > 0 && (
-          <span className="ml-2 text-xs font-semibold text-amber-600" title={x.missing.join(', ')}>
-            원가 없음 {x.missing.length}개 상품 제외
+      {cLevel && (
+        <>
+          <span className="block mt-1">
+            <span className="text-lg font-bold">마진 {num(x.margin)}원</span>
+            <span className="ml-1 text-sm text-gray-600 font-semibold">· 마진율 {pct(x.margin, x.marginSales)}%</span>
+            {x.missing.length > 0 && (
+              <span className="ml-2 text-xs font-semibold text-amber-600" title={x.missing.join(', ')}>
+                원가 없음 {x.missing.length}개 상품 제외
+              </span>
+            )}
           </span>
-        )}
-      </span>
-      <span className="block text-xs text-gray-500">
-        매출 {num(x.marginSales)} − 원가 {num(x.cost)} − 박스 {num(x.box)} − 운송비 {num(x.freight)}
-      </span>
+          <span className="block text-xs text-gray-500">
+            매출 {num(x.marginSales)} − 원가 {num(x.cost)} − 박스 {num(x.box)} − 운송비 {num(x.freight)}
+          </span>
+        </>
+      )}
       {settingsMissing.length > 0 && (
         <span className="block text-xs font-semibold text-amber-600">
           ⚠ 설정 탭 값 못 읽음 ({settingsMissing.join(', ')}) — 기본값으로 계산
