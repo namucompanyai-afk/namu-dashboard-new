@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/server-auth'
 
 /**
- * POST /api/b2b/slack-report  { text, dry? } — 쿠팡 발주 매출 보고를 #공유-데일리세일즈 로 보낸다.
+ * POST /api/b2b/slack-report  { text, body, dry? } — 쿠팡 발주 매출 보고를 #공유-데일리세일즈 로 보낸다.
+ *
+ * payload = { text: 알림용 한 줄, blocks: [{ type: 'markdown', text: body }] } — markdown 블록이 표를 그린다.
+ * 슬랙이 거부(4xx)하면 슬랙 응답 문구를 그대로 돌려준다(다른 형식으로 자동 재전송하지 않는다).
  *
  * 웹훅은 SLACK_SALES_WEBHOOK_URL (진도팜 알림용 SLACK_WEBHOOK_URL 과 별개).
  * 웹훅 주소는 응답·로그 어디에도 내보내지 않는다.
- * dry=1(또는 true)이면 전송 없이 text 와 웹훅 설정 여부만 돌려준다.
+ * dry=1(또는 true)이면 전송 없이 text·body 와 웹훅 설정 여부만 돌려준다.
  */
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,26 +21,30 @@ export async function POST(req: Request) {
   const denied = requireRole(req, ['admin', 'staff'])
   if (denied) return denied
 
-  let body: { text?: unknown; dry?: unknown }
+  let body: { text?: unknown; body?: unknown; dry?: unknown }
   try {
     body = await req.json()
   } catch {
     return NextResponse.json({ ok: false, error: '요청 본문(JSON)을 읽지 못했습니다.' }, { status: 400 })
   }
   const text = typeof body.text === 'string' ? body.text.trim() : ''
-  if (!text) return NextResponse.json({ ok: false, error: '보낼 내용이 없습니다.' }, { status: 400 })
-  if (text.length > MAX_TEXT) return NextResponse.json({ ok: false, error: '보낼 내용이 너무 깁니다.' }, { status: 400 })
+  const markdown = typeof body.body === 'string' ? body.body.trim() : ''
+  if (!text || !markdown) return NextResponse.json({ ok: false, error: '보낼 내용이 없습니다.' }, { status: 400 })
+  if (text.length > MAX_TEXT || markdown.length > MAX_TEXT) {
+    return NextResponse.json({ ok: false, error: '보낼 내용이 너무 깁니다.' }, { status: 400 })
+  }
 
   const url = process.env.SLACK_SALES_WEBHOOK_URL
   const dry = body.dry === true || body.dry === 1 || body.dry === '1'
-  if (dry) return NextResponse.json({ ok: true, dry: true, webhookConfigured: !!url, text })
+  const payload = { text, blocks: [{ type: 'markdown', text: markdown }] }
+  if (dry) return NextResponse.json({ ok: true, dry: true, webhookConfigured: !!url, ...payload })
   if (!url) return NextResponse.json({ ok: false, error: 'SLACK_SALES_WEBHOOK_URL 없음' }, { status: 500 })
 
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify(payload),
     })
     if (!res.ok) {
       const detail = (await res.text().catch(() => '')).slice(0, 200)

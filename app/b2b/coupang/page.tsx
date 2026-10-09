@@ -67,7 +67,7 @@ import {
   type CoupangMilkrunRow,
 } from '@/lib/b2b/coupangMilkrun'
 import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPalletPdf'
-import { buildCoupangSlackReport, slackReportKey, type SlackPalletRow } from '@/lib/b2b/coupangSlack'
+import { buildCoupangSlackReport, slackReportKey, vehicleKgOf, type SlackCenterRow } from '@/lib/b2b/coupangSlack'
 import { buildGompyoMessage, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
 import {
   compareFreight,
@@ -687,46 +687,61 @@ export default function CoupangB2BPage() {
       }),
     [gompyo, gompyoTotals, parcelSettings, unitCostByAlias],
   )
-  // 슬랙 매출 보고 (#공유-데일리세일즈) — 화면 집계값을 그대로 문장으로만 만든다
+  // 슬랙 매출 보고 (#공유-데일리세일즈) — 화면 집계값을 그대로 문장·표로만 만든다
   const slackReport = useMemo(() => {
     const ship = (items: RoutedItem[]) => items.filter((it) => !it.notDelivered && it.confirmQty > 0)
-    const pallet: SlackPalletRow[] = []
+    const kgSum = (items: RoutedItem[]) =>
+      items.reduce((a, it) => a + it.confirmQty * (unitKgOf(it.master?.alias || '', it.productName, gramByAlias) ?? 0), 0)
+    const centers: SlackCenterRow[] = []
     for (const g of palletGroups) {
-      if (!g.needsPallet) continue
+      if (!g.needsPallet) {
+        centers.push({ center: g.center, shipFrom: g.shipFrom, boxes: g.boxes, truck: false, plt: null, loadPct: null, transport: '택배' })
+        continue
+      }
       const s = shipmentOf[`${g.poNumber}|${g.center}|${g.dueDate}`]
-      pallet.push({ center: g.center, shipFrom: g.shipFrom, boxes: g.boxes, plt: pltCountOf(g), vehicle: s ? s.method || s.vehicleLabel : '' })
+      const vehicle = s ? s.method || s.vehicleLabel : ''
+      const cap = vehicleKgOf(vehicle) // 적재율 = 묶음 중량 ÷ 차량 톤수 kg
+      centers.push({
+        center: g.center,
+        shipFrom: g.shipFrom,
+        boxes: g.boxes,
+        truck: true,
+        plt: pltCountOf(g),
+        loadPct: cap > 0 ? Math.round((kgSum(g.items) / cap) * 100) : null,
+        transport: vehicle ? `밀크런 ${vehicle}` : '밀크런',
+      })
     }
-    for (const s of gompyoShipments) pallet.push({ center: s.center, shipFrom: '곰표', boxes: s.boxes, plt: s.plt, vehicle: '' })
-    const madeDates = (
-      [
-        ['진도팜', jindo],
-        ['위킵', wikeep],
-        ['곰표', gompyo],
-      ] as [string, RoutedItem[]][]
-    )
-      .filter(([, items]) => ship(items).length > 0)
-      .map(([shipFrom, items]) => ({ shipFrom, dates: ship(items).map((it) => it.madeDate).filter(Boolean) }))
-    const text = buildCoupangSlackReport({
+    for (const s of gompyoShipments) {
+      centers.push({
+        center: s.center,
+        shipFrom: '곰표',
+        boxes: s.boxes,
+        truck: true,
+        plt: s.plt,
+        // 곰표 적재율 = 봉수 ÷ (PLT × 400봉)
+        loadPct: s.plt > 0 ? Math.round((s.units / (s.plt * GOMPYO_UNITS_PER_PLT)) * 100) : null,
+        transport: '밀크런',
+      })
+    }
+    const report = buildCoupangSlackReport({
       dueDates: routed.map((r) => r.dueDate),
-      poCount: new Set(routed.map((r) => r.poNumber)).size,
       totalSales: summary.totalIncl,
       totalQty: summary.totalQty,
       totalBoxes: summary.totalBoxes,
+      totalKg: summary.totalKg,
       shipFroms: [
         { name: '진도팜', ...jindoSummary },
         { name: '곰표', ...gompyoSummary },
       ],
-      pallet,
-      parcel: palletGroups.filter((g) => !g.needsPallet).map((g) => ({ center: g.center, boxes: g.boxes })),
-      top: summary.rows.map((r) => ({ name: r.name, qty: r.qty, amount: r.totalIncl })),
-      madeDates,
+      top: summary.rows.map((r) => ({ name: r.name, qty: r.qty, kg: r.kg, amount: r.totalIncl })),
+      centers,
     })
     return {
-      text,
+      ...report,
       key: slackReportKey(routed.map((r) => r.poNumber)),
       blankMade: ship(routed).filter((it) => !it.madeDate).length,
     }
-  }, [palletGroups, shipmentOf, gompyoShipments, jindo, wikeep, gompyo, routed, summary, jindoSummary, gompyoSummary])
+  }, [palletGroups, shipmentOf, gompyoShipments, gramByAlias, routed, summary, jindoSummary, gompyoSummary])
   const [slackOpen, setSlackOpen] = useState(false)
   const [slackState, setSlackState] = useState<{ busy: boolean; msg: string; ok: boolean | null; confirmResend: boolean }>({
     busy: false,
@@ -752,7 +767,7 @@ export default function CoupangB2BPage() {
       const res = await fetch('/api/b2b/slack-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: slackReport.text }),
+        body: JSON.stringify({ text: slackReport.text, body: slackReport.body }),
       })
       const j = await res.json().catch(() => null)
       if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`)
@@ -847,7 +862,7 @@ export default function CoupangB2BPage() {
     <div className="space-y-6">
       {slackOpen && (
         <SlackReportModal
-          text={slackReport.text}
+          text={slackReport.body}
           blankMade={slackReport.blankMade}
           sentAt={slackSentAt(slackReport.key)}
           state={slackState}
