@@ -7895,6 +7895,33 @@ export async function GET(req: Request) {
     //   · 기존 1P 마지막 행 수식을 읽어 행 번호만 바꿔 씀 (행별 수식, ARRAYFORMULA 없음)
     //   · 값 칸: A 채널 · B 별칭(상품마스터 B 가 아직 비어 있어 값으로) · C 봉수 1 · H(템플릿 값) · Y 1P 상품코드
     //   · dry=1 → 쓰기 없이 계획 + 백업(A1:AD 수식·값) 반환
+    // ── m16: 설정 택배 단가 라벨 '쿠팡 택배 단가' → '입고택배 진도팜' (J열 라벨 한 칸만, 멱등) ──
+    if (action === 'm16') {
+      const sheets = getSheets()
+      const range = `${quote(M2_SETTING_TAB)}!J1:M50`
+      const read = async () =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range, valueRenderOption: 'UNFORMATTED_VALUE' })).data.values || []) as Cell[][]
+      const before = await read()
+      const label = (r: Cell[] | undefined) => String(r?.[0] ?? '').trim()
+      const done = before.findIndex((r) => label(r) === '입고택배 진도팜')
+      if (done >= 0) return NextResponse.json({ ok: true, skipped: '이미 바뀜', row: done + 1, values: before[done] })
+      const idx = before.findIndex((r) => label(r) === '쿠팡 택배 단가')
+      if (idx < 0) throw new Error("설정 J열에 '쿠팡 택배 단가' 없음")
+      const row = idx + 1
+      if (url.searchParams.get('dry') === '1') return NextResponse.json({ ok: true, dry: true, target: `J${row}`, before: before[idx] })
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: MASTER_SHEET_ID,
+        range: `${quote(M2_SETTING_TAB)}!J${row}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['입고택배 진도팜']] },
+      })
+      const after = await read()
+      const changed = after
+        .map((r, i) => ({ row: i + 1, b: JSON.stringify(before[i] || []), a: JSON.stringify(r || []) }))
+        .filter((x) => x.a !== x.b)
+      return NextResponse.json({ ok: true, written: `J${row}`, row: after[idx], changed })
+    }
+
     // ── m15: 설정 J:K 입고박스 3줄 바로 아래에 '쿠팡 택배 단가 | 4000' 1행 (빈 칸일 때만, 멱등) ──
     if (action === 'm15') {
       const sheets = getSheets()
