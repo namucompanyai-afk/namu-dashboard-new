@@ -1079,7 +1079,9 @@ export default function CoupangB2BPage() {
                           <td className="px-3 py-2">{g.shipFrom}</td>
                           <td className="px-3 py-2 text-right font-semibold text-gray-900">{num(g.boxes)}</td>
                           <td className="px-3 py-2 text-right text-gray-700">{kgOfItems(g.items, gramByAlias)}</td>
-                          <td className="px-3 py-2 text-right font-semibold text-gray-900">{pltCountOf(g)}</td>
+                          <td className="px-3 py-2 text-right font-semibold text-gray-900">
+                            {g.needsPallet ? pltCountOf(g) : <span className="font-normal text-gray-400">—</span>}
+                          </td>
                           <td className="px-3 py-2 text-gray-600">
                             {ship ? ship.method || ship.vehicleLabel : <span className="text-gray-400">—</span>}
                           </td>
@@ -1176,15 +1178,17 @@ export default function CoupangB2BPage() {
             {shipments.length > 0 && (
               <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
                 <span className="text-gray-600">
-                  팔레트분{' '}
+                  {/* 출고지별 — 진도팜·위킵 밀크런 건·PLT / 곰표 건·PLT (값은 기존 집계 그대로) */}
                   {[
-                    ...countByShipFrom(shipments).map((c) => `${c.shipFrom} ${c.count}건`),
-                    ...(gompyoShipments.length ? [`곰표 ${gompyoShipments.length}건`] : []),
-                  ].join(' · ')}{' '}
-                  · 총 {milkrunTotals.totalPlt} PLT
-                  {gompyoShipments.length > 0 && (
-                    <span className="text-gray-400"> (곰표 PLT·운임은 아래 곰표 표에서 합산)</span>
-                  )}
+                    ...countByShipFrom(shipments).map(
+                      (c) =>
+                        `${c.shipFrom} 팔레트 ${c.count}건 · ${shipments
+                          .filter((x) => x.shipFrom === c.shipFrom)
+                          .reduce((a, x) => a + x.plt, 0)} PLT`,
+                    ),
+                    ...(gompyoShipments.length ? [`곰표 ${gompyoShipments.length}건 · ${gompyoTotals.totalPlt} PLT`] : []),
+                  ].join(' / ')}
+                  {gompyoShipments.length > 0 && <span className="text-gray-400"> (곰표 운임은 아래 곰표 표)</span>}
                 </span>
                 <span className="text-right">
                   <span className="text-lg font-bold">운송비 합계 {num(transport.total)}원</span>
