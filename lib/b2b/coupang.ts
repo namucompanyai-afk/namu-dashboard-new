@@ -34,6 +34,7 @@ export type CoupangOrderItem = {
   centerAddress: string // 발주서 '주소' 셀 (택배수령담당자 괄호부 제거)
   centerPhone: string // 주소 괄호부에서 분리한 택배수령담당자 번호
   lotKey: LotMgmt // 발주서 관리 구분('제조일자관리'/'소비기한관리') — 진도팜 자투리 판정용 (못 읽으면 '')
+  madeDate: string // 확정 발주서 '제조(수입)일자' (YYYY-MM-DD, 없으면 '') — 있으면 화면 선택값보다 우선
   sourceFile: string
 }
 
@@ -41,7 +42,7 @@ const cellAt = (rows: unknown[][], r: number, c: number): unknown => rows[r]?.[c
 
 /**
  * 상품 표 '제조일자관리 / 유통(소비)기한관리' 열 (Y/N, 못 찾으면 실측 위치 Q열).
- * 날짜 칸('제조(수입)일자/유통(소비)기한')은 발주 확정 전 값이라 실제 제조일자가 아니므로 읽지 않는다.
+ * 날짜 칸(제조(수입)일자/유통(소비)기한)은 madeDateOf 로 따로 읽는다.
  */
 const LOT_MGMT_HEADER = '제조일자관리'
 const LOT_MGMT_COL = 16
@@ -52,6 +53,24 @@ function lotMgmtCol(rows: unknown[][], prodIdx: number): number {
     if (i >= 0) return i
   }
   return LOT_MGMT_COL
+}
+
+/**
+ * 상품 표 헤더(+2행)에서 글자로 열 찾기 — 확정 전 18칸 / 확정 21칸(입고금액 3칸 추가)이라
+ * 칸 번호가 아니라 헤더명으로 찾는다. 못 찾으면 fallback(실측 위치).
+ */
+function headerCol(rows: unknown[][], prodIdx: number, label: string, fallback: number): number {
+  const want = norm(label)
+  const i = (rows[prodIdx + 2] || []).findIndex((v) => norm(v).includes(want))
+  return i >= 0 ? i : fallback
+}
+
+/** '제조(수입)일자\n유통(소비)기한' 셀 → 첫 줄의 YYYY-MM-DD (없으면 '') */
+function madeDateOf(v: unknown): string {
+  if (v === null || v === undefined || v === '') return ''
+  if (typeof v === 'number' || v instanceof Date) return fmtDate(v)
+  const m = String(v).split(/\r?\n/)[0].match(/(\d{4})-(\d{1,2})-(\d{1,2})/)
+  return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : ''
 }
 
 export type LotMgmt = '제조일자관리' | '소비기한관리' | ''
@@ -140,6 +159,12 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   if (prodIdx < 0) return []
   const priceCol = supplyPriceCol(rows, prodIdx)
   const lotCol = lotMgmtCol(rows, prodIdx)
+  const orderQtyCol = headerCol(rows, prodIdx, '발주수량', 6)
+  const confirmQtyCol = headerCol(rows, prodIdx, '업체납품가능수량', 7)
+  // 제조일자는 SUPPLIER HUB 에서 입력한 뒤 받은 21칸 발주서('입고금액' 그룹이 있는 양식)에서만 읽는다 —
+  // 그 전 18칸 양식은 납품가능수량이 차 있어도 날짜 칸이 미리 채워진 값이라 믿을 수 없다
+  const madeEntered = headerCol(rows, prodIdx, '입고금액', -1) >= 0
+  const madeCol = madeEntered ? headerCol(rows, prodIdx, '제조(수입)일자', -1) : -1
 
   const raw: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {
@@ -147,8 +172,8 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
     if (a === '' || norm(a) === '합계' || a.startsWith('4.')) break
     const productName = textAt(rows, r, 2)
     if (!productName) break
-    const orderQty = toNum(cellAt(rows, r, 6))
-    const confirmQty = toNum(cellAt(rows, r, 7))
+    const orderQty = toNum(cellAt(rows, r, orderQtyCol))
+    const confirmQty = toNum(cellAt(rows, r, confirmQtyCol))
     raw.push({
       poNumber,
       center,
@@ -165,6 +190,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       centerAddress,
       centerPhone,
       lotKey: lotKeyOf(cellAt(rows, r, lotCol), cellAt(rows, r + 1, lotCol)),
+      madeDate: madeCol >= 0 ? madeDateOf(cellAt(rows, r, madeCol)) : '',
       sourceFile,
     })
   }
@@ -477,8 +503,8 @@ export type RocketRow = {
  *            (발주서 값이 비면 주소록으로 대체)
  * 파렛트 수는 묶음 1회(첫 행)만 기입한다 — pltByGroup(묶음 키 → 실측 PLT 장수).
  * 배송메세지1 에는 묶음의 발주번호를 병기한다.
- * 제조일자는 발주서 값을 쓰지 않고 화면 입력칸 날짜(madeDate)를 모든 행에 일괄 적용한다
- * (쿠팡 발주서는 확정 전에도 '제조(수입)일자' 칸이 미리 채워져 내려온다).
+ * 제조일자는 확정 발주서의 '제조(수입)일자'(it.madeDate)가 있으면 그 값, 없는 행에만 화면 선택값(madeDate).
+ * (제조일자 입력 전 18칸 발주서는 날짜 칸이 미리 채워져 내려와 믿을 수 없어 파싱 단계에서 비운다.)
  * 미납품(확정 발주서의 H=0) 행은 실제로 나가지 않으므로 양식에서 뺀다.
  */
 export function buildRocketRows(
@@ -511,7 +537,7 @@ export function buildRocketRows(
       itemName: it.productName,
       itemQty: it.confirmQty,
       boxes: it.boxes,
-      madeDate,
+      madeDate: it.madeDate || madeDate, // 발주서 제조일자 우선, 없을 때만 화면 선택값
       pallet,
       invoice: '',
       centerKnown: !!address,

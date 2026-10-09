@@ -1334,7 +1334,7 @@ export default function CoupangB2BPage() {
               </h2>
               <div className="flex flex-wrap items-center gap-2">
                 <label className="text-xs text-gray-600">
-                  제조일자 (선택한 날짜로 일괄 적용)
+                  제조일자 (발주서에 없는 행만)
                   <input
                     type="date"
                     value={madeDate}
@@ -1350,12 +1350,9 @@ export default function CoupangB2BPage() {
                       지우기
                     </button>
                   )}
-                  {!madeDate ? (
-                    <span className="ml-2 text-[11px] text-gray-400">미선택 — 제조일자 열 공란</span>
-                  ) : (
-                    madeDate !== todayKst() && (
-                      <span className="ml-2 text-[11px] text-amber-600">오늘 날짜가 아닙니다</span>
-                    )
+                  <span className="ml-2 text-[11px] text-gray-500">{madeDateNote(jindo)}</span>
+                  {madeDate && madeDate !== todayKst() && (
+                    <span className="ml-2 text-[11px] text-amber-600">오늘 날짜가 아닙니다</span>
                   )}
                 </label>
                 <button
@@ -1553,7 +1550,7 @@ export default function CoupangB2BPage() {
                   위킵분 — 쿠팡 로켓 양식 (택배 {wikeepRocket.parcel.length}행 · 트럭 {wikeepRocket.truck.length}행)
                 </h2>
                 <div className="flex flex-wrap items-center gap-3">
-                  <DatePick label="제조일자" value={wikeepMadeDate} onChange={setWikeepMadeDate} />
+                  <DatePick label="제조일자" value={wikeepMadeDate} onChange={setWikeepMadeDate} note={madeDateNote(wikeep)} />
                   {labelPlan.skipped.map((s) => (
                     <span key={s.label} className="text-xs text-amber-700">
                       {s.label} {num(s.boxes)}박스 라벨 생략(기인쇄)
@@ -1604,7 +1601,7 @@ export default function CoupangB2BPage() {
                 <h2 className="text-sm font-semibold">곰표분 — 밀크런 ({gompyoShipments.length}건 · 카톡 전달)</h2>
                 <div className="flex flex-wrap items-center gap-3">
                   <DatePick label="상차일" value={gompyoLoadDate} onChange={setGompyoLoadDate} />
-                  <DatePick label="제조일자" value={gompyoMadeDate} onChange={setGompyoMadeDate} />
+                  <DatePick label="제조일자" value={gompyoMadeDate} onChange={setGompyoMadeDate} note={madeDateNote(gompyo)} />
                   <button
                     onClick={copyGompyoNotice}
                     disabled={gompyoShipments.length === 0}
@@ -1660,8 +1657,25 @@ export default function CoupangB2BPage() {
   )
 }
 
+/** 제조일자 선택 칸 안내 — 출고 행(미납품 제외) 중 발주서 제조일자 있는/없는 행 수 */
+const madeDateNote = (items: RoutedItem[]): string => {
+  const ship = items.filter((it) => !it.notDelivered)
+  const n = ship.filter((it) => it.madeDate).length
+  return `발주서 제조일자 ${n}행 반영 · 공란 ${ship.length - n}행 (선택 날짜는 공란 행에만 적용)`
+}
+
 /** 출고지별 날짜 선택 — 기본 공란, 지정할 때만 반영 */
-function DatePick({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function DatePick({
+  label,
+  value,
+  onChange,
+  note,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  note?: string
+}) {
   return (
     <label className="text-xs text-gray-600">
       {label}
@@ -1680,6 +1694,7 @@ function DatePick({ label, value, onChange }: { label: string; value: string; on
           지우기
         </button>
       )}
+      {note && <span className="ml-2 text-[11px] text-gray-500">{note}</span>}
     </label>
   )
 }

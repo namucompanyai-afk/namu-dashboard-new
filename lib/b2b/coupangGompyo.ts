@@ -125,7 +125,8 @@ export function gompyoShortName(alias: string): string {
 }
 
 /**
- * 곰표 전달 멘트 — 하차지(센터 × 입고예정일)마다 블록. 상차일·제조일자는 대표 지정값(미지정 ○).
+ * 곰표 전달 멘트 — 하차지(센터 × 입고예정일)마다 블록. 상차일은 대표 지정값, 제조일자는 확정 발주서 값 우선
+ * (없으면 대표 지정값, 둘 다 없으면 ○).
  * 주소·전화는 트럭 규칙(발주서 주소 → 없으면 주소록), 우편번호는 주소록 '밀크런 우편번호'.
  */
 export function buildGompyoMessage(
@@ -144,7 +145,7 @@ export function buildGompyoMessage(
       return [
         `${load} ${names} 상차건`,
         `상차일 ${load} ${weekdayOf(o.loadDate)}요일`,
-        `제조일자 ${mdOf(o.madeDate)}`,
+        `제조일자 ${mdOf(s.items.find((it) => it.madeDate)?.madeDate || o.madeDate)}`,
         `수량 ${s.plt}P /  ${s.units}봉 ${s.boxes}박스 / 총 ${totalPlt}P`,
         `하차지 : ${s.center}`,
         '',
