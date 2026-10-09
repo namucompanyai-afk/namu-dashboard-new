@@ -464,6 +464,7 @@ export type RocketRow = {
   orderQty: number // 미확정 행 경고에 함께 띄우는 발주수량
   poNumber: string
   dueDate: string
+  boxQty: number // 상품마스터 박스입수 (모르면 0) — 택배 엑셀 1박스 = 1행 펼칠 때만 쓴다
 }
 
 /**
@@ -519,7 +520,27 @@ export function buildRocketRows(
       orderQty: it.orderQty,
       poNumber: it.poNumber,
       dueDate: it.dueDate,
+      boxQty: it.master?.boxQty ?? 0,
     }
+  })
+}
+
+/**
+ * 택배 발송분 엑셀용 — 1박스 = 1행 (진도팜이 박스마다 송장을 따로 붙인다).
+ * 박스 i 수량 = min(입수, 남은 수량), 입수를 모르면 올림(수량 ÷ 박스 수)씩, 남는 수량은 마지막 박스.
+ * 박스 수 칸은 모두 1, 나머지 칸은 행마다 반복. 박스 수를 모르는 행은 그대로 둔다.
+ */
+export function expandParcelBoxes(rows: RocketRow[]): RocketRow[] {
+  return rows.flatMap((r) => {
+    const n = r.boxes ?? 0
+    if (n <= 0) return [r]
+    const per = r.boxQty > 0 ? r.boxQty : Math.ceil(r.itemQty / n)
+    let left = r.itemQty
+    return Array.from({ length: n }, (_, i) => {
+      const q = i === n - 1 ? left : Math.min(per, left)
+      left -= q
+      return { ...r, itemQty: q, boxes: 1 }
+    })
   })
 }
 

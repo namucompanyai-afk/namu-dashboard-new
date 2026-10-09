@@ -9,6 +9,7 @@ import {
   GOMPYO_UNITS_PER_PLT,
   indexByBarcode,
   rocketAoa,
+  expandParcelBoxes,
   truckAoa,
   truckBlocks,
   rocketFileName,
@@ -726,7 +727,8 @@ export default function CoupangB2BPage() {
     [],
   )
   const downloadXlsx = useCallback(
-    () => saveRocketXlsx(rocketParcel, rocketTruck, ''),
+    // 진도팜 택배 발송분은 엑셀만 1박스 = 1행 (화면·위킵 파일은 그대로)
+    () => saveRocketXlsx(expandParcelBoxes(rocketParcel), rocketTruck, ''),
     [saveRocketXlsx, rocketParcel, rocketTruck],
   )
 
