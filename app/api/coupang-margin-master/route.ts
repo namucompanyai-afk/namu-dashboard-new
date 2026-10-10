@@ -123,6 +123,7 @@ export async function GET(req: Request) {
       if (!alias && !sku) continue;
       const bagCount = num(r[2]) || 1;
       const m = Number.isFinite(num(r[14])) && str(r[14]) !== '' ? num(r[14]) : null;
+      const ship = Number.isFinite(num(r[9])) && str(r[9]) !== '' ? num(r[9]) : null; // J 택배 (추정 운송비)
       oneP.push({
         optionId: /^\d+$/.test(str(r[23])) ? str(r[23]) : '',
         sku,
@@ -130,15 +131,20 @@ export async function GET(req: Request) {
         bagCount,
         margin: m,
         perBagMargin: null,
+        perBagShip: ship,
         taxable: taxOf.get(alias) === '과세',
         coupangOptionName: str(r[29]),
       });
     }
     // 1봉당 마진: 같은 SKU 의 1봉 행 O 우선, 없으면 O ÷ 봉수
     const oneBagBySku = new Map<string, number>();
+    const oneBagShipBySku = new Map<string, number>();
     for (const x of oneP) if (x.bagCount === 1 && x.margin != null && x.sku) oneBagBySku.set(x.sku, x.margin);
+    for (const x of oneP) if (x.bagCount === 1 && x.perBagShip != null && x.sku) oneBagShipBySku.set(x.sku, x.perBagShip);
     for (const x of oneP) {
       x.perBagMargin = (x.sku && oneBagBySku.has(x.sku)) ? oneBagBySku.get(x.sku)! : x.margin != null ? x.margin / x.bagCount : null;
+      // 1봉당 추정 운송비 — 1봉 행 J, 없으면 J ÷ 봉수 (perBagMargin 과 같은 기준 행)
+      x.perBagShip = (x.sku && oneBagShipBySku.has(x.sku)) ? oneBagShipBySku.get(x.sku)! : x.perBagShip != null ? x.perBagShip / x.bagCount : null;
     }
     return NextResponse.json({ ok: true, marginRows, onePRows: oneP });
   } catch (err: any) {

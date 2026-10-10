@@ -123,6 +123,10 @@ export function computeOnePPnl(args: {
   const one = args.onePRows || []
   const bySku = new Map<string, OnePMarginRow>()
   for (const x of one) if (x.sku && (!bySku.has(x.sku) || x.bagCount === 1)) bySku.set(x.sku, x)
+  // 운송비 전 1봉 마진 = 1봉 마진 + 1봉당 추정 운송비(J) — 실제 밀크런 운송비를 아래서 따로 빼므로 이중 차감 방지
+  // (광고 분석은 onePAnalysis 에서 운송비 포함 1봉 마진을 그대로 쓴다)
+  const preShipMargin = (b: OnePMarginRow | undefined): number | null =>
+    b?.perBagMargin != null ? b.perBagMargin + (b.perBagShip ?? 0) : null
 
   // ── 입고 기준 ──
   let inbound: OnePPnl['inbound'] = null
@@ -144,10 +148,10 @@ export function computeOnePPnl(args: {
           u.revenue += rev
           unknown.set(it.sku, u)
         }
-        const a = agg.get(it.sku) || { sku: it.sku, alias: base?.alias || it.name, bags: 0, revenue: 0, perBagMargin: base?.perBagMargin ?? null, margin: 0, milkrun: 0 }
+        const a = agg.get(it.sku) || { sku: it.sku, alias: base?.alias || it.name, bags: 0, revenue: 0, perBagMargin: preShipMargin(base), margin: 0, milkrun: 0 }
         a.bags += it.receivedQty
         a.revenue += rev
-        a.margin += it.receivedQty * (base?.perBagMargin ?? 0)
+        a.margin += it.receivedQty * (preShipMargin(base) ?? 0)
         agg.set(it.sku, a)
       }
       poBags.set(po.poNumber, m)
@@ -242,11 +246,11 @@ export function computeOnePPnl(args: {
       const l = linkOnePOption(r.optionId, r.name, one, nameIdx)
       if (!l) { unlinked.push({ optionId: r.optionId, name: r.name, gmv: r.gmv, qty: r.qty }); continue }
       bags += r.qty * l.bags
-      margin += r.qty * l.bags * (bySku.get(l.sku)?.perBagMargin ?? 0)
+      margin += r.qty * l.bags * (preShipMargin(bySku.get(l.sku)) ?? 0)
       const ss = skuSales.get(l.sku) || { sku: l.sku, alias: bySku.get(l.sku)?.alias || l.sku, bags: 0, gmv: 0, margin: 0, milkrun: null }
       ss.bags += r.qty * l.bags
       ss.gmv += r.gmv
-      ss.margin += r.qty * l.bags * (bySku.get(l.sku)?.perBagMargin ?? 0)
+      ss.margin += r.qty * l.bags * (preShipMargin(bySku.get(l.sku)) ?? 0)
       skuSales.set(l.sku, ss)
     }
     // 판매 기준 참고 — 운송비는 입고 기준 봉당 운송비 재사용, 광고비는 입고 기준과 같은 값

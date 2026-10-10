@@ -182,8 +182,10 @@ export interface OnePMarginRow {
   bagCount: number
   /** O 마진 (납품가 × 봉수 기준) */
   margin: number | null
-  /** 1봉당 마진 = 같은 SKU 1봉 행의 O (없으면 O ÷ 봉수) */
+  /** 1봉당 마진 = 같은 SKU 1봉 행의 O (없으면 O ÷ 봉수) — 추정 운송비(J 택배) 차감 후 */
   perBagMargin: number | null
+  /** 1봉당 추정 운송비 = 같은 SKU 1봉 행의 J 택배 (없으면 J ÷ 봉수). 쿠팡 손익은 실제 밀크런을 따로 빼므로 이 값을 되돌려 쓴다 */
+  perBagShip?: number | null
   taxable: boolean
   coupangOptionName: string
 }
