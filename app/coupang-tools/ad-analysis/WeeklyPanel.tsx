@@ -365,7 +365,7 @@ function CampaignActionRow({
           <b style={{ fontSize: 13 }}>{c.campaignName}</b>
           {note && <ProductNote note={note} style={{ display: 'block' }} />}
           {note && c.adProfit < 0 && note.profit > 0 && (
-            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#B45309' }}>광고 끄기 전 확인 — 상품은 흑자</span>
+            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#B45309' }}>광고 적자 — 끄지 말고 키워드 정리·목표 ROAS 상향</span>
           )}
         </span>
         {done && <span style={{ fontSize: 11, fontWeight: 700, color: '#059669', background: '#ECFDF5', borderRadius: 4, padding: '1px 6px' }}>반영됨</span>}
@@ -381,7 +381,8 @@ function CampaignActionRow({
               {tag('BEP ROAS', KIND_META.bep.color)}
               <span style={{ flex: 1 }}>
                 쿠팡 목표 ROAS{' '}
-                <b>{a.bepChange.applied != null ? `${a.bepChange.applied}%` : '미입력'}</b> → <b>{a.bepChange.next}%</b>
+                {a.bepChange.applied != null && <b>{a.bepChange.next > a.bepChange.applied ? '↑ ' : '↓ '}</b>}
+                <b>{a.bepChange.applied != null ? a.bepChange.applied : '미입력'}</b> → <b>{a.bepChange.next}%</b>
                 {a.targetKey && !edit && (
                   <button
                     onClick={(e) => {
@@ -413,6 +414,14 @@ function CampaignActionRow({
                     %
                   </span>
                 )}
+              </span>
+            </div>
+          )}
+          {!kind && a.bepHold && (
+            <div style={{ ...line, color: '#94A3B8' }}>
+              <span style={{ minWidth: 72 }}>BEP ROAS</span>
+              <span>
+                목표 미달 — 목표 ROAS 유지, 키워드 정리 먼저 (적용값 {a.bepHold.applied}% · 실제 ROAS {pct(a.bepHold.roasPct)} · BEP ROAS {a.bepHold.next}%)
               </span>
             </div>
           )}

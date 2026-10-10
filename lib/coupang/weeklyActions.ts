@@ -2,7 +2,9 @@
  * 광고 분석 — 이번 주 할 일 판정 (30일 파일 기준, 순수 함수).
  *
  * 키워드 지표·추천 입찰가·BEP ROAS·페어 중복은 기존 함수(adAnalysis.ts)를 그대로 쓴다 — 여기서 새로 계산하지 않는다.
- *   A. BEP ROAS 바뀐 AI 캠페인 — 저장된 쿠팡 적용값과 이번 BEP ROAS 차이 ≥ 10%p, 또는 적용값 없음
+ *   A. BEP ROAS 바뀐 AI 캠페인 — 적용값 없음, 또는 올리기(BEP − 적용값 ≥ 10%p),
+ *      또는 내리기(적용값 − BEP ≥ 10%p)인데 30일 실제 ROAS ≥ 적용값일 때만.
+ *      목표를 못 맞추는 캠페인(실제 ROAS < 적용값)에서 목표를 내리면 입찰이 더 공격적이 돼 손실이 커지므로 유지(bepHold)
  *   B. AI → 수동 이동 — AI 검색 키워드, 클릭 ≥ 20 · 판매 > 0 · BEP/2 ≤ ROAS < BEP
  *   C. 수동 입찰가 수정 — 수동 검색 키워드, 클릭 ≥ 20 · 판매 > 0 · 추천 입찰가와 현재 클릭당 비용 차이 ≥ 10%
  *   D. 키워드 삭제 — 클릭 ≥ 20 · (판매 0 또는 ROAS < BEP/2). AI 는 제외 키워드, 수동은 삭제
@@ -65,6 +67,8 @@ export type CampaignActions = {
   targetKey: string | null
   isAi: boolean
   bepChange: { applied: number | null; next: number } | null
+  /** 내리기 대상이지만 실제 ROAS 가 적용값 미만이라 뺀 경우 — 펼침에 안내만 */
+  bepHold: { applied: number; next: number; roasPct: number | null } | null
   move: MoveItem[]
   bidUp: BidItem[]
   bidDown: BidItem[]
@@ -112,6 +116,7 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
         targetKey: parseCampaignTargetKey(c.campaignName)?.key ?? null,
         isAi: isAiCampaign(c),
         bepChange: null,
+        bepHold: null,
         move: [],
         bidUp: [],
         bidDown: [],
@@ -175,7 +180,12 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
       const key = parseCampaignTargetKey(c.campaignName)?.key
       const next = Math.round(c.bepPct)
       const applied = key ? (o.targets[key] ?? null) : null
-      if (applied == null || Math.abs(applied - next) >= BEP_CHANGE_PP) slot(c).bepChange = { applied, next }
+      if (applied == null || next - applied >= BEP_CHANGE_PP) slot(c).bepChange = { applied, next }
+      else if (applied - next >= BEP_CHANGE_PP) {
+        // 내리기 — 30일 실제 ROAS 가 지금 목표를 맞출 때만. 못 맞추면 목표 유지 (키워드 정리 먼저)
+        if (c.roasPct != null && c.roasPct >= applied) slot(c).bepChange = { applied, next }
+        else slot(c).bepHold = { applied, next, roasPct: c.roasPct }
+      }
     }
     const rows = rowsOf.get(c.campaignId) || []
     const manualRows = manualRowsOf.get(c.campaignId)
