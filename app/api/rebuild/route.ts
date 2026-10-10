@@ -7895,15 +7895,15 @@ export async function GET(req: Request) {
     //   · 기존 1P 마지막 행 수식을 읽어 행 번호만 바꿔 씀 (행별 수식, ARRAYFORMULA 없음)
     //   · 값 칸: A 채널 · B 별칭(상품마스터 B 가 아직 비어 있어 값으로) · C 봉수 1 · H(템플릿 값) · Y 1P 상품코드
     //   · dry=1 → 쓰기 없이 계획 + 백업(A1:AD 수식·값) 반환
-    // ── m17: 쿠팡 1P 운송비 — 설정 탭 '운송비 …' 라벨 5줄 + 마진계산 쿠팡 1P 행 '택배'(J) 칸 행별 수식 ──
-    //   J = 봉수 × 설정!'운송비 진도팜 {1봉kg}kg' (진도팜) / '운송비 {출고지}' (곰표·위킵). 규칙에 없으면 "확인"
+    // ── m17: 쿠팡 1P 운송비 — 설정 탭 '운송비 …' 라벨 3줄 + 마진계산 쿠팡 1P 행 '택배'(J) 칸 행별 수식 ──
+    //   J = 진도팜: 봉수 × 1봉kg(단가DB g ÷ 1000) × 설정!'운송비 진도팜 kg당' / 곰표·위킵: 봉수 × 설정!'운송비 {출고지}'. 규칙 밖 "확인"
     //   다른 칸·다른 채널 행은 건드리지 않는다. dry=1 이면 쓰지 않고 행별 전→후 표만. 판정 못 한 행이 있으면 적용 거부.
+    //   set=숫자 → '운송비 진도팜 kg당' 값만 바꾸고 1P 첫 행 J·마진을 돌려준다 (수식 연동 확인용, 확인 후 원래 값으로 다시 호출)
     if (action === 'm17') {
       const sheets = getSheets()
+      const PER_KG = '운송비 진도팜 kg당'
       const SETTINGS: [string, number][] = [
-        ['운송비 진도팜 0.8kg', 400],
-        ['운송비 진도팜 1kg', 500],
-        ['운송비 진도팜 2kg', 1000],
+        [PER_KG, 500],
         ['운송비 곰표', 100],
         ['운송비 위킵', 100],
       ]
@@ -7927,7 +7927,27 @@ export async function GET(req: Request) {
       const feeOf = new Map(setBefore.filter((r) => label(r)).map((r) => [label(r), Number(r[1])]))
       for (const [k, v] of SETTINGS) if (!feeOf.has(k)) feeOf.set(k, v) // dry 계산용 (아직 없는 라벨은 넣을 값으로)
 
-      const kgText = (g: number) => String(g / 1000) // 800 → '0.8', 1000 → '1' (시트 수식 g/1000&"" 와 같은 표기)
+      const kgText = (g: number) => String(g / 1000)
+      // set 모드 — kg당 값만 바꾸고 첫 1P 행 J·마진 재조회
+      const setParam = url.searchParams.get('set')
+      if (setParam != null) {
+        const v = Number(setParam)
+        const idx = setBefore.findIndex((r) => label(r) === PER_KG)
+        if (idx < 0 || !Number.isFinite(v) || v < 0) throw new Error(`set: '${PER_KG}' 라벨 없음 또는 값 오류`)
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: MASTER_SHEET_ID,
+          range: `${quote(M2_SETTING_TAB)}!K${idx + 1}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[v]] },
+        })
+        const after = await read(`${quote(MARGIN_TAB)}!A1:AD1000`, 'UNFORMATTED_VALUE')
+        const first = after.findIndex((r) => String((r || [])[0] ?? '').trim() === '쿠팡 1P')
+        return NextResponse.json({
+          ok: true,
+          set: { label: PER_KG, from: setBefore[idx]?.[1], to: v },
+          firstRow: { row: first + 1, alias: after[first]?.[COL.alias], j: after[first]?.[COL.ship], margin: after[first]?.[COL.margin] },
+        })
+      }
       const plan: { row: number; alias: string; sku: string; origin: string; kg: string; bags: number; jBefore: Cell; jFormulaBefore: Cell; jAfter: number | '확인'; marginBefore: number; marginAfter: number | null; totalIncludesJ: boolean }[] = []
       for (let i = 1; i < marginV.length; i++) {
         const r = marginV[i] || []
@@ -7938,9 +7958,13 @@ export async function GET(req: Request) {
         const bags = Number(r[COL.bags]) || 1
         const g = gramOf.get(alias)
         const kg = g && Number.isFinite(g) && g > 0 ? kgText(g) : ''
-        const lbl = origin === '진도팜' ? (kg ? `운송비 진도팜 ${kg}kg` : '') : origin ? `운송비 ${origin}` : ''
-        const fee = lbl ? feeOf.get(lbl) : undefined
-        const jAfter = fee != null && Number.isFinite(fee) ? bags * fee : '확인'
+        const perKg = feeOf.get(PER_KG)
+        const flat = origin && origin !== '진도팜' ? feeOf.get(`운송비 ${origin}`) : undefined
+        const fee =
+          origin === '진도팜'
+            ? kg && perKg != null && Number.isFinite(perKg) ? (g! / 1000) * perKg : undefined
+            : flat != null && Number.isFinite(flat) ? flat : undefined
+        const jAfter = fee != null ? Math.round(bags * fee * 100) / 100 : '확인'
         const jBefore = r[COL.ship] ?? ''
         const marginBefore = Number(r[COL.margin])
         const totalF = String((marginF[i] || [])[COL.total] ?? '')
@@ -7982,8 +8006,10 @@ export async function GET(req: Request) {
         })
       }
       // 2) 마진계산 쿠팡 1P 행 J칸 — 행별 수식 (배열수식 아님)
+      const g = (row: number) => `VLOOKUP($B${row},'${PRICE_TAB}'!$A:$F,6,FALSE)`
+      const set = (lbl: string) => `VLOOKUP(${lbl},'${M2_SETTING_TAB}'!$J:$K,2,FALSE)`
       const fx = (row: number) =>
-        `=IFERROR($C${row}*VLOOKUP(IF($AB${row}="진도팜","운송비 진도팜 "&(VLOOKUP($B${row},'${PRICE_TAB}'!$A:$F,6,FALSE)/1000)&"kg","운송비 "&$AB${row}),'${M2_SETTING_TAB}'!$J:$K,2,FALSE),"확인")`
+        `=IFERROR(IF($AB${row}="진도팜",IF(${g(row)}>0,$C${row}*${g(row)}/1000*${set(`"${PER_KG}"`)},"확인"),$C${row}*${set(`"운송비 "&$AB${row}`)}),"확인")`
       await sheets.spreadsheets.values.batchUpdate({
         spreadsheetId: MASTER_SHEET_ID,
         requestBody: {
