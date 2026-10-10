@@ -7,7 +7,7 @@ import { getData, saveData } from '@/lib/supabase'
  *
  * 키: coupang_ad_weekly_snapshots   payload: { items: WeeklySnapshot[] }
  * GET  /api/coupang-ad-weekly                 → 전체 주간 기록 (기간 끝 오름차순)
- * POST /api/coupang-ad-weekly { snapshot }    → 같은 기간(시작·끝)이면 덮어쓰기, 아니면 추가
+ * POST /api/coupang-ad-weekly { snapshot }    → 같은 기간(시작·끝)이면 덮어쓰기, 아니면 추가 · 응답에 저장된 전체 목록
  * 월 저장 히스토리(coupang-master pnl_*)와는 별개 키라 건드리지 않는다.
  */
 
@@ -57,7 +57,8 @@ export async function POST(req: Request) {
     items.push(snap)
     items.sort((a, b) => a.endDate.localeCompare(b.endDate))
     await saveData(KEY, { items })
-    return NextResponse.json({ ok: true, replaced: items.length, snapshot: { startDate: snap.startDate, endDate: snap.endDate } })
+    // 저장한 전체 목록을 그대로 돌려준다 — 바로 다시 GET 하면 저장 직후 옛 값이 읽힐 수 있어 화면은 이 값을 쓴다
+    return NextResponse.json({ ok: true, items })
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, { status: 500 })
   }

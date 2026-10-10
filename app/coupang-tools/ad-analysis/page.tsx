@@ -438,13 +438,14 @@ export default function AdAnalysisPage() {
     })
     const j = await res.json().catch(() => null)
     if (!res.ok || !j?.item) throw new Error(j?.error || `HTTP ${res.status}`)
+    // 저장 직후 GET 은 옛 값이 읽힐 수 있어 응답 메모를 바로 붙인다 (조정 결과 표용)
+    setNotes((prev) => [...prev, j.item as ReflectNote])
     if (a.bepChange && a.targetKey) setTargetForKey(a.targetKey, a.bepChange.next)
     setReflected((prev) => new Set(prev).add(a.campaign.campaignId))
     setNotesReload((n) => n + 1)
   }
   // 주간 기록(지난주 대비) · 운영 메모(지난주 조정 결과) — 30일 판정과 별개
   const [weekly, setWeekly] = useState<WeeklySnapshot[]>([])
-  const [weeklyReload, setWeeklyReload] = useState(0)
   useEffect(() => {
     let cancelled = false
     fetch('/api/coupang-ad-weekly', { cache: 'no-store' })
@@ -452,7 +453,7 @@ export default function AdAnalysisPage() {
       .then((j) => { if (!cancelled && Array.isArray(j?.items)) setWeekly(j.items as WeeklySnapshot[]) })
       .catch(() => { /* 없으면 빈 기록 */ })
     return () => { cancelled = true }
-  }, [weeklyReload])
+  }, [])
   const [notes, setNotes] = useState<ReflectNote[]>([])
   useEffect(() => {
     let cancelled = false
@@ -474,7 +475,8 @@ export default function AdAnalysisPage() {
     })
     const j = await res.json().catch(() => null)
     if (!res.ok || !j?.ok) throw new Error(`주간 기록 저장 실패: ${j?.error || res.status}`)
-    setWeeklyReload((n) => n + 1)
+    // 저장 직후 GET 은 옛 값이 읽힐 수 있어 POST 응답의 전체 목록을 그대로 쓴다
+    if (Array.isArray(j.items)) setWeekly(j.items as WeeklySnapshot[])
   }
 
   // 상태 3칸 캠페인명 클릭 → 전체 캠페인 표에서 그 행으로 스크롤 + 펼침
