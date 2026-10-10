@@ -211,6 +211,8 @@ export function WeeklyActionsSection({
       bid: actions.reduce((s, a) => s + a.bidUp.length + a.bidDown.length, 0),
       del: del.length,
       delCost: del.reduce((s, d) => s + d.adCostVat, 0),
+      noSale: del.filter((d) => d.reason === 'nosale').length,
+      noSaleCost: del.filter((d) => d.reason === 'nosale').reduce((s, d) => s + d.adCostVat, 0),
     }
   }, [actions])
   const shown = kind ? actions.filter((a) => hasKind(a, kind)) : actions
@@ -243,7 +245,11 @@ export function WeeklyActionsSection({
               <div style={{ fontSize: 20, fontWeight: 700, color: n ? m.color : '#94A3B8' }}>
                 {n}{k === 'bep' ? '개' : '건'}
               </div>
-              {k === 'del' && n > 0 && <div style={{ fontSize: 11, color: '#94A3B8' }}>광고비 {won(totals.delCost)}</div>}
+              {k === 'del' && n > 0 && (
+                <div style={{ fontSize: 11, color: '#94A3B8' }}>
+                  광고비 {won(totals.delCost)} · 그중 판매 0 {totals.noSale}개 {won(totals.noSaleCost)}
+                </div>
+              )}
               {active && <div style={{ fontSize: 11, color: m.color }}>▲ 이 할 일만 보는 중 · 다시 누르면 전체</div>}
             </button>
           )
