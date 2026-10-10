@@ -7895,6 +7895,62 @@ export async function GET(req: Request) {
     //   · 기존 1P 마지막 행 수식을 읽어 행 번호만 바꿔 씀 (행별 수식, ARRAYFORMULA 없음)
     //   · 값 칸: A 채널 · B 별칭(상품마스터 B 가 아직 비어 있어 값으로) · C 봉수 1 · H(템플릿 값) · Y 1P 상품코드
     //   · dry=1 → 쓰기 없이 계획 + 백업(A1:AD 수식·값) 반환
+    // ── m18: 쿠팡 1P 1봉 옵션ID 연결 — 마진계산 쿠팡 1P 행 X(옵션ID) 빈칸에만 기입 (광고 분석 1P 미연결 해소) ──
+    //   행·SKU(Y)·쿠팡 옵션명으로 대상 행을 확인하고, X 가 비어 있을 때만 쓴다. 2·3개 묶음 옵션은 코드에서 같은 상품명으로 연결.
+    if (action === 'm18') {
+      const sheets = getSheets()
+      const LINKS: { row: number; sku: string; optionId: string; adName: string }[] = [
+        { row: 82, sku: '67166778', optionId: '95908367353', adName: '보배마을 국내산 유기농 오트밀 350g 1개' },
+        { row: 83, sku: '70439507', optionId: '95903749966', adName: '보배마을 국내산 유기농 현미 2kg 1개' },
+        { row: 84, sku: '79665140', optionId: '96030351014', adName: '보배마을 국산 유기농 흑보리 1kg 1개' },
+        { row: 85, sku: '79933349', optionId: '96046470207', adName: '보배마을 국내산 유기농 찰보리 1kg 1개' },
+        { row: 86, sku: '79911593', optionId: '96045859840', adName: '보배마을 국내산 유기농 흑미 1kg 1개' },
+        { row: 87, sku: '80677477', optionId: '96084975672', adName: '보배마을 국내산 유기농 찰현미 2kg 1개' },
+        { row: 88, sku: '54146619', optionId: '95626139245', adName: '쌀쌀쌀 프리미엄 찰흑미 2kg 1개' },
+        { row: 89, sku: '80846331', optionId: '96086352921', adName: '보배마을 국내산 유기농 저속식단 혼합4곡 1kg 1개' },
+        { row: 90, sku: '80856772', optionId: '96089659942', adName: '보배마을 국내산 유기농 어린이 혼합7곡 800g 1개' },
+        { row: 91, sku: '80955246', optionId: '96094755744', adName: '보배마을 국내산 유기농 찰기장 1kg 1개' },
+        { row: 93, sku: '70881188', optionId: '96098119786', adName: '보배마을 국내산 유기농 바나듐쌀 2kg 1개' },
+      ]
+      const read = async (opt: 'FORMULA' | 'UNFORMATTED_VALUE') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `${quote(MARGIN_TAB)}!A1:AD1000`, valueRenderOption: opt })).data.values || []) as Cell[][]
+      const before = await read('FORMULA')
+      const hdr = (before[0] || []).map((h) => String(h ?? '').trim())
+      if (hdr[23] !== '옵션ID' || hdr[24] !== '1P 상품코드' || hdr[29] !== '쿠팡 옵션명') {
+        throw new Error(`마진계산 머리글이 예상과 다름: X=${hdr[23]} Y=${hdr[24]} AD=${hdr[29]}`)
+      }
+      const usedIds = new Set(before.slice(1).map((r) => String((r || [])[23] ?? '').trim()).filter(Boolean))
+      const plan = LINKS.map((l) => {
+        const r = before[l.row - 1] || []
+        const problems: string[] = []
+        if (String(r[0] ?? '').trim() !== '쿠팡 1P') problems.push('쿠팡 1P 행 아님')
+        if (String(r[24] ?? '').trim() !== l.sku) problems.push(`SKU 다름(${r[24]})`)
+        if (Number(r[2]) !== 1) problems.push(`봉수 ${r[2]}`)
+        if (String(r[23] ?? '').trim() !== '') problems.push(`X 이미 있음(${r[23]})`)
+        if (usedIds.has(l.optionId)) problems.push('옵션ID 이미 다른 행에 있음')
+        return { ...l, alias: String(r[1] ?? ''), coupangOptionName: String(r[29] ?? ''), problems }
+      })
+      const bad = plan.filter((p) => p.problems.length)
+      if (url.searchParams.get('dry') === '1' || bad.length) {
+        return NextResponse.json({ ok: bad.length === 0, dry: true, applied: false, reason: bad.length ? `확인 필요 ${bad.length}행 — 적용 안 함` : undefined, plan })
+      }
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'RAW',
+          data: plan.map((p) => ({ range: `${quote(MARGIN_TAB)}!X${p.row}`, values: [[p.optionId]] })),
+        },
+      })
+      const after = await read('FORMULA')
+      const changed: string[] = []
+      for (let i = 0; i < Math.max(before.length, after.length); i++) {
+        for (let c = 0; c < 30; c++) {
+          if (String((before[i] || [])[c] ?? '') !== String((after[i] || [])[c] ?? '')) changed.push(`${colName(c)}${i + 1}`)
+        }
+      }
+      return NextResponse.json({ ok: true, applied: true, written: plan.map((p) => `X${p.row}=${p.optionId}`), changed })
+    }
+
     // ── m17: 쿠팡 1P 운송비 — 설정 탭 '운송비 …' 라벨 3줄 + 마진계산 쿠팡 1P 행 '택배'(J) 칸 행별 수식 ──
     //   J = 진도팜: 봉수 × 1봉kg(단가DB g ÷ 1000) × 설정!'운송비 진도팜 kg당' / 곰표·위킵: 봉수 × 설정!'운송비 {출고지}'. 규칙 밖 "확인"
     //   다른 칸·다른 채널 행은 건드리지 않는다. dry=1 이면 쓰지 않고 행별 전→후 표만. 판정 못 한 행이 있으면 적용 거부.
