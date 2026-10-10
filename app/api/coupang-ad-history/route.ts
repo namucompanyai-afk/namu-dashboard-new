@@ -9,7 +9,8 @@ import { getData, saveData } from "@/lib/supabase";
  * payload: { items: [{ id, ts, text }] }
  *
  * GET    /api/coupang-ad-history             → 전체 메모 조회
- * POST   /api/coupang-ad-history { text }    → 메모 추가 (서버 타임스탬프)
+ * POST   /api/coupang-ad-history { text, kind?, campaignKey?, campaignName? } → 메모 추가 (서버 타임스탬프)
+ *        kind='reflect' = 광고 분석 "쿠팡 반영 완료" 기록 — campaignKey(prefix::타입, 없으면 캠페인명)로 지난주 조정 결과를 찾는다
  * DELETE /api/coupang-ad-history?id={id}     → 메모 삭제
  */
 
@@ -19,6 +20,9 @@ interface NoteItem {
   id: string;
   ts: string;
   text: string;
+  kind?: 'reflect';
+  campaignKey?: string;
+  campaignName?: string;
 }
 interface NotesPayload {
   items: NoteItem[];
@@ -60,10 +64,15 @@ export async function POST(request: Request) {
     }
 
     const items = await loadItems();
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 300) : undefined);
     const newItem: NoteItem = {
       id: makeId(),
       ts: new Date().toISOString(),
       text,
+      // 쿠팡 반영 완료 기록이면 캠페인 식별값을 별도 필드로 (메모 문구 형식은 그대로)
+      ...(body?.kind === 'reflect'
+        ? { kind: 'reflect' as const, campaignKey: str(body?.campaignKey), campaignName: str(body?.campaignName) }
+        : {}),
     };
     items.push(newItem);
     await saveData(KEY, { items });

@@ -37,7 +37,17 @@ import {
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
 import { buildWeeklyActions, campaignStatusOf, parseCampaignTargetKey, type CampaignActions } from '@/lib/coupang/weeklyActions'
-import { ProfitLine, StatusBoxes, WarningLine, WeeklyActionsSection, reflectMemoText } from './WeeklyPanel'
+import {
+  ProfitLine,
+  StatusBoxes,
+  WarningLine,
+  WeekCompareBox,
+  WeeklyActionsSection,
+  reflectMemoText,
+  snapshotFromView,
+  type ReflectNote,
+  type WeeklySnapshot,
+} from './WeeklyPanel'
 
 type Mode = 'saved' | 'live'
 
@@ -419,7 +429,12 @@ export default function AdAnalysisPage() {
     const res = await fetch('/api/coupang-ad-history', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: reflectMemoText(a) }),
+      body: JSON.stringify({
+        text: reflectMemoText(a),
+        kind: 'reflect',
+        campaignKey: a.targetKey ?? a.campaign.campaignName,
+        campaignName: a.campaign.campaignName,
+      }),
     })
     const j = await res.json().catch(() => null)
     if (!res.ok || !j?.item) throw new Error(j?.error || `HTTP ${res.status}`)
@@ -427,6 +442,41 @@ export default function AdAnalysisPage() {
     setReflected((prev) => new Set(prev).add(a.campaign.campaignId))
     setNotesReload((n) => n + 1)
   }
+  // 주간 기록(지난주 대비) · 운영 메모(지난주 조정 결과) — 30일 판정과 별개
+  const [weekly, setWeekly] = useState<WeeklySnapshot[]>([])
+  const [weeklyReload, setWeeklyReload] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/coupang-ad-weekly', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && Array.isArray(j?.items)) setWeekly(j.items as WeeklySnapshot[]) })
+      .catch(() => { /* 없으면 빈 기록 */ })
+    return () => { cancelled = true }
+  }, [weeklyReload])
+  const [notes, setNotes] = useState<ReflectNote[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/coupang-ad-history', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && Array.isArray(j?.items)) setNotes(j.items as ReflectNote[]) })
+      .catch(() => { /* 없으면 빈 메모 */ })
+    return () => { cancelled = true }
+  }, [notesReload])
+  /** 주간 파일 → 캠페인별 요약(기존 광고 분석 계산 그대로) → 주간 기록 저장 */
+  async function saveWeeklySnapshot(rows: AdCampaignRow[], period: { startDate: string; endDate: string }, fileName: string) {
+    const aug = augmentMasterWith1P(marginMaster as Parameters<typeof augmentMasterWith1P>[0], rows)
+    const v = buildAdAnalysisView(rows, aug as Parameters<typeof buildAdAnalysisView>[1], marginOff ? manualBepMap : undefined)
+    const snapshot = snapshotFromView(v, period, fileName)
+    const res = await fetch('/api/coupang-ad-weekly', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snapshot }),
+    })
+    const j = await res.json().catch(() => null)
+    if (!res.ok || !j?.ok) throw new Error(`주간 기록 저장 실패: ${j?.error || res.status}`)
+    setWeeklyReload((n) => n + 1)
+  }
+
   // 상태 3칸 캠페인명 클릭 → 전체 캠페인 표에서 그 행으로 스크롤 + 펼침
   const pickCampaign = (id: string) => {
     setChFilter('all')
@@ -468,27 +518,49 @@ export default function AdAnalysisPage() {
   ) : null
 
   // 라이브 광고 엑셀 업로드 핸들러 — store 의 rawAdCampaign 안 건드림.
-  async function handleLiveUpload(file: File) {
+  // 라이브 광고 엑셀 업로드 — 여러 파일. 파일명 기간으로 구분: 10일 이하 = 주간 기록 저장, 25일 이상 = 30일 분석 화면
+  const [uploadNote, setUploadNote] = useState<string | null>(null)
+  async function handleLiveFiles(files: File[]) {
     setUploadError(null)
-    try {
-      const buf = await file.arrayBuffer()
-      const r = parseAdCampaign(buf, file.name)
-      if (!r.rows.length) {
-        setUploadError('광고 캠페인 행을 찾지 못했습니다. 파일을 확인해주세요.')
-        return
+    setUploadNote(null)
+    const notes: string[] = []
+    const warns: string[] = []
+    let monthly: { rows: AdCampaignRow[]; meta: { fileName: string; uploadedAt: string; rowCount: number }; period: { startDate: string; endDate: string; days: number } | null; end: string } | null = null
+    for (const file of files) {
+      try {
+        const r = parseAdCampaign(await file.arrayBuffer(), file.name)
+        if (!r.rows.length) {
+          warns.push(`${file.name}: 광고 캠페인 행 없음`)
+          continue
+        }
+        const fp = extractPeriodFromFileName(file.name)
+        const startDate = fp?.startDate ?? r.startDate ?? null
+        const endDate = fp?.endDate ?? r.endDate ?? null
+        const days = fp?.periodDays ?? r.periodDays ?? null
+        const period = startDate && endDate && days ? { startDate, endDate, days } : null
+        const label = period ? `${fmtMd(period.startDate)}~${fmtMd(period.endDate)}(${period.days}일)` : file.name
+        if (period && period.days <= WEEKLY_MAX_DAYS) {
+          await saveWeeklySnapshot(r.rows, period, file.name)
+          notes.push(`주간 기록 저장 ${label}`)
+        } else if (period && period.days >= MONTHLY_MIN_DAYS) {
+          // 30일 파일이 여러 개면 기간 끝이 가장 늦은 것
+          if (!monthly || period.endDate > monthly.end) {
+            monthly = { rows: r.rows, meta: { fileName: file.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length }, period, end: period.endDate }
+          }
+          notes.push(`30일 분석 ${label}`)
+        } else {
+          warns.push(`${label}: 기간이 ${period ? `${period.days}일` : '불명'} — 주간(10일 이하)도 30일(25일 이상)도 아니라 건너뜀`)
+        }
+      } catch (err) {
+        warns.push(`${file.name}: ${err instanceof Error ? err.message : String(err)}`)
       }
-      const meta = { fileName: file.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length }
-      const period = r.startDate && r.endDate
-        ? { startDate: r.startDate, endDate: r.endDate, days: r.periodDays || 30 }
-        : null
-      setAdAnalysisLive(r.rows, meta, period)
-    } catch (err: any) {
-      setUploadError(`파싱 에러: ${err?.message || err}`)
     }
+    if (monthly) setAdAnalysisLive(monthly.rows, monthly.meta, monthly.period)
+    if (notes.length) setUploadNote(notes.join(' · '))
+    if (warns.length) setUploadError(warns.join(' / '))
   }
 
   // 셀렉터/공통 헤더 — 어떤 분기든 항상 노출
-  const fmtMd = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
   const headerNode = (
     <>
       <Header
@@ -549,7 +621,8 @@ export default function AdAnalysisPage() {
         <>
           {/* 3) 30일 손익 1줄 */}
           <ProfitLine view={viewAll} days={sourcePeriod?.days ?? null} />
-          {/* 4) 지난주 대비 · 지난주 조정 결과 — 2/2 에서 추가 */}
+          {/* 4) 지난주 대비 · 지난주 조정 결과 (주간 기록 기준) */}
+          <WeekCompareBox snapshots={weekly} notes={notes} />
           {/* 5) 캠페인 상태 3칸 */}
           <StatusBoxes campaigns={viewAll.campaigns} onPick={pickCampaign} />
           {/* 6) 요약 카드 4개 + 7) 이번 주 할 일 */}
@@ -592,7 +665,8 @@ export default function AdAnalysisPage() {
         <div style={pageWrap}>
           <Style />
           {headerNode}
-          <LiveUploadBox onFile={handleLiveUpload} error={uploadError} />
+          <LiveUploadBox onFiles={handleLiveFiles} error={uploadError} />
+          {uploadNote && <div style={{ ...noticeBoxOrange, padding: '8px 12px', fontSize: 12, textAlign: 'left', marginTop: 8 }}>✓ {uploadNote}</div>}
         </div>
       )
     }
@@ -606,9 +680,10 @@ export default function AdAnalysisPage() {
         {headerNode}
         <LiveActiveBar
           meta={adAnalysisLive.meta}
-          onReplace={handleLiveUpload}
+          onReplace={handleLiveFiles}
           onClear={() => { clearAdAnalysisLive(); setUploadError(null) }}
         />
+        {uploadNote && <div style={{ ...noticeBoxOrange, padding: '8px 12px', fontSize: 12, textAlign: 'left', margin: '0 0 8px' }}>✓ {uploadNote}</div>}
         {uploadError && <div style={errorBox}>{uploadError}</div>}
         {/* 게스트: 저장 히스토리 기반 추세차트 숨김(회사 저장데이터) */}
         {renderBody()}
@@ -674,20 +749,23 @@ function ChannelFilterBar({ value, onChange, has1P }: { value: 'all' | '3P' | '1
   )
 }
 
+const fmtMd = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+const WEEKLY_MAX_DAYS = 10 // 이하 = 주간 파일 (지난주 대비 기록)
+const MONTHLY_MIN_DAYS = 25 // 이상 = 30일 파일 (할 일·상태·손익)
+
 const pageWrap: React.CSSProperties = { maxWidth: 1500, margin: '0 auto', padding: '32px 40px', fontFamily: 'Pretendard, sans-serif' }
 const loadingBox: React.CSSProperties = { background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 8, padding: 24, fontSize: 14, color: '#64748B', textAlign: 'center' }
 const noticeBoxOrange: React.CSSProperties = { background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 8, padding: 24, fontSize: 14, color: '#92400E', textAlign: 'center' }
 const errorBox: React.CSSProperties = { background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '8px 12px', margin: '8px 0', fontSize: 12, color: '#991B1B' }
 
 // ── 라이브 모드 업로드 박스 (드래그 + 클릭) ───────────────────
-function LiveUploadBox({ onFile, error }: { onFile: (f: File) => void; error: string | null }) {
+function LiveUploadBox({ onFiles, error }: { onFiles: (fs: File[]) => void; error: string | null }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
 
   const handleFiles = (files: FileList | null) => {
-    const f = files?.[0]
-    if (!f) return
-    onFile(f)
+    const fs = files ? Array.from(files) : []
+    if (fs.length) onFiles(fs)
   }
 
   return (
@@ -716,11 +794,12 @@ function LiveUploadBox({ onFile, error }: { onFile: (f: File) => void; error: st
           쿠팡 광고센터 → pa_total_campaign 다운로드 파일 (.xlsx)
         </div>
         <div style={{ fontSize: 12, color: '#A16207', marginTop: 8 }}>
-          파일을 끌어다 놓거나 클릭해서 선택하세요. 기간은 파일명에서 자동 인식됩니다.
+          파일을 끌어다 놓거나 클릭해서 선택하세요 (여러 개 가능). 기간은 파일명에서 자동 인식 — 10일 이하 = 주간 기록, 25일 이상 = 30일 분석
         </div>
         <input
           ref={inputRef}
           type="file"
+          multiple
           accept=".xlsx,.xls"
           style={{ display: 'none' }}
           onChange={(e) => { handleFiles(e.target.files); if (inputRef.current) inputRef.current.value = '' }}
@@ -734,7 +813,7 @@ function LiveUploadBox({ onFile, error }: { onFile: (f: File) => void; error: st
 // ── 라이브 활성 상태 표시줄 (파일명 + 다시 업로드 / 닫기) ────────
 function LiveActiveBar({ meta, onReplace, onClear }: {
   meta: { fileName: string; uploadedAt: string; rowCount: number } | null
-  onReplace: (f: File) => void
+  onReplace: (fs: File[]) => void
   onClear: () => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -764,11 +843,12 @@ function LiveActiveBar({ meta, onReplace, onClear }: {
         <input
           ref={inputRef}
           type="file"
+          multiple
           accept=".xlsx,.xls"
           style={{ display: 'none' }}
           onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) onReplace(f)
+            const fs = e.target.files ? Array.from(e.target.files) : []
+            if (fs.length) onReplace(fs)
             if (inputRef.current) inputRef.current.value = ''
           }}
         />

@@ -9,6 +9,7 @@ import React, { useMemo, useState } from 'react'
 import type { AdAnalysisView, CampaignDiag } from '@/lib/coupang/adAnalysis'
 import {
   campaignStatusOf,
+  parseCampaignTargetKey,
   type CampaignActions,
   type CampaignStatus,
 } from '@/lib/coupang/weeklyActions'
@@ -456,6 +457,163 @@ function CampaignActionRow({
             {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? '#059669' : '#DC2626' }}>{msg}</span>}
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── 4) 지난주 대비 + 지난주 조정 결과 (주간 파일 기록 기준) ─────────
+type SnapTotals = { adCostVat: number; revenue: number; roasPct: number | null; bepPct: number | null; adProfit: number }
+export type WeeklySnapshot = {
+  startDate: string
+  endDate: string
+  savedAt?: string
+  fileName?: string
+  total: SnapTotals
+  campaigns: (SnapTotals & { campaignId: string; campaignName: string; key: string })[]
+}
+export type ReflectNote = { id: string; ts: string; text: string; kind?: 'reflect'; campaignKey?: string; campaignName?: string }
+
+/** 주간 파일 분석 결과(기존 buildAdAnalysisView) → 주간 기록 — 값은 화면 계산 그대로 */
+export function snapshotFromView(
+  v: AdAnalysisView,
+  period: { startDate: string; endDate: string },
+  fileName: string,
+): WeeklySnapshot {
+  return {
+    startDate: period.startDate,
+    endDate: period.endDate,
+    fileName,
+    total: {
+      adCostVat: v.totalAdCostVat,
+      revenue: v.totalRevenue,
+      roasPct: v.avgRoasPct,
+      bepPct: v.avgBepPct,
+      adProfit: v.campaigns.reduce((s, c) => s + c.adProfit, 0),
+    },
+    campaigns: v.campaigns.map((c) => ({
+      campaignId: c.campaignId,
+      campaignName: c.campaignName,
+      key: parseCampaignTargetKey(c.campaignName)?.key ?? c.campaignName,
+      adCostVat: c.adCostVat,
+      revenue: c.revenue,
+      roasPct: c.roasPct,
+      bepPct: c.bepPct,
+      adProfit: c.adProfit,
+    })),
+  }
+}
+
+const NO_CHANGE_RATIO = 0.05 // 광고 손익 차이가 이번 주 광고비의 5% 이내면 변화 없음
+const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+/** ISO 시각 → KST 날짜 (YYYY-MM-DD) */
+const kstDate = (iso: string) => new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+
+export function WeekCompareBox({ snapshots, notes }: { snapshots: WeeklySnapshot[]; notes: ReflectNote[] }) {
+  const sorted = [...snapshots].sort((a, b) => a.endDate.localeCompare(b.endDate))
+  const cur = sorted[sorted.length - 1]
+  const prev = sorted.length > 1 ? sorted[sorted.length - 2] : null
+  if (!cur) return null
+  if (!prev) {
+    return (
+      <div style={{ ...card, margin: '8px 0', padding: '10px 14px', fontSize: 13, color: '#64748B' }}>
+        지난주 대비 — 지난주 기록 없음 — 다음 주부터 비교 <span style={{ color: '#94A3B8' }}>(이번 주 기록 {md(cur.startDate)}~{md(cur.endDate)})</span>
+      </div>
+    )
+  }
+  // 광고비는 줄면 좋음, 나머지는 늘면 좋음. BEP ROAS 는 판단 없이 회색
+  const rows: { label: string; a: number | null; b: number | null; unit: 'won' | 'pct'; better: 'up' | 'down' | null; bold?: boolean }[] = [
+    { label: '광고비(VAT 포함)', a: prev.total.adCostVat, b: cur.total.adCostVat, unit: 'won', better: 'down' },
+    { label: '광고 매출', a: prev.total.revenue, b: cur.total.revenue, unit: 'won', better: 'up' },
+    { label: 'ROAS', a: prev.total.roasPct, b: cur.total.roasPct, unit: 'pct', better: 'up' },
+    { label: 'BEP ROAS', a: prev.total.bepPct, b: cur.total.bepPct, unit: 'pct', better: null },
+    { label: '광고 손익', a: prev.total.adProfit, b: cur.total.adProfit, unit: 'won', better: 'up', bold: true },
+  ]
+  const fmt = (v: number | null, unit: 'won' | 'pct') => (v == null ? '—' : unit === 'won' ? Math.round(v).toLocaleString('ko-KR') : `${Math.round(v)}%`)
+  const diffCell = (r: (typeof rows)[number]) => {
+    if (r.a == null || r.b == null) return <span style={{ color: '#94A3B8' }}>—</span>
+    const d = r.b - r.a
+    const good = r.better == null || Math.round(d) === 0 ? null : r.better === 'up' ? d > 0 : d < 0
+    const color = good == null ? '#64748B' : good ? '#059669' : '#DC2626'
+    const sign = d > 0 ? '+' : d < 0 ? '−' : ''
+    const abs = Math.abs(d)
+    return <span style={{ color }}>{sign}{r.unit === 'won' ? Math.round(abs).toLocaleString('ko-KR') : `${Math.round(abs)}%p`}</span>
+  }
+
+  // 지난주 조정 결과 — '쿠팡 반영 완료' 기록 중 지난주 기록 끝 이후 ~ 이번 주 기록 끝 이전
+  const adjusted = notes
+    .filter((n) => n.kind === 'reflect' && n.campaignKey)
+    .filter((n) => {
+      const d = kstDate(n.ts)
+      return d > prev.endDate && d <= cur.endDate
+    })
+    .map((n) => {
+      const find = (s: WeeklySnapshot) =>
+        s.campaigns.find((c) => c.key === n.campaignKey) ?? s.campaigns.find((c) => c.campaignName === n.campaignName) ?? null
+      const before = find(prev)
+      const after = find(cur)
+      let verdict: { label: string; color: string } = { label: '비교 불가', color: '#94A3B8' }
+      if (before && after) {
+        const d = after.adProfit - before.adProfit
+        if (Math.abs(d) <= after.adCostVat * NO_CHANGE_RATIO) verdict = { label: '변화 없음', color: '#94A3B8' }
+        else verdict = d > 0 ? { label: '개선', color: '#059669' } : { label: '악화', color: '#DC2626' }
+      }
+      return { n, before, after, verdict }
+    })
+
+  const th: React.CSSProperties = { padding: '4px 10px', textAlign: 'right', fontWeight: 500, color: '#64748B', fontSize: 12 }
+  const td: React.CSSProperties = { padding: '4px 10px', textAlign: 'right', fontSize: 12.5 }
+  return (
+    <div style={{ ...card, margin: '8px 0', padding: '10px 14px' }}>
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
+        지난주 대비 <span style={{ fontWeight: 400, color: '#94A3B8', fontSize: 12 }}>(주간 파일 기록 · 지난주 {md(prev.startDate)}~{md(prev.endDate)} / 이번 주 {md(cur.startDate)}~{md(cur.endDate)})</span>
+      </div>
+      <table style={{ borderCollapse: 'collapse', minWidth: 460 }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: 'left' }} />
+            <th style={th}>지난주</th>
+            <th style={th}>이번 주</th>
+            <th style={th}>차이</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.label} style={{ borderTop: '1px solid #F1F5F9', fontWeight: r.bold ? 700 : 400 }}>
+              <td style={{ ...td, textAlign: 'left' }}>{r.label}</td>
+              <td style={td} className="mono">{fmt(r.a, r.unit)}</td>
+              <td style={td} className="mono">{fmt(r.b, r.unit)}</td>
+              <td style={td} className="mono">{diffCell(r)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {adjusted.length > 0 && (
+        <>
+          <div style={{ fontSize: 13, fontWeight: 700, margin: '12px 0 6px' }}>지난주 조정한 캠페인 결과</div>
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ ...th, textAlign: 'left' }}>캠페인 · 조정 내용</th>
+                <th style={th}>ROAS 전 → 후</th>
+                <th style={th}>광고 손익 전 → 후</th>
+                <th style={th}>판정</th>
+              </tr>
+            </thead>
+            <tbody>
+              {adjusted.map(({ n, before, after, verdict }) => (
+                <tr key={n.id} style={{ borderTop: '1px solid #F1F5F9' }}>
+                  <td style={{ ...td, textAlign: 'left' }}>{n.text}</td>
+                  <td style={td} className="mono">{before ? pct(before.roasPct) : '—'} → {after ? pct(after.roasPct) : '—'}</td>
+                  <td style={td} className="mono">
+                    {before ? Math.round(before.adProfit).toLocaleString('ko-KR') : '—'} → {after ? Math.round(after.adProfit).toLocaleString('ko-KR') : '—'}
+                  </td>
+                  <td style={{ ...td, fontWeight: 700, color: verdict.color }}>{verdict.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   )
