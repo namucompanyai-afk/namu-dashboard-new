@@ -7895,6 +7895,126 @@ export async function GET(req: Request) {
     //   · 기존 1P 마지막 행 수식을 읽어 행 번호만 바꿔 씀 (행별 수식, ARRAYFORMULA 없음)
     //   · 값 칸: A 채널 · B 별칭(상품마스터 B 가 아직 비어 있어 값으로) · C 봉수 1 · H(템플릿 값) · Y 1P 상품코드
     //   · dry=1 → 쓰기 없이 계획 + 백업(A1:AD 수식·값) 반환
+    // ── m17: 쿠팡 1P 운송비 — 설정 탭 '운송비 …' 라벨 5줄 + 마진계산 쿠팡 1P 행 '택배'(J) 칸 행별 수식 ──
+    //   J = 봉수 × 설정!'운송비 진도팜 {1봉kg}kg' (진도팜) / '운송비 {출고지}' (곰표·위킵). 규칙에 없으면 "확인"
+    //   다른 칸·다른 채널 행은 건드리지 않는다. dry=1 이면 쓰지 않고 행별 전→후 표만. 판정 못 한 행이 있으면 적용 거부.
+    if (action === 'm17') {
+      const sheets = getSheets()
+      const SETTINGS: [string, number][] = [
+        ['운송비 진도팜 0.8kg', 400],
+        ['운송비 진도팜 1kg', 500],
+        ['운송비 진도팜 2kg', 1000],
+        ['운송비 곰표', 100],
+        ['운송비 위킵', 100],
+      ]
+      const COL = { alias: 1, bags: 2, ship: 9, total: 13, margin: 14, sku: 24, origin: 27 }
+      const read = async (range: string, opt: 'FORMULA' | 'UNFORMATTED_VALUE') =>
+        ((await sheets.spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range, valueRenderOption: opt })).data.values || []) as Cell[][]
+      const marginV = await read(`${quote(MARGIN_TAB)}!A1:AD1000`, 'UNFORMATTED_VALUE')
+      const marginF = await read(`${quote(MARGIN_TAB)}!A1:AD1000`, 'FORMULA')
+      const hdr = (marginV[0] || []).map((h) => String(h ?? '').trim())
+      if (hdr[COL.ship] !== '택배' || hdr[COL.margin] !== '마진' || hdr[COL.origin] !== '출고지' || hdr[COL.total] !== '총비용') {
+        throw new Error(`마진계산 머리글이 예상과 다름: J=${hdr[COL.ship]} N=${hdr[COL.total]} O=${hdr[COL.margin]} AB=${hdr[COL.origin]}`)
+      }
+      const priceV = await read(`${quote(PRICE_TAB)}!A1:F1000`, 'UNFORMATTED_VALUE')
+      const pHdr = (priceV[0] || []).map((h) => String(h ?? '').trim())
+      if (pHdr[0] !== '별칭' || pHdr[5] !== 'g') throw new Error(`단가DB 머리글이 예상과 다름: A=${pHdr[0]} F=${pHdr[5]}`)
+      const gramOf = new Map(priceV.slice(1).map((r) => [String(r[0] ?? '').trim(), Number(r[5])]))
+
+      const setRange = `${quote(M2_SETTING_TAB)}!J1:M50`
+      const setBefore = await read(setRange, 'UNFORMATTED_VALUE')
+      const label = (r: Cell[] | undefined) => String(r?.[0] ?? '').trim()
+      const feeOf = new Map(setBefore.filter((r) => label(r)).map((r) => [label(r), Number(r[1])]))
+      for (const [k, v] of SETTINGS) if (!feeOf.has(k)) feeOf.set(k, v) // dry 계산용 (아직 없는 라벨은 넣을 값으로)
+
+      const kgText = (g: number) => String(g / 1000) // 800 → '0.8', 1000 → '1' (시트 수식 g/1000&"" 와 같은 표기)
+      const plan: { row: number; alias: string; sku: string; origin: string; kg: string; bags: number; jBefore: Cell; jFormulaBefore: Cell; jAfter: number | '확인'; marginBefore: number; marginAfter: number | null; totalIncludesJ: boolean }[] = []
+      for (let i = 1; i < marginV.length; i++) {
+        const r = marginV[i] || []
+        if (String(r[0] ?? '').trim() !== '쿠팡 1P') continue
+        const row = i + 1
+        const alias = String(r[COL.alias] ?? '').trim()
+        const origin = String(r[COL.origin] ?? '').trim()
+        const bags = Number(r[COL.bags]) || 1
+        const g = gramOf.get(alias)
+        const kg = g && Number.isFinite(g) && g > 0 ? kgText(g) : ''
+        const lbl = origin === '진도팜' ? (kg ? `운송비 진도팜 ${kg}kg` : '') : origin ? `운송비 ${origin}` : ''
+        const fee = lbl ? feeOf.get(lbl) : undefined
+        const jAfter = fee != null && Number.isFinite(fee) ? bags * fee : '확인'
+        const jBefore = r[COL.ship] ?? ''
+        const marginBefore = Number(r[COL.margin])
+        const totalF = String((marginF[i] || [])[COL.total] ?? '')
+        const totalIncludesJ = new RegExp('(^|[^A-Z$])\\$?J\\$?' + row + '(?!\\d)').test(totalF) || /SUM\(\$?F\$?\d+:\$?M/i.test(totalF)
+        plan.push({
+          row, alias, sku: String(r[COL.sku] ?? '').trim(), origin, kg, bags,
+          jBefore, jFormulaBefore: (marginF[i] || [])[COL.ship] ?? '',
+          jAfter, marginBefore,
+          marginAfter: typeof jAfter === 'number' && Number.isFinite(marginBefore) ? marginBefore - (jAfter - (Number(jBefore) || 0)) : null,
+          totalIncludesJ,
+        })
+      }
+      const unresolved = plan.filter((p) => p.jAfter === '확인')
+      const sampleTotalFormula = plan.length ? String((marginF[plan[0].row - 1] || [])[COL.total] ?? '') : ''
+      if (url.searchParams.get('dry') === '1' || unresolved.length > 0) {
+        return NextResponse.json({
+          ok: unresolved.length === 0,
+          dry: true,
+          applied: false,
+          reason: unresolved.length ? `판정 못 한 행 ${unresolved.length}개 — 적용 안 함` : undefined,
+          rows: plan.length,
+          unresolved: unresolved.map((p) => ({ row: p.row, alias: p.alias, origin: p.origin, kg: p.kg })),
+          sampleTotalFormula,
+          plan,
+          settingsToAdd: SETTINGS.filter(([k]) => !setBefore.some((r) => label(r) === k)),
+        })
+      }
+      // 1) 설정 탭 — 없는 라벨만 J열 마지막 라벨 아래 빈 행에 추가
+      const toAdd = SETTINGS.filter(([k]) => !setBefore.some((r) => label(r) === k))
+      if (toAdd.length) {
+        const lastRow = setBefore.reduce((m, r, i) => (label(r) ? i + 1 : m), 0)
+        const target = setBefore.slice(lastRow, lastRow + toAdd.length)
+        if (target.some((r) => (r || []).some((c) => String(c ?? '').trim() !== ''))) throw new Error('설정 J:M 추가 위치가 비어 있지 않음')
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: MASTER_SHEET_ID,
+          range: `${quote(M2_SETTING_TAB)}!J${lastRow + 1}:K${lastRow + toAdd.length}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: toAdd.map(([k, v]) => [k, v]) },
+        })
+      }
+      // 2) 마진계산 쿠팡 1P 행 J칸 — 행별 수식 (배열수식 아님)
+      const fx = (row: number) =>
+        `=IFERROR($C${row}*VLOOKUP(IF($AB${row}="진도팜","운송비 진도팜 "&(VLOOKUP($B${row},'${PRICE_TAB}'!$A:$F,6,FALSE)/1000)&"kg","운송비 "&$AB${row}),'${M2_SETTING_TAB}'!$J:$K,2,FALSE),"확인")`
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: MASTER_SHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: plan.map((p) => ({ range: `${quote(MARGIN_TAB)}!J${p.row}`, values: [[fx(p.row)]] })),
+        },
+      })
+      // 검증: J 외 칸은 전후 동일, 1P 행 J 값
+      const afterV = await read(`${quote(MARGIN_TAB)}!A1:AD1000`, 'UNFORMATTED_VALUE')
+      const afterF = await read(`${quote(MARGIN_TAB)}!A1:AD1000`, 'FORMULA')
+      const changedOther: string[] = []
+      for (let i = 0; i < Math.max(marginF.length, afterF.length); i++) {
+        const is1P = String((marginV[i] || [])[0] ?? '').trim() === '쿠팡 1P'
+        for (let c = 0; c < 30; c++) {
+          if (is1P && c === COL.ship) continue
+          if (String((marginF[i] || [])[c] ?? '') !== String((afterF[i] || [])[c] ?? '')) changedOther.push(`${colName(c)}${i + 1}`)
+        }
+      }
+      const result = plan.map((p) => ({ row: p.row, alias: p.alias, j: (afterV[p.row - 1] || [])[COL.ship], margin: (afterV[p.row - 1] || [])[COL.margin] }))
+      return NextResponse.json({
+        ok: true,
+        applied: true,
+        settingsAdded: toAdd,
+        rows: plan.length,
+        zeroOrCheck: result.filter((x) => x.j === 0 || x.j === '확인' || x.j === '').length,
+        changedOther: changedOther.slice(0, 30),
+        changedOtherCount: changedOther.length,
+        result,
+      })
+    }
+
     // ── m16: 설정 택배 단가 라벨 '쿠팡 택배 단가' → '입고택배 진도팜' (J열 라벨 한 칸만, 멱등) ──
     if (action === 'm16') {
       const sheets = getSheets()
