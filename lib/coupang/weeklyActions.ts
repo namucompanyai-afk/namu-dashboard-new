@@ -233,12 +233,12 @@ function pairManualOf(view: AdAnalysisView, ai: CampaignDiag): string | null {
   return m?.campaignName ?? null
 }
 
-// ── 캠페인 상태 3칸 (비율 = ROAS ÷ BEP ROAS) ──
+// ── 캠페인 상태 3칸 (비율 = 광고 손익 ÷ 광고비(VAT 포함)) ──
+// BEP ROAS 없는 캠페인은 광고 손익을 믿을 수 없어 3칸에서 빼고 경고 줄로 보낸다
 export type CampaignStatus = 'profit' | 'even' | 'loss'
-export const STATUS_PROFIT = 1.2
-export const STATUS_EVEN = 0.9
+export const STATUS_BAND = 0.05 // 흑자 > +5% / 본전 −5% ~ +5% / 적자 < −5%
 export function campaignStatusOf(c: CampaignDiag): CampaignStatus | null {
-  if (c.roasPct == null || c.bepPct == null || c.bepPct <= 0) return null
-  const ratio = c.roasPct / c.bepPct
-  return ratio >= STATUS_PROFIT ? 'profit' : ratio >= STATUS_EVEN ? 'even' : 'loss'
+  if (c.bepPct == null || c.bepPct <= 0 || c.adCostVat <= 0) return null
+  const ratio = c.adProfit / c.adCostVat
+  return ratio > STATUS_BAND ? 'profit' : ratio >= -STATUS_BAND ? 'even' : 'loss'
 }

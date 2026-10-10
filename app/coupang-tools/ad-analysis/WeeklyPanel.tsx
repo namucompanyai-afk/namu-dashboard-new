@@ -99,9 +99,9 @@ export function ProfitLine({ view, days }: { view: AdAnalysisView; days: number 
 
 // ── 5) 캠페인 상태 3칸 ───────────────────────────────────────
 const STATUS_META: Record<CampaignStatus, { title: string; color: string; bg: string; rule: string }> = {
-  profit: { title: '흑자', color: '#059669', bg: '#ECFDF5', rule: 'ROAS ≥ BEP ROAS × 1.2' },
-  even: { title: '본전', color: '#D97706', bg: '#FFFBEB', rule: 'BEP ROAS × 0.9 ~ 1.2' },
-  loss: { title: '적자', color: '#DC2626', bg: '#FEF2F2', rule: 'ROAS < BEP ROAS × 0.9' },
+  profit: { title: '흑자', color: '#059669', bg: '#ECFDF5', rule: '광고 손익 > 광고비 +5%' },
+  even: { title: '본전', color: '#D97706', bg: '#FFFBEB', rule: '광고 손익 광고비 −5% ~ +5%' },
+  loss: { title: '적자', color: '#DC2626', bg: '#FEF2F2', rule: '광고 손익 < 광고비 −5%' },
 }
 const STATUS_LIMIT = 5
 
