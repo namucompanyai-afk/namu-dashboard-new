@@ -544,6 +544,12 @@ export function snapshotFromView(
 }
 
 const NO_CHANGE_RATIO = 0.05 // 광고 손익 차이가 이번 주 광고비의 5% 이내면 변화 없음
+/** 'YYYY-MM-DD' + n일 */
+const addDays = (ymd: string, n: number) => {
+  const d = new Date(`${ymd}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
 const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
 /** ISO 시각 → KST 날짜 (YYYY-MM-DD) */
 const kstDate = (iso: string) => new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10)
@@ -551,7 +557,9 @@ const kstDate = (iso: string) => new Date(new Date(iso).getTime() + 9 * 3600 * 1
 export function WeekCompareBox({ snapshots, notes }: { snapshots: WeeklySnapshot[]; notes: ReflectNote[] }) {
   const sorted = [...snapshots].sort((a, b) => a.endDate.localeCompare(b.endDate))
   const cur = sorted[sorted.length - 1]
-  const prev = sorted.length > 1 ? sorted[sorted.length - 2] : null
+  // 지난주 = 이번 주 기록 시작일의 정확히 7일 전에 시작하는 기록 (없으면 비교 안 함 — 가까운 기록으로 대신하지 않는다)
+  const prevStart = cur ? addDays(cur.startDate, -7) : ''
+  const prev = cur ? sorted.find((s) => s.startDate === prevStart) ?? null : null
   if (!cur) return null
   if (!prev) {
     return (

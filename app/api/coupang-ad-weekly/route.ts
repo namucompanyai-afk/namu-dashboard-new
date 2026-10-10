@@ -8,6 +8,7 @@ import { getData, saveData } from '@/lib/supabase'
  * 키: coupang_ad_weekly_snapshots   payload: { items: WeeklySnapshot[] }
  * GET  /api/coupang-ad-weekly                 → 전체 주간 기록 (기간 끝 오름차순)
  * POST /api/coupang-ad-weekly { snapshot }    → 같은 기간(시작·끝)이면 덮어쓰기, 아니면 추가 · 응답에 저장된 전체 목록
+ * DELETE /api/coupang-ad-weekly?start=YYYY-MM-DD&end=YYYY-MM-DD → 그 기간 기록 삭제
  * 월 저장 히스토리(coupang-master pnl_*)와는 별개 키라 건드리지 않는다.
  */
 
@@ -58,6 +59,25 @@ export async function POST(req: Request) {
     items.sort((a, b) => a.endDate.localeCompare(b.endDate))
     await saveData(KEY, { items })
     // 저장한 전체 목록을 그대로 돌려준다 — 바로 다시 GET 하면 저장 직후 옛 값이 읽힐 수 있어 화면은 이 값을 쓴다
+    return NextResponse.json({ ok: true, items })
+  } catch (err) {
+    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, { status: 500 })
+  }
+}
+
+export async function DELETE(req: Request) {
+  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석
+  const denied = requireRole(req, ['admin', 'guest'])
+  if (denied) return denied
+  try {
+    const { searchParams } = new URL(req.url)
+    const start = searchParams.get('start')
+    const end = searchParams.get('end')
+    if (!isDate(start) || !isDate(end)) return NextResponse.json({ ok: false, error: 'start·end(YYYY-MM-DD) 필요' }, { status: 400 })
+    const all = await loadItems()
+    const items = all.filter((x) => !(x.startDate === start && x.endDate === end))
+    if (items.length === all.length) return NextResponse.json({ ok: false, error: '그 기간 기록 없음' }, { status: 404 })
+    await saveData(KEY, { items })
     return NextResponse.json({ ok: true, items })
   } catch (err) {
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : String(err) }, { status: 500 })

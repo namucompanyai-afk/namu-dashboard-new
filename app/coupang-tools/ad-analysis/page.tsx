@@ -478,7 +478,12 @@ export default function AdAnalysisPage() {
     const j = await res.json().catch(() => null)
     if (!res.ok || !j?.ok) throw new Error(`주간 기록 저장 실패: ${j?.error || res.status}`)
     // 저장 직후 GET 은 옛 값이 읽힐 수 있어 POST 응답의 전체 목록을 그대로 쓴다
-    if (Array.isArray(j.items)) setWeekly(j.items as WeeklySnapshot[])
+    const items = Array.isArray(j.items) ? (j.items as WeeklySnapshot[]) : []
+    if (items.length) setWeekly(items)
+    // 기간이 겹치는 다른 주간 기록 (같은 기간 덮어쓰기는 제외)
+    return items.filter(
+      (x) => !(x.startDate === period.startDate && x.endDate === period.endDate) && x.startDate <= period.endDate && period.startDate <= x.endDate,
+    )
   }
 
   // 상품 월 손익 — 쿠팡 손익이 저장한 가장 최근 달 상품별 판정 요약(pnl_verdict_YYYY-MM, 관리자만)
@@ -591,8 +596,11 @@ export default function AdAnalysisPage() {
         const period = startDate && endDate && days ? { startDate, endDate, days } : null
         const label = period ? `${fmtMd(period.startDate)}~${fmtMd(period.endDate)}(${period.days}일)` : file.name
         if (period && period.days <= WEEKLY_MAX_DAYS) {
-          await saveWeeklySnapshot(r.rows, period, file.name)
+          const overlaps = await saveWeeklySnapshot(r.rows, period, file.name)
           notes.push(`주간 기록 저장 ${label}`)
+          if (overlaps.length) {
+            warns.push(`${label}: 다른 주간 기록과 기간이 겹침 — ${overlaps.map((x) => `${fmtMd(x.startDate)}~${fmtMd(x.endDate)}`).join(', ')}`)
+          }
         } else if (period && period.days >= MONTHLY_MIN_DAYS) {
           // 30일 파일이 여러 개면 기간 끝이 가장 늦은 것
           if (!monthly || period.endDate > monthly.end) {
