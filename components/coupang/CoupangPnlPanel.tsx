@@ -270,14 +270,15 @@ export default function CoupangPnlPanel(props: {
     const rows = verdictRows
       .filter((r) => !r.special)
       .map((r) => ({ alias: r.alias, profit: Math.round(r.profit), adProfit: Math.round(r.adProfit), adShare: r.adShare, channel: r.channel }))
-    if (!rows.length) return
+    // 그 달 3P·1P 판매 파일이 다 있을 때만 — 일부만 올린 달이 '가장 최근' 으로 저장돼 광고 분석에 섞이지 않게
+    if (!rows.length || !cur('seller') || !cur('onep_sales')) return
     const body = JSON.stringify({ type: `pnl_verdict_${month}`, data: { month, rows }, fileName: '상품별 판정 요약' })
     if (savedVerdictRef.current === body) return
     savedVerdictRef.current = body
     fetch('/api/coupang-master', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {
       savedVerdictRef.current = '' // 실패하면 다음 계산 때 다시 시도
     })
-  }, [verdictRows, month])
+  }, [verdictRows, month, saved, pending]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const s3 = props.summary3P
   const net3P: number | null = s3 ? s3.totalNetProfit : null
