@@ -11,7 +11,7 @@
  * 3P 손익은 기존 수익 진단 결과(summary)를 그대로 가져온다.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseAdCampaign, extractPeriodFromFileName, type AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { parseSalesInsight } from '@/lib/coupang/parsers/salesInsight'
 import { parseOnePSalesCsv, type OnePSalesRow } from '@/lib/coupang/parsers/onePSales'
@@ -264,6 +264,20 @@ export default function CoupangPnlPanel(props: {
     sales1P: pnl.sales,
     adOptions1P: onePView?.options,
   }), [props.diag3P, pnl.sales, onePView])
+  // 상품별 판정 요약 월별 저장 — 광고 분석이 캠페인별 "상품 N월 손익 · 광고 비중" 을 보여 줄 때 쓴다 (같은 내용이면 다시 저장 안 함)
+  const savedVerdictRef = useRef('')
+  useEffect(() => {
+    const rows = verdictRows
+      .filter((r) => !r.special)
+      .map((r) => ({ alias: r.alias, profit: Math.round(r.profit), adProfit: Math.round(r.adProfit), adShare: r.adShare, channel: r.channel }))
+    if (!rows.length) return
+    const body = JSON.stringify({ type: `pnl_verdict_${month}`, data: { month, rows }, fileName: '상품별 판정 요약' })
+    if (savedVerdictRef.current === body) return
+    savedVerdictRef.current = body
+    fetch('/api/coupang-master', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {
+      savedVerdictRef.current = '' // 실패하면 다음 계산 때 다시 시도
+    })
+  }, [verdictRows, month])
 
   const s3 = props.summary3P
   const net3P: number | null = s3 ? s3.totalNetProfit : null

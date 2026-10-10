@@ -43,7 +43,9 @@ import {
   WarningLine,
   WeekCompareBox,
   WeeklyActionsSection,
+  ProductNote,
   reflectMemoText,
+  type ProductMonthNote,
   snapshotFromView,
   type ReflectNote,
   type WeeklySnapshot,
@@ -479,6 +481,53 @@ export default function AdAnalysisPage() {
     if (Array.isArray(j.items)) setWeekly(j.items as WeeklySnapshot[])
   }
 
+  // 상품 월 손익 — 쿠팡 손익이 저장한 가장 최근 달 상품별 판정 요약(pnl_verdict_YYYY-MM, 관리자만)
+  const [productMonth, setProductMonth] = useState<{ month: string; byAlias: Map<string, { profit: number; adShare: number | null }> } | null>(null)
+  useEffect(() => {
+    if (isGuest) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const mj = await (await fetch('/api/coupang-master?type=pnl_months')).json()
+        const months = Object.entries((mj?.months || {}) as Record<string, string[]>)
+          .filter(([, kinds]) => kinds.includes('verdict'))
+          .map(([m]) => m)
+          .sort((x, y) => y.localeCompare(x))
+        if (!months.length) return
+        const vj = await (await fetch(`/api/coupang-master?type=pnl_verdict_${months[0]}`)).json()
+        const rows = (vj?.data?.rows || []) as { alias: string; profit: number; adShare: number | null }[]
+        if (!cancelled && rows.length) {
+          setProductMonth({ month: months[0], byAlias: new Map(rows.map((r) => [r.alias, { profit: r.profit, adShare: r.adShare }])) })
+        }
+      } catch { /* 없으면 표시 안 함 */ }
+    })()
+    return () => { cancelled = true }
+  }, [isGuest])
+  // 캠페인 → 별칭: 광고 행 광고집행 옵션ID → 3P/1P 행 별칭 (상품 필터와 같은 연결), 여러 개면 광고비 가장 큰 별칭
+  const campaignAlias = useMemo(() => {
+    const m = new Map<string, string>()
+    if (!productMonth) return m
+    const mrows = ((masterAug as unknown as { marginRows?: { optionId: string; alias: string }[] } | null)?.marginRows) || []
+    const aliasOf = new Map(mrows.map((r) => [String(r.optionId).trim(), r.alias]))
+    for (const c of viewAll.campaigns) {
+      const cost = new Map<string, number>()
+      for (const r of c.rows) {
+        const a = aliasOf.get(String(r.adOptionId || '').trim()) as string | undefined
+        if (a) cost.set(a, (cost.get(a) || 0) + (r.adCost || 0))
+      }
+      let best = ''
+      let bestCost = -1
+      for (const [a, v] of cost) if (v > bestCost) { best = a; bestCost = v }
+      if (best) m.set(c.campaignId, best)
+    }
+    return m
+  }, [productMonth, viewAll, masterAug])
+  const productNoteOf = (campaignId: string): ProductMonthNote | null => {
+    const alias = campaignAlias.get(campaignId)
+    const v = alias && productMonth ? productMonth.byAlias.get(alias) : undefined
+    return v && productMonth && alias ? { month: productMonth.month, alias, profit: v.profit, adShare: v.adShare } : null
+  }
+
   // 상태 3칸 캠페인명 클릭 → 전체 캠페인 표에서 그 행으로 스크롤 + 펼침
   const pickCampaign = (id: string) => {
     setChFilter('all')
@@ -626,13 +675,14 @@ export default function AdAnalysisPage() {
           {/* 4) 지난주 대비 · 지난주 조정 결과 (주간 기록 기준) */}
           <WeekCompareBox snapshots={weekly} notes={notes} />
           {/* 5) 캠페인 상태 3칸 */}
-          <StatusBoxes campaigns={viewAll.campaigns} onPick={pickCampaign} />
+          <StatusBoxes campaigns={viewAll.campaigns} onPick={pickCampaign} noteOf={productNoteOf} />
           {/* 6) 요약 카드 4개 + 7) 이번 주 할 일 */}
           <WeeklyActionsSection
             actions={weeklyActions}
             reflected={reflected}
             onReflect={reflectCampaign}
             onSetApplied={setTargetForKey}
+            noteOf={productNoteOf}
           />
         </>
       )}
@@ -651,6 +701,7 @@ export default function AdAnalysisPage() {
         onSelectOption={openCampaignAndOption}
         targets={targets}
         onTargetChange={setTargetForKey}
+        noteOf={productNoteOf}
         renderDetail={(c) => c.type === 'manual'
           ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
           : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />}
@@ -1108,7 +1159,7 @@ function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange, renderDetail }: {
+function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange, renderDetail, noteOf }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
   marginOff?: boolean
@@ -1122,6 +1173,8 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
   onTargetChange: (key: string, value: number | null) => void
   /** 펼친 캠페인의 키워드 분석(AI)·입찰가 점검(수동) — 옵션 행 바로 아래 표 안에 표시 */
   renderDetail?: (c: CampaignDiag) => React.ReactNode
+  /** 상품 월 손익 (쿠팡 손익 상품별 판정 저장본) — 캠페인명 아래 */
+  noteOf?: (campaignId: string) => ProductMonthNote | null
 }) {
   const { sorted, key, dir, toggle } = useSort(view.campaigns, 'adCostVat' as keyof CampaignDiag, 'desc')
 
@@ -1192,6 +1245,7 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
                   targets={targets}
                   onTargetChange={onTargetChange}
                   detail={isOpen && renderDetail ? renderDetail(c) : null}
+                  note={noteOf?.(c.campaignId) ?? null}
                 />
               )
             })}
@@ -1202,8 +1256,9 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
   )
 }
 
-function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange, detail }: {
+function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange, detail, note }: {
   detail?: React.ReactNode
+  note?: ProductMonthNote | null
   c: CampaignDiag
   marginOff?: boolean
   hideBep?: boolean
@@ -1248,6 +1303,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
             {isExpanded ? '▾' : '▸'}
           </span>
           <strong><SaleChBadge ch={c.channel} />{c.campaignName}</strong>
+          {note && <div style={{ paddingLeft: 22 }}><ProductNote note={note} /></div>}
         </td>
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>

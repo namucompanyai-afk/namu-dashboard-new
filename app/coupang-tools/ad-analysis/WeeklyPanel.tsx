@@ -105,7 +105,15 @@ const STATUS_META: Record<CampaignStatus, { title: string; color: string; bg: st
 }
 const STATUS_LIMIT = 5
 
-export function StatusBoxes({ campaigns, onPick }: { campaigns: CampaignDiag[]; onPick: (campaignId: string) => void }) {
+export function StatusBoxes({
+  campaigns,
+  onPick,
+  noteOf,
+}: {
+  campaigns: CampaignDiag[]
+  onPick: (campaignId: string) => void
+  noteOf?: (campaignId: string) => ProductMonthNote | null
+}) {
   const groups = useMemo(() => {
     const g: Record<CampaignStatus, CampaignDiag[]> = { profit: [], even: [], loss: [] }
     for (const c of campaigns) {
@@ -120,13 +128,23 @@ export function StatusBoxes({ campaigns, onPick }: { campaigns: CampaignDiag[]; 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, margin: '12px 0' }}>
       {(['profit', 'even', 'loss'] as CampaignStatus[]).map((k) => (
-        <StatusBox key={k} kind={k} list={groups[k]} onPick={onPick} />
+        <StatusBox key={k} kind={k} list={groups[k]} onPick={onPick} noteOf={noteOf} />
       ))}
     </div>
   )
 }
 
-function StatusBox({ kind, list, onPick }: { kind: CampaignStatus; list: CampaignDiag[]; onPick: (id: string) => void }) {
+function StatusBox({
+  kind,
+  list,
+  onPick,
+  noteOf,
+}: {
+  kind: CampaignStatus
+  list: CampaignDiag[]
+  onPick: (id: string) => void
+  noteOf?: (campaignId: string) => ProductMonthNote | null
+}) {
   const [more, setMore] = useState(false)
   const m = STATUS_META[kind]
   const shown = more ? list : list.slice(0, STATUS_LIMIT)
@@ -146,7 +164,7 @@ function StatusBox({ kind, list, onPick }: { kind: CampaignStatus; list: Campaig
               key={c.campaignId}
               onClick={() => onPick(c.campaignId)}
               title="전체 캠페인 표에서 보기"
-              style={{ display: 'flex', gap: 6, alignItems: 'baseline', textAlign: 'left', padding: '3px 6px', borderRadius: 4, border: 'none', background: m.bg, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12 }}
+              style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'baseline', textAlign: 'left', padding: '3px 6px', borderRadius: 4, border: 'none', background: m.bg, cursor: 'pointer', fontFamily: 'inherit', fontSize: 12 }}
             >
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#1F2937' }}>
                 {c.campaignName}
@@ -155,6 +173,7 @@ function StatusBox({ kind, list, onPick }: { kind: CampaignStatus; list: Campaig
               <span className="mono" style={{ color: c.adProfit < 0 ? '#DC2626' : '#059669', fontWeight: 700, whiteSpace: 'nowrap' }}>
                 {Math.round(c.adProfit).toLocaleString('ko-KR')}
               </span>
+              {noteOf?.(c.campaignId) && <ProductNote note={noteOf(c.campaignId)} style={{ width: '100%' }} />}
             </button>
           ))}
           {list.length > STATUS_LIMIT && (
@@ -196,11 +215,13 @@ export function WeeklyActionsSection({
   reflected,
   onReflect,
   onSetApplied,
+  noteOf,
 }: {
   actions: CampaignActions[]
   reflected: Set<string>
   onReflect: (a: CampaignActions) => Promise<void>
   onSetApplied: (key: string, value: number | null) => void
+  noteOf?: (campaignId: string) => ProductMonthNote | null
 }) {
   const [kind, setKind] = useState<Kind | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -280,6 +301,7 @@ export function WeeklyActionsSection({
                 done={reflected.has(a.campaign.campaignId)}
                 onReflect={() => onReflect(a)}
                 onSetApplied={onSetApplied}
+                note={noteOf?.(a.campaign.campaignId) ?? null}
               />
             ))}
           </div>
@@ -297,6 +319,7 @@ function CampaignActionRow({
   done,
   onReflect,
   onSetApplied,
+  note,
 }: {
   a: CampaignActions
   kind: Kind | null
@@ -305,6 +328,7 @@ function CampaignActionRow({
   done: boolean
   onReflect: () => Promise<void>
   onSetApplied: (key: string, value: number | null) => void
+  note: ProductMonthNote | null
 }) {
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState(false)
@@ -337,7 +361,13 @@ function CampaignActionRow({
       >
         <span style={{ color: '#94A3B8', width: 12 }}>{open ? '▾' : '▸'}</span>
         <ChBadge ch={c.channel} />
-        <b style={{ flex: 1, minWidth: 0, fontSize: 13 }}>{c.campaignName}</b>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <b style={{ fontSize: 13 }}>{c.campaignName}</b>
+          {note && <ProductNote note={note} style={{ display: 'block' }} />}
+          {note && c.adProfit < 0 && note.profit > 0 && (
+            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#B45309' }}>광고 끄기 전 확인 — 상품은 흑자</span>
+          )}
+        </span>
         {done && <span style={{ fontSize: 11, fontWeight: 700, color: '#059669', background: '#ECFDF5', borderRadius: 4, padding: '1px 6px' }}>반영됨</span>}
         <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: c.adProfit < 0 ? '#DC2626' : '#059669' }}>
           {Math.round(c.adProfit).toLocaleString('ko-KR')}원
@@ -616,5 +646,26 @@ export function WeekCompareBox({ snapshots, notes }: { snapshots: WeeklySnapshot
         </>
       )}
     </div>
+  )
+}
+
+// ── 상품 월 손익 (쿠팡 손익 상품별 판정 저장본) — 캠페인 줄 아래 작은 글씨 ──────
+export type ProductMonthNote = { month: string; alias: string; profit: number; adShare: number | null }
+
+const profitText = (n: number) => {
+  const sign = n > 0 ? '+' : n < 0 ? '−' : ''
+  const a = Math.abs(n)
+  return a >= 10000 ? `${sign}${Math.round(a / 10000).toLocaleString('ko-KR')}만` : `${sign}${Math.round(a).toLocaleString('ko-KR')}원`
+}
+
+export function ProductNote({ note, style }: { note: ProductMonthNote | null | undefined; style?: React.CSSProperties }) {
+  if (!note) return null
+  const share = note.adShare == null ? '—' : note.adShare > 1 ? '100%+' : `${Math.round(note.adShare * 100)}%`
+  return (
+    <span style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400, ...style }} title={note.alias}>
+      상품 {Number(note.month.slice(5, 7))}월 손익{' '}
+      <span style={{ color: note.profit < 0 ? '#DC2626' : note.profit > 0 ? '#059669' : '#94A3B8', fontWeight: 600 }}>{profitText(note.profit)}</span>
+      {' '}· 광고 비중 {share}
+    </span>
   )
 }

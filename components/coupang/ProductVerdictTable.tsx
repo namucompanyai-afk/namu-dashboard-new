@@ -20,7 +20,10 @@ const VERDICT_STYLE: Record<ProductVerdict, string> = {
 }
 const FILTERS: (ProductVerdict | '전체')[] = ['전체', '효자', '함정', '진짜 적자', '광고 없음']
 
-type SortKey = 'profit' | 'revenue' | 'margin' | 'adCost' | 'adProfit' | 'milkrun'
+type SortKey = 'profit' | 'revenue' | 'margin' | 'adCost' | 'bags' | 'adBags' | 'adShare' | 'adProfit' | 'milkrun'
+/** 광고 판매 비중 — 14일 전환이라 100% 를 넘으면 '100%+' */
+const shareText = (v: number | null | undefined) => (v == null ? '—' : v > 1 ? '100%+' : `${Math.round(v * 100)}%`)
+const shareOf = (p: { bags: number; adBags: number }) => (p.bags > 0 ? p.adBags / p.bags : null)
 
 export default function ProductVerdictTable({ rows, monthLabel }: { rows: ProductVerdictRow[]; monthLabel: string }) {
   const [filter, setFilter] = useState<ProductVerdict | '전체'>('전체')
@@ -34,7 +37,8 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
   }, [rows])
   const shown = useMemo(() => {
     const list = filter === '전체' ? rows : rows.filter((r) => r.verdict === filter)
-    return [...list].sort((a, b) => (a[sort.key] - b[sort.key]) * sort.dir)
+    const val = (r: ProductVerdictRow) => (sort.key === 'adShare' ? r.adShare ?? -1 : r[sort.key])
+    return [...list].sort((a, b) => (val(a) - val(b)) * sort.dir)
   }, [rows, filter, sort])
   const total = useMemo(() => shown.reduce((a, r) => a + r.profit, 0), [shown])
 
@@ -56,6 +60,9 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
       { header: '판매 매출', kind: 'won', get: (r) => r.revenue },
       { header: '판매 마진', kind: 'won', get: (r) => r.margin },
       { header: '광고비 (부가포함, 과세 ×1.0)', kind: 'won', get: (r) => r.adCost },
+      { header: '판매 봉수', kind: 'count', get: (r) => r.bags },
+      { header: '광고 판매 봉수', kind: 'count', get: (r) => r.adBags },
+      { header: '광고 판매 비중', kind: 'text', get: (r) => shareText(r.adShare) },
       { header: '광고 손익', kind: 'won', get: (r) => r.adProfit },
       { header: '1P 운송비', kind: 'won', get: (r) => (r.p1 ? r.milkrun : null) },
       { header: '상품 손익', kind: 'won', get: (r) => r.profit },
@@ -73,6 +80,9 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
       <td className="px-2 text-right tabular-nums">{won(p.revenue)}</td>
       <td className="px-2 text-right tabular-nums">{won(p.margin)}</td>
       <td className="px-2 text-right tabular-nums">{won(p.adCost)}</td>
+      <td className="px-2 text-right tabular-nums">{won(p.bags)}</td>
+      <td className="px-2 text-right tabular-nums">{won(p.adBags)}</td>
+      <td className="px-2 text-right tabular-nums">{shareText(shareOf(p))}</td>
       <td className={`px-2 text-right tabular-nums ${tone(p.adProfit)}`}>{won(p.adProfit)}</td>
       <td className="px-2 text-right tabular-nums">{hasMilkrun ? won(p.milkrun) : '—'}</td>
       <td className={`px-2 text-right tabular-nums ${tone(p.profit)}`}>{won(p.profit)}</td>
@@ -85,7 +95,7 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <div className="text-sm font-semibold text-gray-700">{monthLabel} 상품별 판정 (3P + 1P, 판매 기준)</div>
-          <div className="text-[11px] text-gray-400">상품 손익 = 판매 마진 − 광고비(부가포함, 과세 ×1.0) − 1P 운송비 · 효자: 상품·광고 손익 모두 + · 함정: 상품 + · 광고 − · 진짜 적자: 상품 − · 행 클릭 → 3P/1P 나눠 보기</div>
+          <div className="text-[11px] text-gray-400">상품 손익 = 판매 마진 − 광고비(부가포함, 과세 ×1.0) − 1P 운송비 · 광고 판매 비중 = 광고 판매 봉수 ÷ 판매 봉수(14일 전환이라 100%+ 가능) · 효자: 상품·광고 손익 모두 + · 함정: 상품 + · 광고 − · 진짜 적자: 상품 − · 행 클릭 → 3P/1P 나눠 보기</div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {FILTERS.map((f) => (
@@ -106,6 +116,9 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
               <TH k="revenue" label="판매 매출" />
               <TH k="margin" label="판매 마진" />
               <TH k="adCost" label="광고비" />
+              <TH k="bags" label="판매 봉수" />
+              <TH k="adBags" label="광고 판매 봉수" />
+              <TH k="adShare" label="광고 판매 비중" />
               <TH k="adProfit" label="광고 손익" />
               <TH k="milkrun" label="1P 운송비" />
               <TH k="profit" label="상품 손익" />
@@ -125,6 +138,9 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
                     <td className="px-2 text-right tabular-nums">{won(r.revenue)}</td>
                     <td className="px-2 text-right tabular-nums">{won(r.margin)}</td>
                     <td className="px-2 text-right tabular-nums">{won(r.adCost)}</td>
+                    <td className="px-2 text-right tabular-nums">{won(r.bags)}</td>
+                    <td className="px-2 text-right tabular-nums">{won(r.adBags)}</td>
+                    <td className="px-2 text-right tabular-nums">{shareText(r.adShare)}</td>
                     <td className={`px-2 text-right tabular-nums ${tone(r.adProfit)}`}>{won(r.adProfit)}</td>
                     <td className="px-2 text-right tabular-nums">{r.p1 ? won(r.milkrun) : '—'}</td>
                     <td className={`px-2 text-right font-semibold tabular-nums ${tone(r.profit)}`}>{won(r.profit)}</td>
@@ -143,7 +159,7 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
           </tbody>
           <tfoot className="sticky bottom-0 bg-white">
             <tr className="border-t-2 text-gray-700">
-              <td className="px-2 py-2 font-semibold" colSpan={7}>합계 ({shown.length}개{filter === '전체' ? ' = 3P 순이익 + 판매 기준 1P 순이익' : ''})</td>
+              <td className="px-2 py-2 font-semibold" colSpan={10}>합계 ({shown.length}개{filter === '전체' ? ' = 3P 순이익 + 판매 기준 1P 순이익' : ''})</td>
               <td className={`px-2 text-right font-semibold tabular-nums ${tone(total)}`}>{won(total)}</td>
               <td colSpan={2} />
             </tr>
