@@ -15,12 +15,6 @@ import { downloadFormattedXlsx, type XlsxCol } from '@/lib/xlsxExport'
 import { unpackAdRows } from '@/lib/coupang/adRowsPack'
 import { extractPeriodFromFileName } from '@/lib/coupang/parsers/adCampaign'
 import { useConfirm } from '@/components/ui/useConfirm'
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
-  ScatterChart, Scatter, ZAxis, ReferenceLine,
-  ComposedChart, Bar, Cell,
-  BarChart, LabelList,
-} from 'recharts'
 import { useMarginStore } from '@/lib/coupang/store'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import {
@@ -32,21 +26,18 @@ import {
   buildActualPriceMapById,
   buildMarginRowMap,
   buildExposureMapByOptionId,
-  buildCampaignPairAnalysis,
-  buildDuplicateKeywordExportRows,
-  parseCampaignName,
   splitRowRevenue,
   isSearchPlacement,
-  NON_SEARCH_KEYWORD_TOKENS,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
-  type CampaignPairAnalysis,
   hasBidSample,
   bepCpcLabel,
 } from '@/lib/coupang/adAnalysis'
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
+import { buildWeeklyActions, campaignStatusOf, parseCampaignTargetKey, type CampaignActions } from '@/lib/coupang/weeklyActions'
+import { ProfitLine, StatusBoxes, WarningLine, WeeklyActionsSection, reflectMemoText } from './WeeklyPanel'
 
 type Mode = 'saved' | 'live'
 
@@ -95,24 +86,6 @@ function useSort<T extends Record<string, any>>(rows: T[], defaultKey: keyof T, 
     else { setKey(k); setDir('desc') }
   }
   return { sorted, key, dir, toggle }
-}
-
-// ── 목표 ROAS — prefix + 타입(AI|수동|스마트) 단위 키 ────────────
-// 분석 업로드가 갱신되어도 같은 prefix+타입이면 사용자가 입력한 목표값 유지.
-// `parseCampaignName` 은 'smart' 미지원이라 별도 정규식으로 4종 토큰 모두 매칭.
-const TARGET_KEY_RE = /^(.+)_(AI|수동|스마트|smart)_(.+)$/i
-
-function parseCampaignTargetKey(name: string): { key: string; kind: 'AI' | '수동' | '스마트' } | null {
-  const m = (name || '').trim().match(TARGET_KEY_RE) || (name || '').trim().match(/^(.+)_(AI|수동|스마트|smart)()$/i)
-  if (!m) return null
-  const prefix = m[1].trim()
-  const tok = m[2]
-  let kind: 'AI' | '수동' | '스마트'
-  if (/^ai$/i.test(tok)) kind = 'AI'
-  else if (tok === '수동') kind = '수동'
-  else kind = '스마트' // 'smart' or '스마트'
-  if (!prefix) return null
-  return { key: `${prefix}::${kind}`, kind }
 }
 
 // 셀 내 목표 ROAS 입력 — debounce 500ms + onBlur 즉시 flush
@@ -420,6 +393,47 @@ export default function AdAnalysisPage() {
     () => buildAdAnalysisView(filteredRows, masterAug as any, marginOff ? manualBepMap : undefined),
     [filteredRows, masterAug, marginOff, manualBepMap],
   )
+  // 주간 판정·상태 3칸·손익 줄은 채널 필터와 무관하게 전체(상품 필터만 적용) 기준 — 채널 필터는 아래 전체 캠페인 표 전용
+  const rowsAllCh = useMemo(
+    () => (sourceRows && aliasCampaignIds ? sourceRows.filter((r) => aliasCampaignIds.has(r.campaignId)) : sourceRows),
+    [sourceRows, aliasCampaignIds],
+  )
+  const viewAll = useMemo(
+    () => (chFilter === 'all' ? view : buildAdAnalysisView(rowsAllCh, masterAug as any, marginOff ? manualBepMap : undefined)),
+    [chFilter, view, rowsAllCh, masterAug, marginOff, manualBepMap],
+  )
+  const weeklyActions: CampaignActions[] = useMemo(() => {
+    if (!viewAll.loaded || hideBep) return []
+    return buildWeeklyActions(viewAll, {
+      bepMap: marginOff ? manualBepMap : buildBepMap(masterAug as any),
+      priceMap: buildActualPriceMapById(masterAug as any),
+      exposureMap: buildExposureMapByOptionId(masterAug as any),
+      marginOff,
+      targets,
+    })
+  }, [viewAll, hideBep, marginOff, manualBepMap, masterAug, targets])
+  // 쿠팡 반영 완료 — 운영 메모 자동 기록 + (BEP ROAS 바뀐 AI 캠페인이면) 적용값 저장
+  const [reflected, setReflected] = useState<Set<string>>(new Set())
+  const [notesReload, setNotesReload] = useState(0)
+  const reflectCampaign = async (a: CampaignActions) => {
+    const res = await fetch('/api/coupang-ad-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: reflectMemoText(a) }),
+    })
+    const j = await res.json().catch(() => null)
+    if (!res.ok || !j?.item) throw new Error(j?.error || `HTTP ${res.status}`)
+    if (a.bepChange && a.targetKey) setTargetForKey(a.targetKey, a.bepChange.next)
+    setReflected((prev) => new Set(prev).add(a.campaign.campaignId))
+    setNotesReload((n) => n + 1)
+  }
+  // 상태 3칸 캠페인명 클릭 → 전체 캠페인 표에서 그 행으로 스크롤 + 펼침
+  const pickCampaign = (id: string) => {
+    setChFilter('all')
+    setSelectedOptionId(null)
+    setOpenCampId(id)
+    setTimeout(() => document.getElementById(`aa-camp-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120)
+  }
 
   // 옵션 목록(수기 BEP 입력용) — raw 를 광고집행 옵션ID 로 group
   const optionList = useMemo(() => {
@@ -446,52 +460,12 @@ export default function AdAnalysisPage() {
   const marginOffBanner = marginOff ? (
     <div style={{ ...noticeBoxOrange, fontSize: 13 }}>
       마진마스터 없이 광고 지표만 표시 중 · ROAS는 쿠팡 표기 매출(14일 전환) 기준이라 무프/쿠폰·오가닉 미보정
-      {hideBep && <> · 아래 옵션별 <strong>BEP(%)</strong>를 입력하면 키워드 판정·추천입찰가가 표시됩니다</>}
+      {hideBep && <> · 아래 옵션별 <strong>BEP ROAS(%)</strong>를 입력하면 키워드 판정·추천입찰가가 표시됩니다</>}
     </div>
   ) : null
   const optionBepNode = marginOff ? (
     <OptionBepInputCard options={optionList} manualBep={manualBep} onChange={(id, v) => setManualBep((prev) => ({ ...prev, [id]: v }))} />
   ) : null
-
-  // 추이 차트 점 클릭 → 해당 시점 raw 광고 데이터로 view swap.
-  //   saved 모드 → store.rawAdCampaign 갱신 (수익 진단 mount 자동 로드와 동일 경로)
-  //   live 모드  → adAnalysisLive 갱신 (라이브 탭 유지하면서 데이터만 swap)
-  const handleTrendPointClick = async (a: any) => {
-    if (isGuest) return // 게스트는 저장분 로드 경로 비활성
-    if (!a?.id) { alert('이 분석은 ID가 없어 로드할 수 없습니다.'); return }
-    try {
-      const [itemRes, rawRes] = await Promise.all([
-        fetch(`/api/coupang-diagnoses?type=item&id=${a.id}`),
-        fetch(`/api/coupang-diagnoses?type=raw&id=${a.id}`),
-      ])
-      const target = await itemRes.json()
-      const raw = rawRes.ok ? await rawRes.json().catch(() => null) : null
-      const adRows = raw?.adRows?.length ? raw.adRows : target?.adRows
-      if (!adRows?.length) { alert('이 분석엔 raw 광고 데이터가 없어 로드할 수 없습니다.'); return }
-      const period = target?.periodStartDate && target?.periodEndDate ? {
-        startDate: target.periodStartDate,
-        endDate: target.periodEndDate,
-        days: target.periodDays || 7,
-      } : null
-      const meta = {
-        fileName: target?.adFileName || '저장된 분석',
-        uploadedAt: target?.createdAt || new Date().toISOString(),
-        rowCount: adRows.length,
-      }
-      if (mode === 'live') {
-        if (!period) { alert('이 분석엔 기간 정보가 없어 라이브 모드로 로드할 수 없습니다.'); return }
-        setAdAnalysisLive(adRows, meta, period)
-      } else {
-        setAdCampaign(adRows, meta, period)
-      }
-      // 열려있던 캠페인/옵션 필터 리셋
-      setOpenCampId(null)
-      setSelectedOptionId(null)
-    } catch (e) {
-      console.error('[ad-analysis] 추이 점 클릭 로드 실패:', e)
-      alert('해당 시점 데이터를 불러오지 못했습니다.')
-    }
-  }
 
   // 라이브 광고 엑셀 업로드 핸들러 — store 의 rawAdCampaign 안 건드림.
   async function handleLiveUpload(file: File) {
@@ -552,52 +526,62 @@ export default function AdAnalysisPage() {
     </>
   )
 
-  // ── 본문 (라이브·저장 공통) — 채널 필터 · KPI(전체/3P/1P) · 1P 박스 · 3P 섹션 ──
-  const renderBody = (openCampaign: ReturnType<typeof buildAdAnalysisView>['campaigns'][number] | null, showTrend: boolean) => (
+  // ── 본문 (라이브·저장 공통) — 경고 · 30일 손익 · 상태 3칸 · 할 일 · 전체 캠페인 표 · 운영 메모 ──
+  const renderBody = () => (
     <>
       {marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
         <div style={{ margin: '8px 0', padding: '8px 14px', borderRadius: 8, border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', fontSize: 13 }}>
           ⚠ 나무_마스터 연결 실패 — 옛 저장본(저장일 {String(marginMeta.uploadedAt || '').slice(0, 10) || '알 수 없음'})으로 계산 중
         </div>
       )}
-      <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
       {onePView.loaded && !onePView.hasMargin && (
-        <div style={{ ...errorBox, fontSize: 13 }}>1P 마진 데이터 없음 — 나무_마스터 연결 확인 (1P 캠페인 손익·필수 ROAS 계산 불가)</div>
+        <div style={{ ...errorBox, fontSize: 13 }}>1P 마진 데이터 없음 — 나무_마스터 연결 확인 (1P 캠페인 손익·BEP ROAS 계산 불가)</div>
       )}
-      {onePView.unlinked.length > 0 && (
-        <div style={{ ...errorBox, fontSize: 12 }}>
-          ⚠ 1P 미연결 {onePView.unlinked.length}개 옵션 (광고비 {Math.round(onePView.unlinked.reduce((s, u) => s + u.adCostVat, 0)).toLocaleString('ko-KR')}원) — 나무_마스터 1P 행에 없는 옵션: {onePView.unlinked.slice(0, 5).map((u) => u.name || u.optionId).join(' · ')}
-        </div>
-      )}
-      {chFilter === '1P' && !onePView.loaded && <div style={{ ...noticeBoxOrange, padding: 12, fontSize: 13, margin: '12px 0' }}>이 광고 데이터에는 1P(판매방식 Retail) 광고 행이 없습니다.</div>}
       {marginOffBanner}
       {optionBepNode}
-      <KpiSection view={view} hideBep={hideBep} />
-      {(<>
-        <HintBanner />
-        <PairWarnings view={view} master={masterAug as any} />
-        {showTrend && <WeeklyTrendChart onPointClick={handleTrendPointClick} />}
-        <CampaignScatterChart view={view} onCampaignClick={toggleCampaign} hideBep={hideBep} />
-        {!marginOff && <KeywordParetoChart view={view} master={masterAug as any} />}
-        <PairRoasComparisonChart view={view} />
-        <HistoryNotesSection />
-        <CampaignSection
-          view={view}
-          master={masterAug as any}
-          marginOff={marginOff}
-          hideBep={hideBep}
-          manualBep={manualBepMap}
-          openCampId={openCampId}
-          onOpen={toggleCampaign}
-          selectedOptionId={selectedOptionId}
-          onSelectOption={openCampaignAndOption}
-          targets={targets}
-          onTargetChange={setTargetForKey}
-          renderDetail={(c) => c.type === 'manual'
-            ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-            : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />}
-        />
-      </>)}
+      {/* 2) 경고 1줄 — 1P 미연결 · 마스터 미등록 옵션 · BEP ROAS 없는 캠페인 */}
+      <WarningLine
+        unlinked1P={onePView.unlinked}
+        unmatched={hideBep ? [] : viewAll.unmatched.list ?? []}
+        noBep={hideBep ? [] : viewAll.campaigns.filter((c) => campaignStatusOf(c) == null)}
+      />
+      {!hideBep && viewAll.loaded && (
+        <>
+          {/* 3) 30일 손익 1줄 */}
+          <ProfitLine view={viewAll} days={sourcePeriod?.days ?? null} />
+          {/* 4) 지난주 대비 · 지난주 조정 결과 — 2/2 에서 추가 */}
+          {/* 5) 캠페인 상태 3칸 */}
+          <StatusBoxes campaigns={viewAll.campaigns} onPick={pickCampaign} />
+          {/* 6) 요약 카드 4개 + 7) 이번 주 할 일 */}
+          <WeeklyActionsSection
+            actions={weeklyActions}
+            reflected={reflected}
+            onReflect={reflectCampaign}
+            onSetApplied={setTargetForKey}
+          />
+        </>
+      )}
+      {/* 8) 전체 캠페인 표 — 채널 필터는 이 표 전용 */}
+      <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
+      {chFilter === '1P' && !onePView.loaded && <div style={{ ...noticeBoxOrange, padding: 12, fontSize: 13, margin: '12px 0' }}>이 광고 데이터에는 1P(판매방식 Retail) 광고 행이 없습니다.</div>}
+      <CampaignSection
+        view={view}
+        master={masterAug as any}
+        marginOff={marginOff}
+        hideBep={hideBep}
+        manualBep={manualBepMap}
+        openCampId={openCampId}
+        onOpen={toggleCampaign}
+        selectedOptionId={selectedOptionId}
+        onSelectOption={openCampaignAndOption}
+        targets={targets}
+        onTargetChange={setTargetForKey}
+        renderDetail={(c) => c.type === 'manual'
+          ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+          : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />}
+      />
+      {/* 9) 운영 메모 (접힌 상태) */}
+      <HistoryNotesSection reloadKey={notesReload} />
     </>
   )
 
@@ -613,7 +597,6 @@ export default function AdAnalysisPage() {
       )
     }
     // 라이브 데이터 있음 → 정상 view
-    const openCampaign = openCampId ? view.campaigns.find((c) => c.campaignId === openCampId) || null : null
     return (
       <div style={{
         fontFamily: 'Pretendard, -apple-system, sans-serif',
@@ -628,7 +611,7 @@ export default function AdAnalysisPage() {
         />
         {uploadError && <div style={errorBox}>{uploadError}</div>}
         {/* 게스트: 저장 히스토리 기반 추세차트 숨김(회사 저장데이터) */}
-        {renderBody(openCampaign, !isGuest)}
+        {renderBody()}
       </div>
     )
   }
@@ -656,8 +639,6 @@ export default function AdAnalysisPage() {
     )
   }
 
-  const openCampaign = openCampId ? view.campaigns.find((c) => c.campaignId === openCampId) || null : null
-
   return (
     <div style={{
       fontFamily: 'Pretendard, -apple-system, sans-serif',
@@ -665,7 +646,7 @@ export default function AdAnalysisPage() {
     }}>
       <Style />
       {headerNode}
-      {renderBody(openCampaign, true)}
+      {renderBody()}
     </div>
   )
 }
@@ -844,7 +825,7 @@ function OptionBepInputCard({ options, manualBep, onChange }: {
     <div className="aa-section">
       <div className="aa-section-header">
         <div>
-          <div className="aa-section-title">옵션별 BEP 입력 (마진마스터 대체)</div>
+          <div className="aa-section-title">옵션별 BEP ROAS 입력 (마진마스터 대체)</div>
           <div className="aa-section-desc">광고집행 옵션ID 별 손익분기 ROAS(%)를 입력하면 키워드 판정·추천입찰가가 계산됩니다 · 입력 {entered}/{options.length}</div>
         </div>
       </div>
@@ -889,856 +870,6 @@ function OptionBepInputCard({ options, manualBep, onChange }: {
   )
 }
 
-// ── KPI ───────────────────────────────────────────────────────
-function KpiSection({ view, hideBep = false }: { view: ReturnType<typeof buildAdAnalysisView>; hideBep?: boolean }) {
-  const roasUnder = !hideBep && view.avgRoasPct != null && view.avgBepPct != null && view.avgRoasPct < view.avgBepPct
-  const u = view.unmatched
-  return (
-    <>
-      <div className="aa-kpi-grid">
-        <KpiCard label="광고비 (+VAT)" value={fmtMan(view.totalAdCostVat)} sub={`캠페인 ${view.campaignCount}개`} />
-        <KpiCard label="광고 매출" value={fmtMan(view.totalRevenue)} sub={hideBep ? '쿠팡 표기 매출(14일 전환)' : '광고 판매수 × 실판매가'} />
-        <KpiCard
-          label="평균 ROAS (광고센터 기준)"
-          value={fmtRoas(view.avgRoasPct)}
-          valueClass={roasUnder ? 'text-bad' : undefined}
-          sub={hideBep ? '쿠팡표기 기준' : (view.avgBepPct != null ? `BEP 평균 ${Math.round(view.avgBepPct)}% ${roasUnder ? '미달' : '도달'}` : 'BEP 매칭 없음')}
-        />
-        <KpiCard
-          label="광고 판매수 (1P = 봉)"
-          value={`${fmtNum(view.totalOrders)}`}
-          sub={view.avgUnitPrice ? `평균 단가 ${fmtNum(view.avgUnitPrice)}원` : ''}
-        />
-      </div>
-      {!hideBep && u.adCount > 0 && (
-        <div style={{
-          margin: '8px 0 16px', padding: '8px 12px',
-          background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6,
-          fontSize: 12, color: '#92400E',
-        }}>
-          ⚠️ 마진마스터 미등록 옵션 <strong>{u.adCount}개</strong>의 광고비{' '}
-          <strong>{fmtMan(u.adCostVat)}원</strong>이 매출/주문 KPI 및 표 산출에서 제외됨
-          (실판매가 매칭 불가)
-        </div>
-      )}
-    </>
-  )
-}
-
-function KpiCard({ label, value, sub, valueClass }: { label: React.ReactNode; value: string; sub?: string; valueClass?: string }) {
-  return (
-    <div className="aa-kpi-card">
-      <div className="aa-kpi-label">{label}</div>
-      <div className={`aa-kpi-value ${valueClass || ''}`}>{value}</div>
-      {sub && <div className="aa-kpi-sub">{sub}</div>}
-    </div>
-  )
-}
-
-function HintBanner() {
-  return (
-    <div className="aa-hint-banner">
-      💡 캠페인을 클릭하면 키워드 분석(AI) 또는 입찰가 점검(수동)이 펼쳐집니다. AI 캠페인의 "수동 이동 후보" 키워드 옆에 추천 입찰가가 표시됩니다.
-    </div>
-  )
-}
-
-// ── AI/수동 페어 경고 카드 ─────────────────────────────────────
-// 캠페인 네이밍 [브랜드]_상품명_(AI|수동)_옵션ID 기준 prefix 매칭.
-// 1) 중복 키워드 (자기 잠식) · 2) 짝 없는 캠페인 · 3) 옵션 셋 불일치. 3개 다 0건이면 영역 미노출.
-type PairKind = 'dup' | 'unpair' | 'mismatch'
-function PairWarnings({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
-  const [open, setOpen] = useState<PairKind | null>(null)
-  const analysis: CampaignPairAnalysis = useMemo(() => buildCampaignPairAnalysis(view), [view])
-  const dupCount = analysis.duplicateKeywords.length
-  const unpairCount = analysis.unpairedCampaigns.length
-  const mismatchCount = analysis.optionMismatchPairs.length
-  if (dupCount === 0 && unpairCount === 0 && mismatchCount === 0) return null
-
-  const toggle = (k: PairKind) => setOpen((prev) => (prev === k ? null : k))
-
-  function downloadDupXlsx() {
-    const rows = buildDuplicateKeywordExportRows(analysis, view, master)
-    if (rows.length === 0) {
-      alert('내보낼 중복 키워드 데이터가 없습니다.')
-      return
-    }
-    const cols: XlsxCol<(typeof rows)[number]>[] = [
-      { header: '수동 캠페인명', kind: 'text', get: (r) => r.manualCampaignName },
-      { header: '키워드', kind: 'text', get: (r) => r.keyword },
-      { header: '제안 입찰가 (VAT 별도)', kind: 'won', get: (r) => (r.recommendedBidVatExcl != null ? ceilToTen(r.recommendedBidVatExcl) : null) },
-      { header: 'AI 캠페인명', kind: 'text', get: (r) => r.aiCampaignName },
-      { header: '광고비 (VAT 포함)', kind: 'won', get: (r) => r.adCostVat },
-      { header: '광고 매출', kind: 'won', get: (r) => r.revenue },
-      { header: 'ROAS', kind: 'roas', get: (r) => r.roasPct },
-      { header: 'BEP', kind: 'roas', get: (r) => r.bepPct },
-      { header: '노출', kind: 'count', get: (r) => r.impressions },
-      { header: '클릭', kind: 'count', get: (r) => r.clicks },
-      { header: '전환율', kind: 'pct', get: (r) => r.cvrPct },
-    ]
-    const d = new Date()
-    const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-    void downloadFormattedXlsx(cols, rows, `중복키워드_AI수동_${ymd}.xlsx`, 'AI수동 중복키워드')
-  }
-
-  const Card = ({ kind, count, color, title, desc }: { kind: PairKind; count: number; color: string; title: string; desc: string }) => {
-    if (count === 0) return null
-    const active = open === kind
-    return (
-      <button
-        onClick={() => toggle(kind)}
-        style={{
-          textAlign: 'left', background: '#FFFFFF',
-          border: `1px solid ${active ? color : '#E2E8F0'}`,
-          borderLeft: `4px solid ${color}`,
-          borderRadius: 8, padding: '12px 14px', cursor: 'pointer',
-          boxShadow: active ? `0 0 0 2px ${color}33` : 'none',
-          fontFamily: 'inherit',
-        }}
-      >
-        <div style={{ fontSize: 12, color: '#64748B', marginBottom: 4 }}>{title}</div>
-        <div style={{ fontSize: 20, fontWeight: 700, color }}>{count}건</div>
-        <div style={{ fontSize: 11, color: '#94A3B8', marginTop: 2 }}>{desc} {active ? '▲ 접기' : '▼ 펼치기'}</div>
-      </button>
-    )
-  }
-
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-        <Card kind="dup" count={dupCount} color="#EF4444" title="🔴 AI/수동 중복 키워드" desc="자기 잠식 — AI에서 제외 + 수동에 등록" />
-        <Card kind="unpair" count={unpairCount} color="#F59E0B" title="🟡 짝 없는 캠페인" desc="AI만 또는 수동만 존재" />
-        <Card kind="mismatch" count={mismatchCount} color="#FB923C" title="🟠 옵션 셋 불일치" desc="페어 옵션ID 다름" />
-      </div>
-      {open === 'dup' && (
-        <div style={pairDetailBox}>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-            <button
-              className="aa-btn btn-sm"
-              onClick={downloadDupXlsx}
-              style={{ fontSize: 11, padding: '4px 10px' }}
-              title="중복 키워드 페어 합산 데이터를 엑셀로 다운로드"
-            >📥 엑셀 다운로드</button>
-          </div>
-          {analysis.duplicateKeywords.map((d) => (
-            <div key={d.prefix} style={pairDetailRow}>
-              <div style={pairDetailHead}>
-                <strong>{d.prefix}</strong>
-                <span style={{ fontSize: 11, color: '#94A3B8' }}>옵션 {d.optionIds.join(' / ') || '-'}</span>
-              </div>
-              <div style={{ fontSize: 11, color: '#64748B', marginBottom: 4 }}>
-                AI: <span style={{ color: '#3B82F6' }}>{d.aiCampaignName}</span> · 수동: <span style={{ color: '#A855F7' }}>{d.manualCampaignName}</span>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                {d.keywords.map((kw) => (
-                  <span key={kw} style={pairKwChip}>{kw}</span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {open === 'unpair' && (
-        <div style={pairDetailBox}>
-          {analysis.unpairedCampaigns.map((u) => (
-            <div key={`${u.prefix}::${u.existingType}`} style={pairDetailRow}>
-              <div style={pairDetailHead}>
-                <strong>{u.prefix}</strong>
-                <span style={{ fontSize: 11 }}>
-                  {u.existingType === 'ai'
-                    ? <span className="aa-badge badge-ai">🤖 AI만 존재</span>
-                    : <span className="aa-badge badge-manual">🎯 수동만 존재</span>}
-                </span>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748B' }}>{u.campaignName}</div>
-            </div>
-          ))}
-        </div>
-      )}
-      {open === 'mismatch' && (
-        <div style={pairDetailBox}>
-          {analysis.optionMismatchPairs.map((m) => (
-            <div key={m.prefix} style={pairDetailRow}>
-              <div style={pairDetailHead}><strong>{m.prefix}</strong></div>
-              <div style={{ fontSize: 12, color: '#64748B', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                <span>🤖 AI: <code style={pairOptCode}>{m.aiOptionIds.join(' / ') || '-'}</code></span>
-                <span>🎯 수동: <code style={pairOptCode}>{m.manualOptionIds.join(' / ') || '-'}</code></span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-const pairDetailBox: React.CSSProperties = {
-  marginTop: 8, padding: '10px 12px', background: '#F8FAFC',
-  border: '1px solid #E2E8F0', borderRadius: 6, maxHeight: 320, overflow: 'auto',
-}
-const pairDetailRow: React.CSSProperties = { padding: '8px 0', borderBottom: '1px solid #E2E8F0' }
-const pairDetailHead: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, fontSize: 13 }
-const pairKwChip: React.CSSProperties = {
-  display: 'inline-block', padding: '2px 8px', background: '#FEE2E2', color: '#991B1B',
-  borderRadius: 4, fontSize: 11.5, fontFamily: 'JetBrains Mono, monospace',
-}
-const pairOptCode: React.CSSProperties = { background: '#FFFFFF', padding: '1px 6px', borderRadius: 3, fontSize: 11.5 }
-
-// ── 주간 광고 추이 (수익 진단 TrendChartSection 패턴 차용) ─────
-// 데이터 소스: GET /api/coupang-diagnoses?type=list — 수익 진단에서 저장된 분석 히스토리 그대로 재사용.
-// 광고 필드만 추출 (광고매출/광고비/ROAS) — 매출/순이익/광고의존도는 의도적으로 빠짐.
-function formatAdWeekLabel(weekStart: string): string {
-  if (!weekStart) return ''
-  const parts = weekStart.split('-')
-  if (parts.length !== 3) return weekStart
-  return `${parseInt(parts[1])}/${parseInt(parts[2])}주`
-}
-function formatAdMonthLabel(monthKey: string): string {
-  if (!monthKey) return ''
-  const [yyyy, mm] = monthKey.split('-')
-  return `${yyyy.slice(2)}.${mm}`
-}
-
-// 큰 hit-area 점 — 수익 진단 BigHitDot 와 동일. 14px 투명 hitbox + 3px 표시 점.
-const AdBigHitDot = (props: any) => {
-  const { cx, cy, stroke, onPointClick, payload } = props
-  if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null
-  const color = stroke || '#666'
-  const handleClick = (e: any) => {
-    if (onPointClick && payload?._analysis) onPointClick(payload._analysis)
-    try { (e?.currentTarget as any)?.blur?.() } catch {}
-    try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
-  }
-  return (
-    <g tabIndex={-1} style={{ outline: 'none' }}>
-      <circle
-        cx={cx} cy={cy} r={14}
-        fill="transparent"
-        style={{ cursor: onPointClick ? 'pointer' : 'default', outline: 'none' }}
-        tabIndex={-1}
-        onClick={onPointClick ? handleClick : undefined}
-      />
-      <circle cx={cx} cy={cy} r={3} fill="#fff" stroke={color} strokeWidth={2} style={{ outline: 'none' }} tabIndex={-1} />
-    </g>
-  )
-}
-
-// 컴팩트 툴팁 — 광고매출 / 광고비 / ROAS 순서. ROAS 는 % 단위, 나머지는 만원.
-const AdCompactTrendTooltip = ({ active, payload, label }: any) => {
-  if (!active || !payload?.length) return null
-  const order: Record<string, number> = { '광고매출': 1, '광고비': 2, 'ROAS': 3 }
-  const items = [...payload]
-    .filter((p) => p.dataKey in order)
-    .sort((a, b) => (order[a.dataKey] ?? 9) - (order[b.dataKey] ?? 9))
-  return (
-    <div className="rounded border border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm px-2 py-1.5 text-[11px]">
-      <div className="font-medium text-gray-700 mb-0.5">{label}</div>
-      {items.map((p: any) => {
-        const v = p.value ?? 0
-        const isRoas = p.dataKey === 'ROAS'
-        return (
-          <div key={p.dataKey} className="flex items-center gap-1.5 leading-tight">
-            <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: p.color }} />
-            <span className="text-gray-500 w-12">{p.dataKey}</span>
-            <span className="font-mono text-gray-900">{v.toLocaleString()}{isRoas ? '%' : '만원'}</span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function WeeklyTrendChart({ onPointClick }: { onPointClick?: (a: any) => void }) {
-  const [analyses, setAnalyses] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [chartMode, setChartMode] = useState<'weekly' | 'monthly'>('weekly')
-  const [expanded, setExpanded] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true
-    const v = window.localStorage.getItem('aa-chart-1-expanded')
-    return v == null ? true : v === '1'
-  })
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('aa-chart-1-expanded', expanded ? '1' : '0')
-    }
-  }, [expanded])
-
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const res = await fetch('/api/coupang-diagnoses?type=list')
-        const j = await res.json()
-        if (!cancelled && j?.diagnoses) setAnalyses(j.diagnoses)
-      } catch (e) {
-        console.warn('주간 광고 추이 로드 실패:', e)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
-
-  const mapPoint = (a: any, defaultDays: number, key: string, labelFn: (k: string) => string) => {
-    const s = a.summary || {}
-    const days = a.periodDays || defaultDays
-    const scale = defaultDays / Math.max(days, 1)
-    // 신규 저장본은 self only 필드, 옛 저장본은 기존 필드로 fallback (NG 잔존).
-    const adRevenue = s.totalAdRevenueSelf ?? s.totalAdRevenue ?? 0
-    const roas = s.adRoasAttrSelf ?? s.adRoasAttr
-    return {
-      key: a[key],
-      label: labelFn(a[key]),
-      광고매출: Math.round((adRevenue * scale) / 10000),
-      광고비: Math.round(((s.totalAdCost || 0) * scale) / 10000),
-      ROAS: roas ? Math.round(roas) : 0,
-      _analysis: a,
-    }
-  }
-
-  const weeklyData = useMemo(() => analyses
-    .filter((a) => a.includeInTrend && a.trendType === 'weekly' && a.weekKey && a._hasRaw)
-    .sort((a, b) => (a.weekKey || '').localeCompare(b.weekKey || ''))
-    .map((a) => mapPoint(a, 7, 'weekKey', formatAdWeekLabel)), [analyses])
-
-  const monthlyData = useMemo(() => analyses
-    .filter((a) => a.includeInTrend && (a.trendType === 'monthly' || (!a.trendType && a.monthKey)) && a.monthKey && a._hasRaw)
-    .sort((a, b) => (a.monthKey || '').localeCompare(b.monthKey || ''))
-    .map((a) => mapPoint(a, 30, 'monthKey', formatAdMonthLabel)), [analyses])
-
-  const trendData = chartMode === 'weekly' ? weeklyData : monthlyData
-  const periodLabel = chartMode === 'weekly' ? '주' : '월'
-
-  // recharts activeDot onClick 헬퍼 (수익 진단과 동일 패턴)
-  const makeActiveDotClick = () => onPointClick ? {
-    r: 10, cursor: 'pointer' as const,
-    onClick: (_: any, ev: any) => {
-      const idx = ev?.index
-      if (idx != null && trendData[idx]?._analysis) onPointClick(trendData[idx]._analysis)
-      try { (ev?.currentTarget as any)?.blur?.() } catch {}
-      try { (document.activeElement as HTMLElement | null)?.blur?.() } catch {}
-    },
-  } : { r: 6 }
-
-  return (
-    <div className="aa-section" style={{ marginBottom: 16 }}>
-      <div className="aa-section-header">
-        <div>
-          <div className="aa-section-title">📈 광고 추이</div>
-          <div className="aa-section-desc">
-            광고매출 / 광고비 / ROAS · 저장된 분석 히스토리 기준 ({chartMode === 'weekly' ? '주' : '월'} 환산)
-            {onPointClick && <span style={{ marginLeft: 8, color: '#EA580C' }}>· 점 클릭 시 해당 시점 데이터로 분석</span>}
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div style={{ display: 'flex', borderRadius: 6, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
-            <button
-              onClick={() => setChartMode('weekly')}
-              className="aa-btn btn-sm"
-              style={{
-                border: 'none', borderRadius: 0,
-                background: chartMode === 'weekly' ? '#1F2937' : '#FFFFFF',
-                color: chartMode === 'weekly' ? '#FFFFFF' : '#475569',
-                fontSize: 12,
-              }}
-            >주별 ({weeklyData.length})</button>
-            <button
-              onClick={() => setChartMode('monthly')}
-              className="aa-btn btn-sm"
-              style={{
-                border: 'none', borderRadius: 0, borderLeft: '1px solid #E2E8F0',
-                background: chartMode === 'monthly' ? '#1F2937' : '#FFFFFF',
-                color: chartMode === 'monthly' ? '#FFFFFF' : '#475569',
-                fontSize: 12,
-              }}
-            >월별 ({monthlyData.length})</button>
-          </div>
-          <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
-        </div>
-      </div>
-      {expanded && (
-        <div className="aa-section-body">
-          {loading ? (
-            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>저장된 분석 히스토리 로드 중…</div>
-          ) : trendData.length < 2 ? (
-            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>
-              📈 {periodLabel}별 추이는 2{periodLabel} 이상 데이터가 누적되면 표시됩니다.
-              <div style={{ fontSize: 11, color: '#CBD5E1', marginTop: 4 }}>현재 {trendData.length}{periodLabel} 데이터 — 수익 진단 페이지에서 분석 저장 시 자동 누적</div>
-            </div>
-          ) : (
-            <div
-              tabIndex={-1}
-              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
-              style={{ outline: 'none' }}
-            >
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={trendData} margin={{ top: 8, right: 16, bottom: 4, left: 0 }} tabIndex={-1} style={{ outline: 'none' }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-                <YAxis yAxisId="left" tick={{ fontSize: 11 }} tickFormatter={(v) => v < 0 ? '' : `${v.toLocaleString()}만`} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                <Tooltip
-                  content={<AdCompactTrendTooltip />}
-                  offset={20}
-                  cursor={{ stroke: '#f97316', strokeWidth: 24, strokeOpacity: 0.10 }}
-                />
-                <Legend />
-                <Line yAxisId="left" type="monotone" dataKey="광고매출" stroke="#2563eb" strokeWidth={2}
-                  dot={<AdBigHitDot onPointClick={onPointClick} />}
-                  activeDot={makeActiveDotClick()}
-                />
-                <Line yAxisId="left" type="monotone" dataKey="광고비" stroke="#dc2626" strokeWidth={2}
-                  dot={<AdBigHitDot onPointClick={onPointClick} />}
-                  activeDot={makeActiveDotClick()}
-                />
-                <Line yAxisId="right" type="monotone" dataKey="ROAS" stroke="#059669" strokeWidth={2}
-                  dot={<AdBigHitDot onPointClick={onPointClick} />}
-                  activeDot={makeActiveDotClick()}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── 캠페인별 광고비 × ROAS 산점도 ──────────────────────────────
-// view.campaigns 그대로 사용 — 신규 fetch 없음. 점 클릭 → 해당 캠페인 expand 토글.
-// BEP 평균: 광고비 가중. AI/수동/미분류 3개 시리즈로 분리.
-function CampaignScatterChart({
-  view,
-  onCampaignClick,
-  hideBep = false,
-}: {
-  view: ReturnType<typeof buildAdAnalysisView>
-  onCampaignClick: (campaignId: string) => void
-  hideBep?: boolean
-}) {
-  const [expanded, setExpanded] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true
-    const v = window.localStorage.getItem('aa-chart-2-expanded')
-    return v == null ? true : v === '1'
-  })
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('aa-chart-2-expanded', expanded ? '1' : '0')
-    }
-  }, [expanded])
-
-  // 점 데이터 — 광고비 0 또는 ROAS 미산정 캠페인 제외.
-  const { aiPoints, manualPoints, unknownPoints, avgBepCost } = useMemo(() => {
-    const ai: any[] = []
-    const manual: any[] = []
-    const unknown: any[] = []
-    let bepNum = 0, bepDen = 0
-    for (const c of view.campaigns) {
-      if (c.adCostVat > 0 && c.bepPct != null) {
-        bepNum += c.adCostVat * c.bepPct
-        bepDen += c.adCostVat
-      }
-      if (c.adCostVat <= 0 || c.roasPct == null) continue
-      const parsed = parseCampaignName(c.campaignName)
-      const pt = {
-        x: c.adCostVat,
-        y: c.roasPct,
-        z: Math.max(c.revenue, 1),  // ZAxis min 안전: 매출 0 도 점 표시
-        prefix: parsed.prefix || c.campaignName,
-        campaignName: c.campaignName,
-        campaignId: c.campaignId,
-        type: c.type,
-      }
-      if (c.type === 'ai') ai.push(pt)
-      else if (c.type === 'manual') manual.push(pt)
-      else unknown.push(pt)
-    }
-    return {
-      aiPoints: ai,
-      manualPoints: manual,
-      unknownPoints: unknown,
-      avgBepCost: bepDen > 0 ? bepNum / bepDen : null,
-    }
-  }, [view.campaigns])
-
-  const totalPoints = aiPoints.length + manualPoints.length + unknownPoints.length
-
-  const ScatterTooltip = ({ active, payload }: any) => {
-    if (!active || !payload?.length) return null
-    const p = payload[0]?.payload
-    if (!p) return null
-    const typeBadge =
-      p.type === 'ai' ? <span style={{ color: '#2563EB' }}>🤖 AI</span> :
-      p.type === 'manual' ? <span style={{ color: '#9333EA' }}>🎯 수동</span> :
-      <span style={{ color: '#94A3B8' }}>미분류</span>
-    return (
-      <div style={{
-        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
-        borderRadius: 6, padding: '6px 10px', fontSize: 11.5,
-        boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
-      }}>
-        <div style={{ fontWeight: 600, marginBottom: 2 }}>{typeBadge} {p.prefix}</div>
-        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5 }}>
-          <div>광고비: {Math.round(p.x).toLocaleString('ko-KR')}원</div>
-          <div>ROAS: {Math.round(p.y).toLocaleString('ko-KR')}%</div>
-          <div>광고매출: {Math.round(p.z).toLocaleString('ko-KR')}원</div>
-        </div>
-      </div>
-    )
-  }
-
-  const handleDotClick = (data: any) => {
-    if (data?.campaignId) onCampaignClick(data.campaignId)
-  }
-
-  return (
-    <div className="aa-section" style={{ marginBottom: 16 }}>
-      <div className="aa-section-header">
-        <div>
-          <div className="aa-section-title">🎯 캠페인별 광고비 × ROAS</div>
-          <div className="aa-section-desc">
-            점 크기 = 광고매출 · 점 클릭 시 해당 캠페인 펼침
-            {!hideBep && avgBepCost != null && <span style={{ marginLeft: 8, color: '#64748B' }}>· BEP 평균 {Math.round(avgBepCost)}% (광고비 가중)</span>}
-          </div>
-        </div>
-        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
-      </div>
-      {expanded && (
-        <div className="aa-section-body">
-          {totalPoints === 0 ? (
-            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 캠페인 데이터가 없습니다.</div>
-          ) : (
-            <div
-              tabIndex={-1}
-              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
-              style={{ outline: 'none' }}
-            >
-              <ResponsiveContainer width="100%" height={320}>
-                <ScatterChart margin={{ top: 12, right: 24, bottom: 12, left: 8 }} tabIndex={-1} style={{ outline: 'none' }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                  <XAxis
-                    type="number" dataKey="x" name="광고비"
-                    tickFormatter={(v) => `${Math.round((v as number) / 10000).toLocaleString()}만`}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis
-                    type="number" dataKey="y" name="ROAS"
-                    tickFormatter={(v) => `${v}%`}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <ZAxis type="number" dataKey="z" range={[60, 600]} name="광고매출" />
-                  <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<ScatterTooltip />} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {!hideBep && avgBepCost != null && (
-                    <ReferenceLine
-                      y={avgBepCost} yAxisId={0}
-                      stroke="#94A3B8" strokeDasharray="4 4"
-                      label={{ value: `BEP 평균 ${Math.round(avgBepCost)}%`, position: 'insideTopRight', fill: '#64748B', fontSize: 11 }}
-                    />
-                  )}
-                  <Scatter
-                    name="🤖 AI" data={aiPoints}
-                    fill="rgba(37,99,235,0.5)" stroke="#2563EB" strokeWidth={1.5}
-                    onClick={handleDotClick}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <Scatter
-                    name="🎯 수동" data={manualPoints}
-                    fill="rgba(147,51,234,0.5)" stroke="#9333EA" strokeWidth={1.5}
-                    onClick={handleDotClick}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  {unknownPoints.length > 0 && (
-                    <Scatter
-                      name="미분류" data={unknownPoints}
-                      fill="rgba(148,163,184,0.5)" stroke="#94A3B8" strokeWidth={1.5}
-                      onClick={handleDotClick}
-                      style={{ cursor: 'pointer' }}
-                    />
-                  )}
-                </ScatterChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── 키워드별 누적 광고비 파레토 (Top 30) ───────────────────────
-// view.campaigns 모든 row 의 keyword 광고비 합산 → Top 30 + 누적 비율 (색구분·80% 라인용).
-// 툴팁은 키워드 / 광고비 / ROAS. ROAS = self 매출 / 광고비(VAT 포함) × 100, KPI 카드와 동일 정의.
-// NON_SEARCH_KEYWORD_TOKENS 제외 (검색 키워드만).
-function KeywordParetoChart({ view, master }: { view: ReturnType<typeof buildAdAnalysisView>; master: any }) {
-  const [expanded, setExpanded] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true
-    const v = window.localStorage.getItem('aa-chart-3-expanded')
-    return v == null ? true : v === '1'
-  })
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('aa-chart-3-expanded', expanded ? '1' : '0')
-    }
-  }, [expanded])
-
-  const data = useMemo(() => {
-    const priceMap = buildActualPriceMapById(master)
-    const exposureMap = buildExposureMapByOptionId(master)
-    const agg = new Map<string, { adCostVat: number; revenue: number }>()
-    for (const c of view.campaigns) {
-      for (const r of c.rows) {
-        const kw = (r.keyword || '').trim()
-        if (NON_SEARCH_KEYWORD_TOKENS.has(kw)) continue
-        const cost = (r.adCost || 0) * 1.1  // VAT 포함
-        if (cost <= 0) continue
-        const rev = splitRowRevenue(r, priceMap, exposureMap).self
-        const prev = agg.get(kw) ?? { adCostVat: 0, revenue: 0 }
-        prev.adCostVat += cost
-        prev.revenue += rev
-        agg.set(kw, prev)
-      }
-    }
-    const arr = Array.from(agg.entries())
-      .map(([keyword, v]) => ({ keyword, adCostVat: v.adCostVat, revenue: v.revenue }))
-      .sort((a, b) => b.adCostVat - a.adCostVat)
-      .slice(0, 30)
-    const total = arr.reduce((s, x) => s + x.adCostVat, 0)
-    let cum = 0
-    return arr.map((x) => {
-      cum += x.adCostVat
-      const cumPct = total > 0 ? (cum / total) * 100 : 0
-      const roasPct = x.adCostVat > 0 && x.revenue > 0 ? (x.revenue / (x.adCostVat / 1.1)) * 100 : null // 광고센터 기준
-      // 라벨 truncate — 10자 초과 시 ...
-      const labelShort = x.keyword.length > 10 ? `${x.keyword.slice(0, 10)}…` : x.keyword
-      return {
-        keyword: x.keyword,
-        labelShort,
-        adCostVat: Math.round(x.adCostVat),
-        cumPct: Math.round(cumPct * 10) / 10,
-        roasPct,
-      }
-    })
-  }, [view.campaigns, master])
-
-  const ParetoTooltip = ({ active, payload }: any) => {
-    if (!active || !payload?.length) return null
-    const p = payload[0]?.payload
-    if (!p) return null
-    return (
-      <div style={{
-        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
-        borderRadius: 6, padding: '6px 10px', fontSize: 11.5,
-        boxShadow: '0 2px 6px rgba(0,0,0,0.05)',
-      }}>
-        <div style={{ fontWeight: 600, marginBottom: 2 }}>{p.keyword}</div>
-        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.5 }}>
-          <div>광고비: {p.adCostVat.toLocaleString('ko-KR')}원</div>
-          <div>ROAS: {p.roasPct != null ? `${Math.round(p.roasPct).toLocaleString('ko-KR')}%` : '—'}</div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="aa-section" style={{ marginBottom: 16 }}>
-      <div className="aa-section-header">
-        <div>
-          <div className="aa-section-title">📊 키워드별 누적 광고비 파레토 (Top 30)</div>
-          <div className="aa-section-desc">80/20 법칙 — 광고비 80% 차지하는 핵심 키워드 식별 · 빨강 = 80% 이하 누적</div>
-        </div>
-        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
-      </div>
-      {expanded && (
-        <div className="aa-section-body">
-          {data.length === 0 ? (
-            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 키워드 데이터가 없습니다.</div>
-          ) : (
-            <div
-              tabIndex={-1}
-              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
-              style={{ outline: 'none' }}
-            >
-              <ResponsiveContainer width="100%" height={340}>
-                <ComposedChart data={data} margin={{ top: 12, right: 24, bottom: 40, left: 8 }} tabIndex={-1} style={{ outline: 'none' }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                  <XAxis
-                    dataKey="labelShort"
-                    angle={-45}
-                    textAnchor="end"
-                    interval={0}
-                    height={60}
-                    tick={{ fontSize: 11 }}
-                  />
-                  <YAxis
-                    yAxisId="left"
-                    tick={{ fontSize: 11 }}
-                    tickFormatter={(v) => `${Math.round((v as number) / 10000).toLocaleString()}만`}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    domain={[0, 100]}
-                    tick={{ fontSize: 11 }}
-                    tickFormatter={(v) => `${v}%`}
-                  />
-                  <Tooltip content={<ParetoTooltip />} />
-                  <ReferenceLine
-                    yAxisId="right" y={80}
-                    stroke="#D97706" strokeDasharray="4 4"
-                    label={{ value: '80% 라인', position: 'insideTopRight', fill: '#D97706', fontSize: 11 }}
-                  />
-                  <Bar yAxisId="left" dataKey="adCostVat" name="광고비 (VAT 포함)">
-                    {data.map((d, i) => (
-                      <Cell key={i} fill={d.cumPct <= 80 ? '#DC2626' : '#94A3B8'} />
-                    ))}
-                  </Bar>
-                  <Line
-                    yAxisId="right" type="monotone" dataKey="cumPct" name="누적 비율"
-                    stroke="#1F2937" strokeWidth={2}
-                    dot={{ r: 3, fill: '#1F2937' }}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── AI vs 수동 페어 ROAS 비교 (가로 막대, Top 20) ─────────────
-// 같은 prefix 의 AI/수동 양쪽 캠페인 존재 → 페어. 광고비/매출 합 → ROAS 양쪽 비교.
-// 광고비·매출은 CampaignDiag 의 adCostVat·revenue 그대로 사용 (KPI·차트 ①과 동일 self-only 정의).
-function PairRoasComparisonChart({ view }: { view: ReturnType<typeof buildAdAnalysisView> }) {
-  // 페이지 진입 시 무조건 접힘 — localStorage 영속화 의도적 제거 (대표님 요청).
-  const [expanded, setExpanded] = useState<boolean>(false)
-
-  const data = useMemo(() => {
-    interface Bucket { hasAi: boolean; hasManual: boolean; aiCost: number; aiRev: number; manualCost: number; manualRev: number }
-    const byPrefix = new Map<string, Bucket>()
-    for (const c of view.campaigns) {
-      const parsed = parseCampaignName(c.campaignName)
-      if (parsed.campaignType === 'unknown') continue
-      const b = byPrefix.get(parsed.prefix) ?? { hasAi: false, hasManual: false, aiCost: 0, aiRev: 0, manualCost: 0, manualRev: 0 }
-      if (parsed.campaignType === 'ai') {
-        b.hasAi = true
-        b.aiCost += c.adCostVat
-        b.aiRev += c.revenue
-      } else {
-        b.hasManual = true
-        b.manualCost += c.adCostVat
-        b.manualRev += c.revenue
-      }
-      byPrefix.set(parsed.prefix, b)
-    }
-    const arr: any[] = []
-    for (const [prefix, b] of byPrefix) {
-      if (!b.hasAi || !b.hasManual) continue           // 짝 없는 캠페인 제외
-      if (b.aiCost === 0 && b.manualCost === 0) continue  // 둘 다 광고비 0 제외
-      arr.push({
-        prefix,
-        labelShort: prefix.length > 22 ? prefix.slice(0, 22) + '…' : prefix,
-        aiCost: Math.round(b.aiCost),
-        aiRev: Math.round(b.aiRev),
-        aiRoas: b.aiCost > 0 ? Math.round((b.aiRev / b.aiCost) * 100) : 0,
-        manualCost: Math.round(b.manualCost),
-        manualRev: Math.round(b.manualRev),
-        manualRoas: b.manualCost > 0 ? Math.round((b.manualRev / b.manualCost) * 100) : 0,
-        _totalCost: b.aiCost + b.manualCost,
-      })
-    }
-    arr.sort((a, b) => b._totalCost - a._totalCost)
-    return arr.slice(0, 20)
-  }, [view.campaigns])
-
-  const PairTooltip = ({ active, payload }: any) => {
-    if (!active || !payload?.length) return null
-    const p = payload[0]?.payload
-    if (!p) return null
-    return (
-      <div style={{
-        background: 'rgba(255,255,255,0.97)', border: '1px solid #E2E8F0',
-        borderRadius: 6, padding: '8px 12px', fontSize: 11.5,
-        boxShadow: '0 2px 6px rgba(0,0,0,0.05)', minWidth: 220,
-      }}>
-        <div style={{ fontWeight: 600, marginBottom: 6 }}>{p.prefix}</div>
-        <div style={{ fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.55 }}>
-          <div style={{ color: '#2563EB', fontWeight: 600, marginTop: 2 }}>🤖 AI</div>
-          <div>· 광고비: {p.aiCost.toLocaleString('ko-KR')}원</div>
-          <div>· 매출: {p.aiRev.toLocaleString('ko-KR')}원</div>
-          <div>· ROAS: {p.aiCost > 0 ? `${p.aiRoas.toLocaleString('ko-KR')}%` : '—'}</div>
-          <div style={{ color: '#9333EA', fontWeight: 600, marginTop: 4 }}>🎯 수동</div>
-          <div>· 광고비: {p.manualCost.toLocaleString('ko-KR')}원</div>
-          <div>· 매출: {p.manualRev.toLocaleString('ko-KR')}원</div>
-          <div>· ROAS: {p.manualCost > 0 ? `${p.manualRoas.toLocaleString('ko-KR')}%` : '—'}</div>
-        </div>
-      </div>
-    )
-  }
-
-  // 동적 높이 — 한 행 28px + 상하 여백 80px. 최소 200.
-  const chartHeight = Math.max(200, data.length * 32 + 60)
-
-  return (
-    <div className="aa-section" style={{ marginBottom: 16 }}>
-      <div className="aa-section-header">
-        <div>
-          <div className="aa-section-title">⚖️ AI vs 수동 페어 ROAS 비교</div>
-          <div className="aa-section-desc">같은 prefix 의 AI·수동 캠페인 페어 ROAS 비교 (Top 20, 광고비 합 기준 정렬)</div>
-        </div>
-        <button className="aa-btn btn-sm" onClick={() => setExpanded((v) => !v)}>{expanded ? '▲ 접기' : '▼ 펼치기'}</button>
-      </div>
-      {expanded && (
-        <div className="aa-section-body">
-          {data.length === 0 ? (
-            <div style={{ textAlign: 'center', color: '#94A3B8', padding: 24, fontSize: 13 }}>표시할 AI·수동 페어 데이터가 없습니다.</div>
-          ) : (
-            <div
-              tabIndex={-1}
-              className="focus:outline-none [&_*]:outline-none [&_svg]:outline-none [&_*:focus]:outline-none [&_*:focus-visible]:outline-none"
-              style={{ outline: 'none' }}
-            >
-              <ResponsiveContainer width="100%" height={chartHeight}>
-                <BarChart
-                  data={data} layout="vertical"
-                  margin={{ top: 8, right: 24, bottom: 8, left: 8 }}
-                  tabIndex={-1} style={{ outline: 'none' }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
-                  <XAxis type="number" tickFormatter={(v) => `${v}%`} tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="labelShort" width={180} tick={{ fontSize: 11 }} />
-                  <Tooltip cursor={{ fill: '#FFF7ED', fillOpacity: 0.5 }} content={<PairTooltip />} />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="aiRoas" name="🤖 AI" fill="#2563EB">
-                    <LabelList
-                      dataKey="aiRoas" position="right"
-                      formatter={(v: any) => (v == null || v === 0 ? '' : `${v}%`)}
-                      style={{ fontSize: 11, fontWeight: 500, fill: '#1F2937' }}
-                    />
-                  </Bar>
-                  <Bar dataKey="manualRoas" name="🎯 수동" fill="#9333EA">
-                    <LabelList
-                      dataKey="manualRoas" position="right"
-                      formatter={(v: any) => (v == null || v === 0 ? '' : `${v}%`)}
-                      style={{ fontSize: 11, fontWeight: 500, fill: '#1F2937' }}
-                    />
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ── 운영 메모 (영구 저장) ─────────────────────────────────────
 type HistoryNote = { id: string; ts: string; text: string }
 
@@ -1749,7 +880,7 @@ function fmtNoteTs(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function HistoryNotesSection() {
+function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
   const { confirm, confirmModal } = useConfirm()
   const [items, setItems] = useState<HistoryNote[]>([])
   const [open, setOpen] = useState(false)
@@ -1770,7 +901,7 @@ function HistoryNotesSection() {
       .catch(() => { if (!cancelled) setItems([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [])
+  }, [reloadKey])
 
   const sorted = useMemo(
     () => [...items].sort((a, b) => (a.ts < b.ts ? 1 : -1)),
@@ -1950,7 +1081,7 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
               <TH label="광고비 (+VAT)" k={'adCostVat'} num />
               <TH label="광고 매출" k={'revenue'} num />
               <TH label={marginOff ? <>ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(쿠팡표기)</span></> : <>ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(광고센터)</span></>} k={'roasPct'} num />
-              {!hideBep && <TH label={<>필수 ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 400 }}>AI 캠페인은 쿠팡 목표 ROAS 에 이 값 입력</span></>} k={'bepPct'} num minWidth={130} />}
+              {!hideBep && <TH label={<>BEP ROAS<br /><span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 400 }}>AI 캠페인은 쿠팡 목표 ROAS 에 이 값 입력</span></>} k={'bepPct'} num minWidth={130} />}
               {!hideBep && <TH label={<>광고 손익<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(원)</span></>} k={'adProfit'} num />}
               <TH label={<>광고 판매수<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(1P = 봉)</span></>} k={'orders'} num />
               <TH label={<>타상품 매출<br /><span style={{ fontSize: 10, color: '#94A3B8' }}>(다른 상품 전환)</span></>} k={'otherProductRevenue'} num minWidth={110} />
@@ -2025,7 +1156,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
 
   return (
     <>
-      <tr className={`clickable ${isOpen ? 'selected' : ''}`} onClick={onToggle}>
+      <tr id={`aa-camp-${c.campaignId}`} className={`clickable ${isOpen ? 'selected' : ''}`} onClick={onToggle} style={{ scrollMarginTop: 80 }}>
         <td className="sticky-left">
           <span
             className="aa-expand-toggle"
@@ -2073,7 +1204,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
       )}
       {marginOff && isExpanded && (
         <tr className="aa-option-row">
-          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP 입력값 기준)</td>
+          <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP ROAS 입력값 기준)</td>
         </tr>
       )}
     </>
@@ -2180,9 +1311,9 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
           <div className="aa-section-desc">검색 영역만 키워드 단위 제어 가능 · 비검색은 통제 불가</div>
           {targetEditable && targetInfo && (
             <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#475569' }}>
-              쿠팡에 입력한 목표 ROAS
+              쿠팡 목표 ROAS (적용값)
               <TargetRoasInput value={targets![targetInfo.key] ?? null} onChange={(v) => onTargetChange!(targetInfo.key, v)} />
-              {!hideBep && campaign.bepPct != null && <span style={{ color: '#94A3B8' }}>(필수 ROAS {Math.round(campaign.bepPct)}%)</span>}
+              {!hideBep && campaign.bepPct != null && <span style={{ color: '#94A3B8' }}>(BEP ROAS {Math.round(campaign.bepPct)}%)</span>}
             </div>
           )}
         </div>
@@ -2199,7 +1330,7 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
             <Row label="광고 매출" value={fmtMan(areaSum.sRev)} />
             <Row label={soldLabel} value={`${fmtNum(searchSold)}${soldUnit}`} />
             <Row label="ROAS (광고센터)" value={fmtRoas(sRoas)} valueClass={sRoas != null && campaign.bepPct != null && sRoas < campaign.bepPct ? 'text-bad' : ''} />
-            {!hideBep && <Row label="필수 ROAS" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            {!hideBep && <Row label="BEP ROAS" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
             {!hideBep && <Row label="갭" value={sRoas != null && campaign.bepPct != null ? `${Math.round(sRoas - campaign.bepPct)}%p` : '—'} valueClass={sRoas != null && campaign.bepPct != null && sRoas < campaign.bepPct ? 'text-bad' : 'text-good'} />}
           </div>
           <div className="aa-metric-box nonsearch">
@@ -2208,7 +1339,7 @@ function AiSection({ campaign, master, marginOff = false, hideBep = false, manua
             <Row label="광고 매출" value={fmtMan(areaSum.nRev)} />
             <Row label={soldLabel} value={`${fmtNum(nonSearchSold)}${soldUnit}`} />
             <Row label="ROAS (광고센터)" value={fmtRoas(nRoas)} valueClass={nRoas != null && campaign.bepPct != null && nRoas < campaign.bepPct ? 'text-bad' : ''} />
-            {!hideBep && <Row label="필수 ROAS" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
+            {!hideBep && <Row label="BEP ROAS" value={campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'} />}
             <Row label={<span className="text-muted">참고용</span>} value={<span style={{ fontSize: 11 }}>AI 자동 운영</span>} />
           </div>
         </div>
@@ -2589,7 +1720,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
   return (
     <div className="aa-sub-section">
       <div className="aa-sub-section-title">
-        <span>🔍 검색 키워드 ({sorted.length}개{!hideBep && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
+        <span>🔍 검색 키워드 ({sorted.length}개{!hideBep && ` · BEP ROAS 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
@@ -2731,9 +1862,9 @@ function ActionGuideHeader() {
               클릭 ≥ 20 <span style={{ color: '#9CA3AF', fontWeight: 400, fontSize: 11 }}>(판단 가능)</span>
             </div>
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
-              ROAS ≥ BEP×2  → 강화<br />
-              BEP ≤ ROAS&lt;×2 → 유지<br />
-              0 &lt; ROAS &lt; BEP → 입찰가 ↓<br />
+              ROAS ≥ BEP ROAS×2  → 강화<br />
+              BEP ROAS ≤ ROAS&lt;×2 → 유지<br />
+              0 &lt; ROAS &lt; BEP ROAS → 입찰가 ↓<br />
               ROAS = 0      → 제외 (입찰가 100원)
             </div>
           </div>
@@ -2872,7 +2003,7 @@ function NonSearchKeywordTable({ rows, campaignBep, hideBep = false, campaignNam
   return (
     <div className="aa-sub-section" style={{ marginTop: 16 }}>
       <div className="aa-sub-section-title">
-        <span>🎯 비검색 키워드 ({sorted.length}개{!hideBep && ` · BEP 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
+        <span>🎯 비검색 키워드 ({sorted.length}개{!hideBep && ` · BEP ROAS 미달 ${belowBepCount}개`} · 광고비 {fmtMan(totalCost)})</span>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontSize: 11, color: '#64748B' }}>선택: <strong>{checked.size}</strong>개</span>
           <button
@@ -2964,13 +2095,13 @@ function ActionLegend() {
       <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 &lt; 20 (모수 쌓는 중)</span>
       <br />• <span className="aa-action-chip action-low-sample">모수 부족</span> ROAS 와 무관 — 추천 입찰가 노출 안 함 (화면·엑셀 모두)
       <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 ≥ 20 (판단 가능)</span>
-      <br />• <span className="aa-action-chip action-enhance">강화</span> ROAS ≥ BEP × 2
-      <br />• <span className="aa-action-chip action-maintain">유지</span> BEP ≤ ROAS &lt; BEP × 2
-      <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> 0 &lt; ROAS &lt; BEP — 매출 역산값으로 인하
+      <br />• <span className="aa-action-chip action-enhance">강화</span> ROAS ≥ BEP ROAS × 2
+      <br />• <span className="aa-action-chip action-maintain">유지</span> BEP ROAS ≤ ROAS &lt; BEP ROAS × 2
+      <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> 0 &lt; ROAS &lt; BEP ROAS — 매출 역산값으로 인하
       <br />• <span className="aa-action-chip action-exclude">🚫 제외</span> ROAS = 0 — 입찰가 100원 강제
       <br /><br />
-      <strong style={{ color: '#1F2937' }}>추천 입찰가 공식 (매출 역산):</strong> 매출 ÷ (클릭수 × BEP × 1.05) — BEP·ROAS 는 광고센터 기준(광고비 VAT 별도){' '}
-      <span style={{ fontSize: 11 }}>— BEP 대비 5% 여유 / VAT 별도 = 쿠팡 광고센터 입력값</span>
+      <strong style={{ color: '#1F2937' }}>추천 입찰가 공식 (매출 역산):</strong> 매출 ÷ (클릭수 × BEP ROAS × 1.05) — BEP ROAS·ROAS 는 광고센터 기준(광고비 VAT 별도){' '}
+      <span style={{ fontSize: 11 }}>— BEP ROAS 대비 5% 여유 / VAT 별도 = 쿠팡 광고센터 입력값</span>
     </div>
   )
 }
@@ -2989,7 +2120,7 @@ function BepCpcLine({ campaign, entries, rowMap, selectedOptionId }: {
   const selLabel = sel ? bepCpcLabel(sel, selectedOptionId!) : null
   return (
     <div style={{ fontSize: 11.5, color: '#64748B' }}>
-      <strong style={{ color: '#1F2937' }}>BEP</strong>{' '}—{' '}
+      <strong style={{ color: '#1F2937' }}>BEP ROAS</strong>{' '}—{' '}
       <strong className="mono" style={{ color: '#1F2937' }}>{campaign.bepPct != null ? `${Math.round(campaign.bepPct)}%` : '—'}</strong>{' '}/{' '}
       <span className="mono">
         {entries.map((e, i) => {
@@ -3120,13 +2251,13 @@ function ManualSection({ campaign, master, marginOff = false, hideBep = false, m
         <div className="aa-section-header" style={{ background: '#FAF5FF' }}>
           <div>
             <div className="aa-section-title">▼ {campaign.campaignName} · 입찰가 점검</div>
-            <div className="aa-section-desc">수동 점검(추천입찰가·BEP)은 마진마스터가 필요합니다.</div>
+            <div className="aa-section-desc">수동 점검(추천입찰가·BEP ROAS)은 마진마스터가 필요합니다.</div>
           </div>
           <button className="aa-btn btn-sm" onClick={onClose}>접기</button>
         </div>
         <div className="aa-section-body">
           <div style={{ ...noticeBoxOrange, fontSize: 13, margin: 0 }}>
-            마진마스터가 없어 추천 입찰가·BEP 점검은 표시하지 않습니다. 캠페인·키워드 기본 지표(광고비·ROAS 등)는 위 캠페인 진단 표에서 확인하세요.
+            마진마스터가 없어 추천 입찰가·BEP ROAS 점검은 표시하지 않습니다. 캠페인·키워드 기본 지표(광고비·ROAS 등)는 위 캠페인 진단 표에서 확인하세요.
           </div>
         </div>
       </div>
@@ -3234,7 +2365,7 @@ function ManualKeywordRowComp({ r, checked, onToggle, onChangeBid }: { r: Manual
       : r.roas! >= r.bepRoas! * 0.7 ? 'text-warn'
       : 'text-bad')
     : 'text-muted'
-  const roasTitle = r.bepRoas != null ? `BEP ${Math.round(r.bepRoas)}%` : undefined
+  const roasTitle = r.bepRoas != null ? `BEP ROAS ${Math.round(r.bepRoas)}%` : undefined
 
   return (
     <tr style={isLowClick ? { opacity: 0.6 } : undefined}>

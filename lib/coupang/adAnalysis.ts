@@ -315,6 +315,8 @@ export interface UnmatchedSummary {
   adCostVat: number
   /** 미매칭 옵션의 sold14d 합 */
   sold: number
+  /** 미매칭 옵션 목록 (광고비 큰 순) — 경고 줄 펼침용 */
+  list?: { optionId: string; name: string; adCostVat: number }[]
 }
 
 export interface AdAnalysisView {
@@ -427,6 +429,7 @@ export function buildAdAnalysisView(
   let unmatchedAdCostRaw = 0
   let unmatchedSold = 0
   const unmatchedOptIds = new Set<string>()
+  const unmatchedList = new Map<string, { optionId: string; name: string; adCostVat: number }>()
   if (!marginOff) {
     for (const r of adRows) {
       const convId = String(r.convOptionId || '').trim()
@@ -439,12 +442,16 @@ export function buildAdAnalysisView(
       unmatchedAdCostRaw += r.adCost || 0
       unmatchedSold += r.sold14d || 0
       unmatchedOptIds.add(key)
+      const e = unmatchedList.get(key) ?? { optionId: key, name: String(r.adProductName || '').trim(), adCostVat: 0 }
+      e.adCostVat += (r.adCost || 0) * 1.1
+      unmatchedList.set(key, e)
     }
   }
   const unmatched: UnmatchedSummary = {
     adCount: unmatchedOptIds.size,
     adCostVat: unmatchedAdCostRaw * 1.1,
     sold: unmatchedSold,
+    list: [...unmatchedList.values()].sort((a, b) => b.adCostVat - a.adCostVat),
   }
 
   const byCamp = new Map<string, AdCampaignRow[]>()
