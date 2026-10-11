@@ -33,7 +33,7 @@ const KINDS: { kind: Kind; label: string; hint: string; accept: string; multiple
   { kind: 'ad', label: '광고', hint: 'pa_total_campaign .xlsx', accept: '.xlsx' },
   { kind: 'seller', label: '3P 판매', hint: 'SELLER_INSIGHTS .xlsx', accept: '.xlsx' },
   { kind: 'onep_sales', label: '1P 판매', hint: '로켓 판매 .csv', accept: '.csv' },
-  { kind: 'ledger', label: '1P 입고 원장', hint: '로켓_세일즈 .xlsx 또는 발주서리스트 .zip', accept: '.xlsx,.zip' },
+  { kind: 'ledger', label: '1P 입고 원장', hint: '로켓_세일즈 .xlsx 또는 발주서리스트 .zip (여러 개 가능)', accept: '.xlsx,.zip', multiple: true },
   { kind: 'mr_settle', label: '밀크런 정산', hint: 'milkrun_sales .xls', accept: '.xls,.html,.htm' },
   { kind: 'mr_list', label: '밀크런 접수 내역', hint: 'milkrun_list .xls', accept: '.xls,.html,.htm', optional: true },
 ]
@@ -81,6 +81,8 @@ const mdOf = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 
 const DELETE_TYPES: Record<Kind, string[]> = {
   ad: ['ad', 'adkw'], seller: ['seller'], onep_sales: ['onep_sales'], ledger: ['ledger', 'po'], mr_settle: ['mr_settle'], mr_list: ['mr_list'],
 }
+/** 발주서 파일명 목록 → 저장 fileName (앞 2개 + '외 N개') */
+const poFileLabel = (names: string[]) => (names.length > 2 ? `${names.slice(0, 2).join(' + ')} 외 ${names.length - 2}개` : names.join(' + '))
 const pct = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '—' : `${(n * 100).toFixed(1)}%`)
 
 /** 광고 행 → 1P 계산에 필요한 필드만 합친 요약 (캠페인·광고옵션·전환옵션·판매방식 단위) */
@@ -127,7 +129,7 @@ export default function CoupangPnlPanel(props: {
   const [errors, setErrors] = useState<Record<Kind, string | null>>(EMPTY(null))
   // 옛 발주서(zip) 월 저장본 — 그 달 원장이 없을 때만 1P 입고 계산에 사용
   const [legacyPo, setLegacyPo] = useState<PurchaseOrder[] | null>(null)
-  const [poMeta, setPoMeta] = useState<{ fileName: string | null; savedAt: string | null } | null>(null)
+  const [poMeta, setPoMeta] = useState<{ fileName: string | null; fileNames?: string[]; savedAt: string | null } | null>(null)
   const [busy, setBusy] = useState<Kind | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   // 올릴 판매 파일의 자료 기간 입력값 (광고는 파일명에서 못 읽을 때만 사용)
@@ -154,13 +156,13 @@ export default function CoupangPnlPanel(props: {
         } catch { /* 없음 */ }
       }))
       let po: PurchaseOrder[] | null = null
-      let pm: { fileName: string | null; savedAt: string | null } | null = null
+      let pm: { fileName: string | null; fileNames?: string[]; savedAt: string | null } | null = null
       if (!next.ledger) {
         try {
           const j = await (await fetch(`/api/coupang-master?type=pnl_po_${month}`)).json()
           if (Array.isArray(j?.data?.orders) && j.data.orders.length) {
             po = j.data.orders
-            pm = { fileName: j.fileName ?? null, savedAt: j.savedAt ?? null }
+            pm = { fileName: j.fileName ?? null, fileNames: Array.isArray(j.data.fileNames) ? j.data.fileNames : undefined, savedAt: j.savedAt ?? null }
           }
         } catch { /* 없음 */ }
       }
@@ -272,20 +274,36 @@ export default function CoupangPnlPanel(props: {
         const r = parseOnePSalesCsv(await f.text())
         if (r.error) throw new Error(r.error)
         await save('onep_sales', { rows: r.rows, period }, f.name)
-      } else if (kind === 'ledger' && /\.zip$/i.test(f.name)) {
-        // 발주서리스트 zip — 안의 발주서 xlsx 전부를 선택 월 pnl_po 로 저장 (입고 월은 계산 때 하차일 기준). 한 달엔 원장·발주서 중 하나만
-        const r = await parsePurchaseOrderFiles([{ name: f.name, buf: await f.arrayBuffer() }])
-        if (!r.orders.length) throw new Error('zip 안에서 발주서를 찾지 못했습니다')
+      } else if (kind === 'ledger' && (files.length > 1 || /\.zip$/i.test(f.name) || !!parseRocketLedger(await f.arrayBuffer()).error)) {
+        // 발주서(zip·xlsx 여러 개 — 로켓_세일즈 머리글이 없는 xlsx 는 발주서로) — 같은 달 발주서 저장본에 발주번호 기준으로 누적 (같은 번호는 나중에 올린 것으로 교체).
+        // 입고 월은 계산 때 하차일 기준. 한 달엔 원장·발주서 중 하나만
+        const list = Array.from(files)
+        const r = await parsePurchaseOrderFiles(await Promise.all(list.map(async (x) => ({ name: x.name, buf: await x.arrayBuffer() }))))
+        if (!r.orders.length) throw new Error('발주서를 찾지 못했습니다')
+        let prev: PurchaseOrder[] = legacyPo || []
+        let prevNames: string[] = poMeta?.fileNames || (poMeta?.fileName ? [poMeta.fileName] : [])
         if (saved.ledger) {
           if (!window.confirm('로켓 세일즈 원장을 발주서로 바꿀까요?')) return
           await deleteKindData('ledger')
+          prev = []
+          prevNames = []
         }
-        await postPnl('po', { orders: r.orders }, f.name)
+        const merged = new Map(prev.map((o) => [o.poNumber, o]))
+        let added = 0
+        let updated = 0
+        for (const o of r.orders) {
+          if (merged.has(o.poNumber)) updated++
+          else added++
+          merged.set(o.poNumber, o)
+        }
+        const orders = Array.from(merged.values())
+        const fileNames = [...prevNames.filter((n) => !list.some((x) => x.name === n)), ...list.map((x) => x.name)]
+        await postPnl('po', { orders, fileNames }, poFileLabel(fileNames))
         setSaved((x) => ({ ...x, ledger: null }))
         setPending((x) => ({ ...x, ledger: null }))
-        setLegacyPo(r.orders)
-        setPoMeta({ fileName: f.name, savedAt: new Date().toISOString() })
-        if (r.skipped.length) setMsg(`발주서 ${r.orders.length}건 저장 · 읽지 못한 파일 ${r.skipped.length}개 제외`)
+        setLegacyPo(orders)
+        setPoMeta({ fileName: poFileLabel(fileNames), fileNames, savedAt: new Date().toISOString() })
+        setMsg(`새로 추가 ${added}건 · 중복 ${updated}건 갱신 · 합계 ${orders.length}건${r.skipped.length ? ` · 읽지 못한 파일 ${r.skipped.length}개 제외` : ''}`)
       } else if (kind === 'ledger') {
         // 원장은 여러 달이 들어 있으므로 입고 월별로 나눠 각 달 pnl_ledger_YYYY-MM 에 저장 (선택 월은 칸 상태로)
         const r = parseRocketLedger(await f.arrayBuffer())
@@ -475,7 +493,7 @@ export default function CoupangPnlPanel(props: {
             const deletable = !!sv || (kind === 'ledger' && !!legacyPo)
             // 1P 입고 원장 칸에 발주서(zip) 저장본만 있을 때
             const poOnly = kind === 'ledger' && !sv && !pd && !err && !!legacyPo
-            const unloads = poOnly ? legacyPo!.map((o) => o.unloadedAt).filter((d): d is string => !!d).sort() : []
+            const dues = poOnly ? legacyPo!.map((o) => o.dueDate).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d || '')).sort() : []
             const pk = kind === 'seller' || kind === 'onep_sales' || kind === 'ad' ? kind : null
             const savedToday = !!sv?.savedAt && kstDay(sv.savedAt) === kstDay(new Date().toISOString())
             return (
@@ -500,7 +518,7 @@ export default function CoupangPnlPanel(props: {
                   <>
                     <div className="mt-0.5 line-clamp-2 break-all text-green-800" title={poMeta?.fileName || ''}>✓ {poMeta?.fileName || '발주서'}</div>
                     <div className={`mt-0.5 truncate ${poMeta?.savedAt && kstDay(poMeta.savedAt) === kstDay(new Date().toISOString()) ? 'text-green-700' : 'text-gray-400'}`}>
-                      발주서 {legacyPo!.length}건{poMeta?.savedAt ? ` · ${mdOf(kstDay(poMeta.savedAt))} 저장` : ''}{unloads.length ? ` · 하차 ${mdRange({ start: unloads[0], end: unloads[unloads.length - 1] })}` : ''}
+                      발주서 {legacyPo!.length}건{dues.length ? ` · 입고예정 ${mdRange({ start: dues[0], end: dues[dues.length - 1] })}` : ''}{poMeta?.savedAt ? ` · ${mdOf(kstDay(poMeta.savedAt))} 저장` : ''}
                     </div>
                   </>
                 ) : state === 'green' && sv ? (
