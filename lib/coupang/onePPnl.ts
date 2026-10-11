@@ -76,6 +76,16 @@ export interface OnePPnl {
 
 const monthOf = (d: string) => String(d || '').slice(0, 7)
 
+/** 그 달 1P 입고 발주 — 입고 월 = 발주서의 실제 하차일 (미하차면 입고예정일), 발주서에서 읽은 발주(unloadedAt 키 있음)는 입고수량 합 0 이면 제외.
+ *  로켓_세일즈 원장에서 만든 발주는 unloadedAt 이 없어 기존대로 dueDate(실제 입고일) 월 */
+export function monthOrdersOf(orders: PurchaseOrder[] | null | undefined, month: string): PurchaseOrder[] {
+  return (orders || []).filter((o) =>
+    o.unloadedAt !== undefined
+      ? monthOf(o.unloadedAt || o.dueDate) === month && o.items.reduce((s, it) => s + it.receivedQty, 0) > 0
+      : monthOf(o.dueDate) === month,
+  )
+}
+
 /** 1P 판매 옵션 → { sku, 봉수 } */
 export function linkOnePOption(
   optionId: string,
@@ -130,13 +140,7 @@ export function computeOnePPnl(args: {
 
   // ── 입고 기준 ──
   let inbound: OnePPnl['inbound'] = null
-  // 입고 월 = 발주서의 실제 하차일 (미하차면 입고예정일) — 발주서에서 읽은 발주(unloadedAt 키 있음)는 입고수량 합 0 이면 제외.
-  // 로켓_세일즈 원장에서 만든 발주는 unloadedAt 이 없어 기존대로 dueDate(실제 입고일) 월
-  const monthPOs = (args.orders || []).filter((o) =>
-    o.unloadedAt !== undefined
-      ? monthOf(o.unloadedAt || o.dueDate) === args.month && o.items.reduce((s, it) => s + it.receivedQty, 0) > 0
-      : monthOf(o.dueDate) === args.month,
-  )
+  const monthPOs = monthOrdersOf(args.orders, args.month)
   const poBags = new Map<string, Map<string, number>>() // 발주번호 → sku → 입고봉수
   if (args.orders) {
     const agg = new Map<string, OnePInboundSku>()

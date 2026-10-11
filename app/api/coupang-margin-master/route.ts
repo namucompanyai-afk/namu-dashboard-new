@@ -124,6 +124,7 @@ export async function GET(req: Request) {
       const bagCount = num(r[2]) || 1;
       const m = Number.isFinite(num(r[14])) && str(r[14]) !== '' ? num(r[14]) : null;
       const ship = Number.isFinite(num(r[9])) && str(r[9]) !== '' ? num(r[9]) : null; // J 택배 (추정 운송비)
+      const supply = Number.isFinite(num(r[25])) && str(r[25]) !== '' ? num(r[25]) : null; // Z 1P 납품가(부가포함)
       oneP.push({
         optionId: /^\d+$/.test(str(r[23])) ? str(r[23]) : '',
         sku,
@@ -132,6 +133,7 @@ export async function GET(req: Request) {
         margin: m,
         perBagMargin: null,
         perBagShip: ship,
+        perBagSupplyPrice: supply,
         taxable: taxOf.get(alias) === '과세',
         coupangOptionName: str(r[29]),
       });
@@ -141,10 +143,14 @@ export async function GET(req: Request) {
     const oneBagShipBySku = new Map<string, number>();
     for (const x of oneP) if (x.bagCount === 1 && x.margin != null && x.sku) oneBagBySku.set(x.sku, x.margin);
     for (const x of oneP) if (x.bagCount === 1 && x.perBagShip != null && x.sku) oneBagShipBySku.set(x.sku, x.perBagShip);
+    const oneBagSupplyBySku = new Map<string, number>();
+    for (const x of oneP) if (x.bagCount === 1 && x.perBagSupplyPrice != null && x.sku) oneBagSupplyBySku.set(x.sku, x.perBagSupplyPrice);
     for (const x of oneP) {
       x.perBagMargin = (x.sku && oneBagBySku.has(x.sku)) ? oneBagBySku.get(x.sku)! : x.margin != null ? x.margin / x.bagCount : null;
       // 1봉당 추정 운송비 — 1봉 행 J, 없으면 J ÷ 봉수 (perBagMargin 과 같은 기준 행)
       x.perBagShip = (x.sku && oneBagShipBySku.has(x.sku)) ? oneBagShipBySku.get(x.sku)! : x.perBagShip != null ? x.perBagShip / x.bagCount : null;
+      // 1봉 납품가 — 실제 매입가(발주서·원장)와 비교 알림용
+      x.perBagSupplyPrice = (x.sku && oneBagSupplyBySku.has(x.sku)) ? oneBagSupplyBySku.get(x.sku)! : x.perBagSupplyPrice != null ? x.perBagSupplyPrice / x.bagCount : null;
     }
     return NextResponse.json({ ok: true, marginRows, onePRows: oneP });
   } catch (err: any) {

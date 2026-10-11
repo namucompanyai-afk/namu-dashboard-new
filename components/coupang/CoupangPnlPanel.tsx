@@ -22,7 +22,7 @@ import { build1PView } from '@/lib/coupang/onePAnalysis'
 import { packAdRows, unpackAdRows } from '@/lib/coupang/adRowsPack'
 import { buildProductVerdicts } from '@/lib/coupang/productVerdict'
 import ProductVerdictTable from './ProductVerdictTable'
-import { computeOnePPnl } from '@/lib/coupang/onePPnl'
+import { computeOnePPnl, monthOrdersOf } from '@/lib/coupang/onePPnl'
 import type { OnePMarginRow, MarginCalcRow } from '@/lib/coupang/parsers/marginMaster'
 
 type Kind = 'ad' | 'seller' | 'onep_sales' | 'ledger' | 'mr_settle' | 'mr_list'
@@ -388,6 +388,34 @@ export default function CoupangPnlPanel(props: {
   }
   const adRows: AdCampaignRow[] | null = cur('ad')?.rows || (props.storeAdRows.length ? props.storeAdRows : null)
   const onePView = useMemo(() => (adRows ? build1PView(adRows, props.onePRows, props.marginRows) : null), [adRows, props.onePRows, props.marginRows])
+  // 1P 마스터 납품가 vs 그 달 실제 매입가 (입고 계산과 같은 발주) — 알림만, 손익 계산은 그대로
+  const priceGaps = useMemo(() => {
+    const orders = monthOrdersOf(cur('ledger')?.rows ? ledgerToOrders(cur('ledger').rows as RocketLedgerRow[]) : legacyPo, month)
+    const master = new Map<string, { alias: string; price: number }>()
+    for (const x of props.onePRows || []) {
+      if (!x.sku || x.perBagSupplyPrice == null) continue
+      if (!master.has(x.sku) || x.bagCount === 1) master.set(x.sku, { alias: x.alias, price: x.perBagSupplyPrice })
+    }
+    const agg = new Map<string, { name: string; bags: number; amount: number; min: number; max: number }>()
+    for (const o of orders) for (const it of o.items) {
+      if (!(it.receivedQty > 0)) continue
+      const a = agg.get(it.sku) || { name: it.name, bags: 0, amount: 0, min: Infinity, max: -Infinity }
+      a.bags += it.receivedQty
+      a.amount += it.receivedQty * it.unitPrice
+      a.min = Math.min(a.min, it.unitPrice)
+      a.max = Math.max(a.max, it.unitPrice)
+      agg.set(it.sku, a)
+    }
+    const out: { sku: string; alias: string; avg: number; min: number; max: number; master: number; bags: number; impact: number }[] = []
+    for (const [sku, a] of agg) {
+      const m = master.get(sku)
+      if (!m) continue
+      const mp = Math.round(m.price)
+      if (Math.round(a.min) === mp && Math.round(a.max) === mp) continue
+      out.push({ sku, alias: m.alias || a.name, avg: a.amount / a.bags, min: a.min, max: a.max, master: mp, bags: a.bags, impact: a.amount - mp * a.bags })
+    }
+    return out.sort((x, y) => x.impact - y.impact)
+  }, [month, saved, pending, legacyPo, props.onePRows]) // eslint-disable-line react-hooks/exhaustive-deps
   const pnl = useMemo(() => computeOnePPnl({
     month,
     onePRows: props.onePRows,
@@ -567,6 +595,24 @@ export default function CoupangPnlPanel(props: {
           <div className="mt-2 rounded bg-amber-50 px-3 py-1.5 text-xs text-amber-800">이 달은 입고 원장 대신 발주서(zip) 저장본으로 1P 입고를 계산 중 — 하차일 기준(미하차는 입고예정일, 입고수량 0 발주 제외)</div>
         )}
       </div>
+
+      {priceGaps.length > 0 && (
+        <div className="mb-4 rounded-xl border-2 border-red-400 bg-red-50 p-4 text-sm">
+          <div className="font-semibold text-red-700">
+            마스터 납품가와 실제 매입가가 다른 1P 상품 {priceGaps.length}개 — 손익 영향 합 {won(priceGaps.reduce((s, g) => s + g.impact, 0))}
+          </div>
+          <div className="mt-1.5 space-y-0.5 text-xs text-gray-800">
+            {priceGaps.map((g) => (
+              <div key={g.sku}>
+                <b>{g.alias}</b> · 이달 매입가 {Math.round(g.avg).toLocaleString('ko-KR')}
+                {Math.round(g.min) !== Math.round(g.max) ? ` (${Math.round(g.min).toLocaleString('ko-KR')}~${Math.round(g.max).toLocaleString('ko-KR')})` : ''}
+                {' '}· 마스터 {g.master.toLocaleString('ko-KR')} · 입고 {g.bags.toLocaleString('ko-KR')}봉 · 영향 <b className={g.impact < 0 ? 'text-red-700' : 'text-green-700'}>{won(g.impact)}</b>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-xs text-gray-600">가격이 바뀐 거면 나무_마스터 마진계산 1P 납품가를 고치세요. 일시 인하였다면 이달 손익을 이 금액만큼 감안해서 보세요</div>
+        </div>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         {/* 순이익 */}
