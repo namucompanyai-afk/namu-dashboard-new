@@ -4,7 +4,7 @@ import JSZip from 'jszip'
 /**
  * 쿠팡 1P 발주서 파서 — 서플라이어 허브 발주서리스트 (xlsx 1개 = 발주 1건, 또는 그 xlsx 들을 묶은 zip)
  *
- * 셀 위치: 발주번호 C10 · 물류센터 C13 · 입고예정일시 F13
+ * 셀 위치: 발주번호 C10 · 물류센터 C13 · 입고예정일시 F13 · 하차일시 G13 (미하차면 '-')
  * 상품: 22행부터 2행 단위 (B 상품코드(=SKU) · C 상품명 · G 발주수량 · I 입고수량 · J 매입가(부가포함)), '합계' 행에서 끝
  */
 
@@ -22,6 +22,8 @@ export interface PurchaseOrder {
   center: string
   /** 입고예정일 YYYY-MM-DD */
   dueDate: string
+  /** 하차일 YYYY-MM-DD — 발주서에서 읽은 것만 키가 있음 (미하차 '-' 면 null). 로켓_세일즈 원장에서 만든 발주엔 없음 */
+  unloadedAt?: string | null
   items: PurchaseOrderItem[]
   fileName: string
 }
@@ -41,6 +43,7 @@ export function parsePurchaseOrderXlsx(buf: ArrayBuffer, fileName = ''): Purchas
   const poNumber = str(cell('C10'))
   if (!/^\d+$/.test(poNumber)) return null
   const due = str(cell('F13')).replace(/\//g, '-').slice(0, 10)
+  const unloaded = str(cell('G13')).replace(/\//g, '-').slice(0, 10)
   const items: PurchaseOrderItem[] = []
   for (let r = 22; r < 22 + 2 * 500; r += 2) {
     const a = str(cell(`A${r}`))
@@ -55,7 +58,7 @@ export function parsePurchaseOrderXlsx(buf: ArrayBuffer, fileName = ''): Purchas
       unitPrice: num(cell(`J${r}`)),
     })
   }
-  return { poNumber, center: str(cell('C13')), dueDate: due, items, fileName }
+  return { poNumber, center: str(cell('C13')), dueDate: due, unloadedAt: /^\d{4}-\d{2}-\d{2}$/.test(unloaded) ? unloaded : null, items, fileName }
 }
 
 /** 파일 여러 개(xlsx 또는 zip) → 발주서 목록 (발주번호 중복은 뒤 파일 우선) */
