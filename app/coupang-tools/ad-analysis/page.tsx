@@ -487,7 +487,7 @@ export default function AdAnalysisPage() {
   }
 
   // 상품 월 손익 — 쿠팡 손익이 저장한 가장 최근 달 상품별 판정 요약(pnl_verdict_YYYY-MM, 관리자만)
-  const [productMonth, setProductMonth] = useState<{ month: string; byAlias: Map<string, { profit: number; adShare: number | null }> } | null>(null)
+  const [productMonth, setProductMonth] = useState<{ month: string; byAlias: Map<string, { profit: number; adShare: number | null; revenue?: number }> } | null>(null)
   useEffect(() => {
     if (isGuest) return
     let cancelled = false
@@ -500,9 +500,9 @@ export default function AdAnalysisPage() {
           .sort((x, y) => y.localeCompare(x))
         if (!months.length) return
         const vj = await (await fetch(`/api/coupang-master?type=pnl_verdict_${months[0]}`)).json()
-        const rows = (vj?.data?.rows || []) as { alias: string; profit: number; adShare: number | null }[]
+        const rows = (vj?.data?.rows || []) as { alias: string; profit: number; adShare: number | null; revenue?: number }[]
         if (!cancelled && rows.length) {
-          setProductMonth({ month: months[0], byAlias: new Map(rows.map((r) => [r.alias, { profit: r.profit, adShare: r.adShare }])) })
+          setProductMonth({ month: months[0], byAlias: new Map(rows.map((r) => [r.alias, { profit: r.profit, adShare: r.adShare, revenue: r.revenue }])) })
         }
       } catch { /* 없으면 표시 안 함 */ }
     })()
@@ -530,7 +530,7 @@ export default function AdAnalysisPage() {
   const productNoteOf = (campaignId: string): ProductMonthNote | null => {
     const alias = campaignAlias.get(campaignId)
     const v = alias && productMonth ? productMonth.byAlias.get(alias) : undefined
-    return v && productMonth && alias ? { month: productMonth.month, alias, profit: v.profit, adShare: v.adShare } : null
+    return v && productMonth && alias ? { month: productMonth.month, alias, profit: v.profit, adShare: v.adShare, revenue: v.revenue } : null
   }
 
   // 상태 3칸 캠페인명 클릭 → 전체 캠페인 표에서 그 행으로 스크롤 + 펼침

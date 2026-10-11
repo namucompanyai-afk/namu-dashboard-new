@@ -148,6 +148,22 @@ function StatusBox({
   const [more, setMore] = useState(false)
   const m = STATUS_META[kind]
   const shown = more ? list : list.slice(0, STATUS_LIMIT)
+  // 그룹 합계 — 광고비(부가포함)·광고 매출은 캠페인 합, 상품 월 매출은 별칭 중복 없이 합 (값 없으면 그 항목만 숨김)
+  const sum = useMemo(() => {
+    let cost = 0
+    let rev = 0
+    const byAlias = new Map<string, number>()
+    let month = ''
+    for (const c of list) {
+      cost += c.adCostVat
+      rev += c.revenue
+      const n = noteOf?.(c.campaignId)
+      if (n && n.revenue != null) { byAlias.set(n.alias, n.revenue); month = n.month }
+    }
+    const product = byAlias.size ? [...byAlias.values()].reduce((a, v) => a + v, 0) : null
+    return { cost, rev, product, month }
+  }, [list, noteOf])
+  const won = (n: number) => Math.round(n).toLocaleString('ko-KR')
   return (
     <div style={{ ...card, borderTop: `3px solid ${m.color}`, padding: '10px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
@@ -155,6 +171,12 @@ function StatusBox({
         <b style={{ color: m.color, fontSize: 18 }}>{list.length}</b>
         <span style={{ fontSize: 11, color: '#94A3B8', marginLeft: 'auto' }}>{m.rule}</span>
       </div>
+      {list.length > 0 && (
+        <div className="mono" style={{ fontSize: 11, color: '#64748B', marginBottom: 6 }}>
+          광고비(부가포함) {won(sum.cost)} · 광고 매출 {won(sum.rev)}
+          {sum.product != null && ` · 상품 ${Number(sum.month.slice(5, 7))}월 매출 ${won(sum.product)}`}
+        </div>
+      )}
       {list.length === 0 ? (
         <div style={{ fontSize: 12, color: '#94A3B8' }}>없음</div>
       ) : (
@@ -667,7 +689,7 @@ export function WeekCompareBox({ snapshots, notes }: { snapshots: WeeklySnapshot
 }
 
 // ── 상품 월 손익 (쿠팡 손익 상품별 판정 저장본) — 캠페인 줄 아래 작은 글씨 ──────
-export type ProductMonthNote = { month: string; alias: string; profit: number; adShare: number | null }
+export type ProductMonthNote = { month: string; alias: string; profit: number; adShare: number | null; revenue?: number }
 
 const profitText = (n: number) => {
   const sign = n > 0 ? '+' : n < 0 ? '−' : ''
