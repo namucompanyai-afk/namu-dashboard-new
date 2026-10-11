@@ -241,8 +241,14 @@ export default function CoupangPnlPanel(props: {
     try {
       const f = files[0]
       if (kind === 'ad') {
+        // 광고를 새로 올리면 같은 달 나머지 파일은 초기화 — 다른 기간 광고와 섞이지 않게 (취소하면 아무것도 안 바뀜)
+        const others = KINDS.filter(({ kind: k }) => k !== 'ad' && (!!saved[k] || (k === 'ledger' && !!legacyPo)))
+        if (others.length && !window.confirm(
+          `광고 파일을 새로 올리면 ${Number(month.slice(5, 7))}월의 나머지 파일 ${others.length}개(${others.map((o) => o.label).join(', ')})가 초기화됩니다. 진행할까요?`,
+        )) return
         const r = parseAdCampaign(await f.arrayBuffer(), f.name)
         if (r.missingColumns.length) throw new Error(`광고 파일 열 누락: ${r.missingColumns.join(', ')}`)
+        for (const o of others) await deleteKindData(o.kind)
         props.onAd(r.rows, { fileName: f.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length },
           r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate, days: r.periodDays || 30 } : null)
         const per = r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate } : extractPeriodFromFileName(f.name)
@@ -310,23 +316,27 @@ export default function CoupangPnlPanel(props: {
     setPeriodInput((p) => ({ seller: d, onep_sales: d, ad: adPeriod ? p.ad : defaultPeriod(month) }))
   }, [month, adPeriod?.start, adPeriod?.end]) // eslint-disable-line react-hooks/exhaustive-deps
   /** 카드 파일 삭제 — 그 달·그 종류 저장본만. 3P·1P 판매·광고면 같은 달 상품별 판정 요약(verdict)도 */
+  /** 그 달·그 종류 저장본 삭제 + 화면 비우기 (확인창 없음) */
+  const deleteKindData = async (kind: Kind) => {
+    const types = [...DELETE_TYPES[kind], ...(kind === 'seller' || kind === 'onep_sales' || kind === 'ad' ? ['verdict'] : [])]
+    for (const t of types) {
+      const res = await fetch(`/api/coupang-master?type=pnl_${t}_${month}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const j = await res.json().catch(() => null)
+        throw new Error(`삭제 실패 (${res.status})${j?.error ? ` — ${j.error}` : ''}`)
+      }
+    }
+    setSaved((x) => ({ ...x, [kind]: null }))
+    setPending((x) => ({ ...x, [kind]: null }))
+    if (kind === 'ledger') setLegacyPo(null)
+    savedVerdictRef.current = ''
+  }
   const removeKind = async (kind: Kind, label: string, fileName: string) => {
     if (!window.confirm(`${Number(month.slice(5, 7))}월 [${label}] 파일(${fileName})을 삭제할까요?`)) return
     setBusy(kind)
     setErrors((e) => ({ ...e, [kind]: null }))
     try {
-      const types = [...DELETE_TYPES[kind], ...(kind === 'seller' || kind === 'onep_sales' || kind === 'ad' ? ['verdict'] : [])]
-      for (const t of types) {
-        const res = await fetch(`/api/coupang-master?type=pnl_${t}_${month}`, { method: 'DELETE' })
-        if (!res.ok) {
-          const j = await res.json().catch(() => null)
-          throw new Error(`삭제 실패 (${res.status})${j?.error ? ` — ${j.error}` : ''}`)
-        }
-      }
-      setSaved((x) => ({ ...x, [kind]: null }))
-      setPending((x) => ({ ...x, [kind]: null }))
-      if (kind === 'ledger') setLegacyPo(null)
-      savedVerdictRef.current = ''
+      await deleteKindData(kind)
     } catch (e) {
       setErrors((x) => ({ ...x, [kind]: errMsg(e) }))
     } finally {
@@ -460,7 +470,7 @@ export default function CoupangPnlPanel(props: {
                 </div>
                 {state === 'green' && sv ? (
                   <>
-                    <div className="mt-0.5 truncate text-green-800" title={sv.fileName || ''}>
+                    <div className="mt-0.5 line-clamp-2 break-all text-green-800" title={sv.fileName || ''}>
                       ✓ {sv.fileName || ''}{n != null ? ` · ${n.toLocaleString('ko-KR')}행` : ''}
                     </div>
                     {sv.savedAt && (
@@ -470,7 +480,7 @@ export default function CoupangPnlPanel(props: {
                     )}
                   </>
                 ) : (
-                  <div className="mt-0.5 truncate text-gray-500" title={pd?.fileName || sv?.fileName || hint}>
+                  <div className="mt-0.5 line-clamp-2 break-all text-gray-500" title={pd?.fileName || sv?.fileName || hint}>
                     {pd ? `${pd.fileName} (월 저장 전)` : live ? '수익 진단 데이터 사용 중 (월 저장 전)' : sv ? sv.fileName : hint}
                   </div>
                 )}
