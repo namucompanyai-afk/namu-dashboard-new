@@ -187,8 +187,10 @@ export function build1PView(
       if (link.kind !== 'none' || adLink.kind !== 'none') a.linked = true
       // 필수 ROAS 가중: 1봉 소비자가 × 매출 가중 (연결된 행만)
       const base = link.kind === '1P' ? link : adLink.kind === '1P' ? adLink : null
+      // 별칭: 옵션 단위는 광고집행 옵션 자신의 상품 (광고 분석 campaignAlias 와 같은 규칙 — 전환 상품으로 가면 광고비가 다른 상품에 붙음)
+      const aliasSrc = map === opts && adLink.kind === '1P' ? adLink : base
+      if (!a.alias && aliasSrc?.kind === '1P' && aliasSrc.unitMargin > 0) a.alias = aliasSrc.alias
       if (base && base.unitMargin > 0) {
-        if (!a.alias) a.alias = base.alias
         a._revW += r.revenue14d || 0
         a._invW += ((r.revenue14d || 0) * (base.taxable ? 1 : 1.1)) / base.unitMargin
       }

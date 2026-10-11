@@ -44,6 +44,7 @@ import {
   WeekCompareBox,
   WeeklyActionsSection,
   ProductNote,
+  AdProductHint,
   reflectMemoText,
   type ProductMonthNote,
   snapshotFromView,
@@ -1316,6 +1317,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
           </span>
           <strong><SaleChBadge ch={c.channel} />{c.campaignName}</strong>
           {note && <div style={{ paddingLeft: 22 }}><ProductNote note={note} /></div>}
+          {note && <div style={{ paddingLeft: 22 }}><AdProductHint adProfit={c.adProfit} note={note} /></div>}
         </td>
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>

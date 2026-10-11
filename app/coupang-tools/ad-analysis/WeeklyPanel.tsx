@@ -196,6 +196,7 @@ function StatusBox({
                 {Math.round(c.adProfit).toLocaleString('ko-KR')}
               </span>
               {noteOf?.(c.campaignId) && <ProductNote note={noteOf(c.campaignId)} style={{ width: '100%' }} />}
+              <AdProductHint adProfit={c.adProfit} note={noteOf?.(c.campaignId)} style={{ width: '100%' }} />
             </button>
           ))}
           {list.length > STATUS_LIMIT && (
@@ -386,9 +387,7 @@ function CampaignActionRow({
         <span style={{ flex: 1, minWidth: 0 }}>
           <b style={{ fontSize: 13 }}>{c.campaignName}</b>
           {note && <ProductNote note={note} style={{ display: 'block' }} />}
-          {note && c.adProfit < 0 && note.profit > 0 && (
-            <span style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#B45309' }}>광고 적자 — 끄지 말고 키워드 정리·목표 ROAS 상향</span>
-          )}
+          <AdProductHint adProfit={c.adProfit} note={note} style={{ display: 'block' }} />
         </span>
         {done && <span style={{ fontSize: 11, fontWeight: 700, color: '#059669', background: '#ECFDF5', borderRadius: 4, padding: '1px 6px' }}>반영됨</span>}
         <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: c.adProfit < 0 ? '#DC2626' : '#059669' }}>
@@ -695,6 +694,18 @@ const profitText = (n: number) => {
   const sign = n > 0 ? '+' : n < 0 ? '−' : ''
   const a = Math.abs(n)
   return a >= 10000 ? `${sign}${Math.round(a / 10000).toLocaleString('ko-KR')}만` : `${sign}${Math.round(a).toLocaleString('ko-KR')}원`
+}
+
+/** 광고 적자 캠페인 안내 — 상품 월 손익(판정 표 profit)·매출(revenue) 기준 */
+export function AdProductHint({ adProfit, note, style }: { adProfit: number; note: ProductMonthNote | null | undefined; style?: React.CSSProperties }) {
+  if (!note || !(adProfit < 0)) return null
+  const [text, color] =
+    note.profit < 0
+      ? ['상품도 적자 — 광고 축소·중단 검토', '#DC2626']
+      : note.revenue != null && note.profit < note.revenue * 0.01
+        ? ['상품 이익 거의 없음 — 목표 ROAS 상향 먼저', '#EA580C']
+        : ['광고 적자 — 끄지 말고 키워드 정리·목표 ROAS 상향', '#B45309']
+  return <span style={{ fontSize: 11, fontWeight: 700, color, ...style }}>{text}</span>
 }
 
 export function ProductNote({ note, style }: { note: ProductMonthNote | null | undefined; style?: React.CSSProperties }) {
