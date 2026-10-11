@@ -1772,7 +1772,7 @@ function UnmatchedAdOptionsSection({ result }: { result: any }) {
             🔍 마진 마스터 미매칭 옵션 (광고비 누수)
             {(result?.unmatched?.optionCount || 0) > 0 && (
               <span className="ml-2 text-xs font-normal text-amber-800">
-                매칭 누락 옵션 {result.unmatched.optionCount}개 · 매출 {formatKRW(result.unmatched.sellerRevenue)} · 광고비 {formatKRW(result.unmatched.adCost)}
+                마스터 미등록 옵션 {result.unmatched.optionCount}개 (판매 {formatKRW(result.unmatched.sellerRevenue)} — 손익 계산에서 빠짐) · 그중 광고비 발생 {list.length}개 ({formatKRW(totalAdCost)})
               </span>
             )}
           </div>
