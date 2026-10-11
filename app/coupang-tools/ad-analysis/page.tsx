@@ -498,11 +498,15 @@ export default function AdAnalysisPage() {
           .filter(([, kinds]) => kinds.includes('verdict'))
           .map(([m]) => m)
           .sort((x, y) => y.localeCompare(x))
-        if (!months.length) return
-        const vj = await (await fetch(`/api/coupang-master?type=pnl_verdict_${months[0]}`)).json()
-        const rows = (vj?.data?.rows || []) as { alias: string; profit: number; adShare: number | null; revenue?: number }[]
-        if (!cancelled && rows.length) {
-          setProductMonth({ month: months[0], byAlias: new Map(rows.map((r) => [r.alias, { profit: r.profit, adShare: r.adShare, revenue: r.revenue }])) })
+        // 월 전체 자료로 확정된 달(confirmed === true) 중 가장 최근 달만 — 없으면 표시 안 함
+        for (const m of months) {
+          const vj = await (await fetch(`/api/coupang-master?type=pnl_verdict_${m}`)).json()
+          if (vj?.data?.confirmed !== true) continue
+          const rows = (vj?.data?.rows || []) as { alias: string; profit: number; adShare: number | null; revenue?: number }[]
+          if (!cancelled && rows.length) {
+            setProductMonth({ month: m, byAlias: new Map(rows.map((r) => [r.alias, { profit: r.profit, adShare: r.adShare, revenue: r.revenue }])) })
+          }
+          return
         }
       } catch { /* 없으면 표시 안 함 */ }
     })()
