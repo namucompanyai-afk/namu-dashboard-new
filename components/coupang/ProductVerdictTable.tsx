@@ -159,7 +159,7 @@ export default function ProductVerdictTable({ rows, monthLabel }: { rows: Produc
           </tbody>
           <tfoot className="sticky bottom-0 bg-white">
             <tr className="border-t-2 text-gray-700">
-              <td className="px-2 py-2 font-semibold" colSpan={10}>합계 ({shown.length}개{filter === '전체' ? ' = 3P 순이익 + 판매 기준 1P 순이익' : ''})</td>
+              <td className="px-2 py-2 font-semibold" colSpan={10}>합계 (판매 기준 · 상품 판단용){filter === '전체' ? ' — 입고 기준 순이익과 차이 = 1P 재고 증감' : ` · ${shown.length}개`}</td>
               <td className={`px-2 text-right font-semibold tabular-nums ${tone(total)}`}>{won(total)}</td>
               <td colSpan={2} />
             </tr>

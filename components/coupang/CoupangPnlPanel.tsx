@@ -441,7 +441,7 @@ export default function CoupangPnlPanel(props: {
   const monthLabel = `${Number(month.slice(5, 7))}월`
 
   const steps = revTotal != null && margin3P != null && pnl.inbound && pnl.milkrun && ad3P != null && pnl.adCost != null ? [
-    { label: '매출 합계', value: revTotal, color: '#3B82F6' },
+    { label: '매출 합계 (3P 판매 + 1P 납품가)', value: revTotal, color: '#3B82F6' },
     { label: '원가·포장·배송·수수료', value: -(revTotal - (margin3P + pnl.inbound.margin)), color: '#94A3B8' },
     { label: '밀크런 운송비', value: -(pnl.milkrun.allocated + pnl.milkrun.estimated), color: '#F59E0B' },
     { label: '광고비(부가포함)', value: -(ad3P + pnl.adCost), color: '#EF4444' },
@@ -572,7 +572,7 @@ export default function CoupangPnlPanel(props: {
         {/* 순이익 */}
         <div className="rounded-xl border bg-white p-5 shadow-sm">
           <div className="text-sm font-semibold text-gray-600">
-            {monthLabel} 쿠팡 순이익
+            {monthLabel} 쿠팡 순이익 (1P 입고 기준)
             {monthConfirmed ? (
               <span className="ml-2 text-xs font-normal text-green-700">월 확정</span>
             ) : (
@@ -641,7 +641,7 @@ export default function CoupangPnlPanel(props: {
               </div>
               <div className="mt-1 flex justify-between text-xs text-gray-600">
                 <span>3P {man(rev3P)} ({pct(rev3P / (rev3P + gmv1P))})</span>
-                <span>1P {man(gmv1P)} ({pct(gmv1P / (rev3P + gmv1P))})</span>
+                <span>1P {man(gmv1P)} (소비자가 GMV) · {pct(gmv1P / (rev3P + gmv1P))}</span>
               </div>
             </div>
           ) : (
