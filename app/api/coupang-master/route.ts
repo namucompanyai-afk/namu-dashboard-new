@@ -1,6 +1,6 @@
 import { requireRole } from "@/lib/server-auth"
 import { NextResponse } from "next/server";
-import { getData, saveData, listIdsByPrefix } from "@/lib/supabase";
+import { getData, saveData, listIdsByPrefix, deleteData } from "@/lib/supabase";
 
 /**
  * 쿠팡 마스터 데이터 API
@@ -14,7 +14,7 @@ import { getData, saveData, listIdsByPrefix } from "@/lib/supabase";
  *
  * GET    /api/coupang-master?type=margin_master   → 데이터 받기
  * POST   /api/coupang-master                       → 저장 (type, data, fileName 포함)
- * DELETE /api/coupang-master?type=margin_master   → 삭제
+ * DELETE /api/coupang-master?type=pnl_ad_2026-09   → 쿠팡 손익 월 저장본 삭제 (관리자, pnl_ 만)
  */
 
 const VALID_TYPES = [
@@ -132,34 +132,20 @@ export async function POST(request: Request) {
   }
 }
 
-/** 데이터 삭제 */
+/** 데이터 삭제 — 쿠팡 손익 월 저장본(pnl_*)만, 관리자만. 행을 지운다 (월 목록 pnl_months 에서도 빠지게) */
 export async function DELETE(request: Request) {
-
-  // 로그인 필수 (서명 쿠키 nd_auth) — 호출 화면: 쿠팡 광고 분석·진단·데이터 관리·스스 진단
-  const denied = requireRole(request, ['admin', 'guest'])
+  const denied = requireRole(request, ['admin'])
   if (denied) return denied
   try {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');
 
-    if (!type || !isValidType(type)) {
-      return NextResponse.json(
-        { error: 'type 파라미터 필요' },
-        { status: 400 }
-      );
+    if (!type || !type.startsWith('pnl_') || !PNL_TYPE.test(type)) {
+      return NextResponse.json({ error: 'pnl_{종류}_{YYYY-MM} 만 삭제할 수 있습니다' }, { status: 400 });
     }
 
-    const pd = pnlDenied(request, type);
-    if (pd) return pd;
-    // 빈 객체로 덮어쓰기 (saveData가 upsert임)
-    await saveData(getKey(type), {
-      data: null,
-      fileName: null,
-      uploadedBy: null,
-      savedAt: null,
-    });
-
-    return NextResponse.json({ ok: true });
+    const deleted = await deleteData(getKey(type as DataType));
+    return NextResponse.json({ ok: true, deleted });
   } catch (err) {
     return NextResponse.json({ error: errText(err) }, { status: 500 });
   }

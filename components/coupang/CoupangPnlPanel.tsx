@@ -75,6 +75,12 @@ const stamp = (iso: string | null) => {
   const d = new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString()
   return `${d.slice(5, 10)} ${d.slice(11, 16)}`
 }
+const kstDay = (iso: string) => new Date(new Date(iso).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+const mdOf = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`
+/** 카드 하나를 지울 때 함께 지우는 저장본 종류 — 광고는 키워드 행(adkw), 입고 원장은 옛 발주서(po)도 */
+const DELETE_TYPES: Record<Kind, string[]> = {
+  ad: ['ad', 'adkw'], seller: ['seller'], onep_sales: ['onep_sales'], ledger: ['ledger', 'po'], mr_settle: ['mr_settle'], mr_list: ['mr_list'],
+}
 const pct = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? '—' : `${(n * 100).toFixed(1)}%`)
 
 /** 광고 행 → 1P 계산에 필요한 필드만 합친 요약 (캠페인·광고옵션·전환옵션·판매방식 단위) */
@@ -128,10 +134,6 @@ export default function CoupangPnlPanel(props: {
     const d = defaultPeriod(thisMonth())
     return { seller: d, onep_sales: d, ad: d }
   })
-  useEffect(() => {
-    const d = defaultPeriod(month)
-    setPeriodInput({ seller: d, onep_sales: d, ad: d })
-  }, [month])
   const inputPeriod = (kind: PeriodKind): Period => {
     const p = validPeriod(periodInput[kind])
     if (!p) throw new Error(`${PERIOD_LABEL[kind]} 자료 시작일·종료일을 입력하세요`)
@@ -299,6 +301,38 @@ export default function CoupangPnlPanel(props: {
   const coveredRange: Period | null = knownPeriods.length
     ? validPeriod({ start: knownPeriods.reduce((a, p) => (p.start > a ? p.start : a), knownPeriods[0].start), end: knownPeriods.reduce((a, p) => (p.end < a ? p.end : a), knownPeriods[0].end) })
     : null
+  // 광고 파일 기준 — 3P·1P 판매 기간 입력칸 기본값 = 광고 기간 (없으면 1일~어제·말일)
+  const hasAd = !!cur('ad')
+  const adPeriod = periods.ad
+  const adFull = !!adPeriod && adPeriod.start <= monthStart && adPeriod.end >= monthEnd
+  useEffect(() => {
+    const d = adPeriod ?? defaultPeriod(month)
+    setPeriodInput((p) => ({ seller: d, onep_sales: d, ad: adPeriod ? p.ad : defaultPeriod(month) }))
+  }, [month, adPeriod?.start, adPeriod?.end]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** 카드 파일 삭제 — 그 달·그 종류 저장본만. 3P·1P 판매·광고면 같은 달 상품별 판정 요약(verdict)도 */
+  const removeKind = async (kind: Kind, label: string, fileName: string) => {
+    if (!window.confirm(`${Number(month.slice(5, 7))}월 [${label}] 파일(${fileName})을 삭제할까요?`)) return
+    setBusy(kind)
+    setErrors((e) => ({ ...e, [kind]: null }))
+    try {
+      const types = [...DELETE_TYPES[kind], ...(kind === 'seller' || kind === 'onep_sales' || kind === 'ad' ? ['verdict'] : [])]
+      for (const t of types) {
+        const res = await fetch(`/api/coupang-master?type=pnl_${t}_${month}`, { method: 'DELETE' })
+        if (!res.ok) {
+          const j = await res.json().catch(() => null)
+          throw new Error(`삭제 실패 (${res.status})${j?.error ? ` — ${j.error}` : ''}`)
+        }
+      }
+      setSaved((x) => ({ ...x, [kind]: null }))
+      setPending((x) => ({ ...x, [kind]: null }))
+      if (kind === 'ledger') setLegacyPo(null)
+      savedVerdictRef.current = ''
+    } catch (e) {
+      setErrors((x) => ({ ...x, [kind]: errMsg(e) }))
+    } finally {
+      setBusy(null)
+    }
+  }
   const adRows: AdCampaignRow[] | null = cur('ad')?.rows || (props.storeAdRows.length ? props.storeAdRows : null)
   const onePView = useMemo(() => (adRows ? build1PView(adRows, props.onePRows, props.marginRows) : null), [adRows, props.onePRows, props.marginRows])
   const pnl = useMemo(() => computeOnePPnl({
@@ -325,8 +359,8 @@ export default function CoupangPnlPanel(props: {
     const rows = verdictRows
       .filter((r) => !r.special)
       .map((r) => ({ alias: r.alias, revenue: Math.round(r.revenue), profit: Math.round(r.profit), adProfit: Math.round(r.adProfit), adShare: r.adShare, channel: r.channel }))
-    // 그 달 3P·1P 판매 파일이 다 있을 때만 — 일부만 올린 달이 '가장 최근' 으로 저장돼 광고 분석에 섞이지 않게
-    if (!rows.length || !cur('seller') || !cur('onep_sales')) return
+    // 그 달 광고·3P·1P 판매 파일이 다 있을 때만 — 일부만 올린 달(또는 광고를 지운 달)이 저장돼 광고 분석에 섞이지 않게
+    if (!rows.length || !cur('ad') || !cur('seller') || !cur('onep_sales')) return
     const body = JSON.stringify({ type: `pnl_verdict_${month}`, data: { month, rows, confirmed: monthConfirmed, periods }, fileName: '상품별 판정 요약' })
     if (savedVerdictRef.current === body) return
     savedVerdictRef.current = body
@@ -375,6 +409,21 @@ export default function CoupangPnlPanel(props: {
           <input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} className="rounded border px-2 py-1 text-sm" />
           <span className="text-xs text-gray-400">올린 파일은 이 달 기준으로 저장되고, 다시 열면 자동으로 불러옵니다</span>
         </div>
+        {!hasAd ? (
+          <div className="mb-2 rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-800">광고 파일을 먼저 올리세요 (파일명의 기간으로 나머지 파일 기간을 안내합니다)</div>
+        ) : adPeriod ? (
+          <div className="mb-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-gray-700">
+            <div className="font-semibold text-blue-800">광고 기간 {mdRange(adPeriod)} — 나머지 파일도 이 기간으로 받으세요</div>
+            <div>3P 판매: 윙 셀러 인사이트 · {mdRange(adPeriod)}</div>
+            <div>1P 판매: 서플라이어 허브 판매 분석(상품별) · {mdRange(adPeriod)}</div>
+            <div>1P 입고 원장: 로켓 세일즈 · {mdOf(adPeriod.end)} 입고분까지</div>
+            <div>밀크런 정산: {Number(month.slice(5, 7))}월분</div>
+            <div>밀크런 접수 내역: {mdRange(adPeriod)}</div>
+            {!adFull && (
+              <div className="font-semibold text-red-600">광고 기간이 월 전체가 아닙니다 ({mdRange(adPeriod)}) — 이 달은 월 확정되지 않아 광고 분석에 상품 손익이 표시되지 않습니다</div>
+            )}
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
           {KINDS.map(({ kind, label, hint, accept, multiple, optional }) => {
             const sv = saved[kind]
@@ -386,16 +435,40 @@ export default function CoupangPnlPanel(props: {
             const box = { green: 'border-green-300 bg-green-50', red: 'border-red-400 bg-red-50', yellow: 'border-amber-300 bg-amber-50', gray: 'border-gray-200 bg-gray-50' }[state]
             const canSave = !!pd || (kind === 'ad' && props.storeAdRows.length > 0) || (kind === 'seller' && !!props.storeSellerRows?.length)
             const n = rowCountOf(sv?.data)
+            // 광고 파일 전엔 나머지 카드 잠금 (지우기 버튼만 살림)
+            const locked = kind !== 'ad' && !hasAd
+            const deletable = !!sv || (kind === 'ledger' && !!legacyPo)
+            const pk = kind === 'seller' || kind === 'onep_sales' || kind === 'ad' ? kind : null
+            const savedToday = !!sv?.savedAt && kstDay(sv.savedAt) === kstDay(new Date().toISOString())
             return (
-              <label key={kind} className={`cursor-pointer rounded-lg border px-3 py-2 text-xs ${box}`}>
+              <label key={kind} className={`relative rounded-lg border px-3 py-2 text-xs ${box} ${locked ? 'pointer-events-none cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
                 <div className="flex items-center justify-between font-semibold text-gray-800">
                   <span>{label}{optional && <span className="ml-1 font-normal text-gray-400">(선택)</span>}</span>
-                  <span>{busy === kind ? '…' : state === 'green' ? '✓' : state === 'red' ? '!' : state === 'yellow' ? '·' : '＋'}</span>
+                  <span className="flex items-center gap-1.5">
+                    {busy === kind ? '…' : state === 'green' ? '✓' : state === 'red' ? '!' : state === 'yellow' ? '·' : '＋'}
+                    {deletable && (
+                      <button
+                        type="button"
+                        title="이 달 파일 삭제"
+                        aria-label="삭제"
+                        disabled={busy === kind}
+                        className="pointer-events-auto rounded px-0.5 text-gray-400 hover:bg-red-100 hover:text-red-600"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); removeKind(kind, label, sv?.fileName || (kind === 'ledger' && legacyPo ? '옛 발주서' : '')) }}
+                      >🗑</button>
+                    )}
+                  </span>
                 </div>
                 {state === 'green' && sv ? (
-                  <div className="mt-0.5 truncate text-green-800" title={sv.fileName || ''}>
-                    ✓ {sv.fileName || ''}{(kind === 'seller' || kind === 'onep_sales' || kind === 'ad') && periods[kind] ? ` · ${mdRange(periods[kind]!)}` : ''}{n != null ? ` · ${n.toLocaleString('ko-KR')}행` : ''}{sv.savedAt ? ` · ${stamp(sv.savedAt)}` : ''}
-                  </div>
+                  <>
+                    <div className="mt-0.5 truncate text-green-800" title={sv.fileName || ''}>
+                      ✓ {sv.fileName || ''}{n != null ? ` · ${n.toLocaleString('ko-KR')}행` : ''}
+                    </div>
+                    {sv.savedAt && (
+                      <div className={`mt-0.5 truncate ${savedToday ? 'text-green-700' : 'text-gray-400'}`} title={stamp(sv.savedAt)}>
+                        {mdOf(kstDay(sv.savedAt))} 저장{pk ? ` · ${periods[pk] ? mdRange(periods[pk]!) : '기간 없음'}` : ''}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="mt-0.5 truncate text-gray-500" title={pd?.fileName || sv?.fileName || hint}>
                     {pd ? `${pd.fileName} (월 저장 전)` : live ? '수익 진단 데이터 사용 중 (월 저장 전)' : sv ? sv.fileName : hint}
@@ -417,7 +490,7 @@ export default function CoupangPnlPanel(props: {
         </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600">
           <span className="font-semibold">올릴 파일 자료 기간</span>
-          {PERIOD_KINDS.map((k) => (
+          {PERIOD_KINDS.filter((k) => k !== 'ad' || !adPeriod).map((k) => (
             <span key={k} className="flex items-center gap-1">
               {PERIOD_LABEL[k]}{k === 'ad' && <span className="text-gray-400">(파일명에서 못 읽을 때)</span>}
               <input type="date" value={periodInput[k].start} onChange={(e) => setPeriodInput((p) => ({ ...p, [k]: { ...p[k], start: e.target.value } }))} className="rounded border px-1 py-0.5" />
