@@ -68,6 +68,15 @@ const periodOfSaved = (kind: PeriodKind, data: any, fileName: string | null | un
   const fromName = extractPeriodFromFileName(fileName || '')
   return validPeriod({ start: data?.startDate || fromName?.startDate, end: data?.endDate || fromName?.endDate })
 }
+/** 업로드 자료 기간이 선택 월 안인지 — 시작·종료가 모두 그 달이면 null, 아니면 차단 문구 (달 안 일부 기간은 허용) */
+const monthMismatch = (p: Period, month: string): string | null => {
+  const sm = p.start.slice(0, 7)
+  const em = p.end.slice(0, 7)
+  if (sm === month && em === month) return null
+  if (sm !== em) return `이 파일은 ${p.start} ~ ${p.end} 자료입니다. 두 달에 걸친 기간입니다. 월 단위로 다시 받아 주세요.`
+  const mLabel = (m: string) => (m.slice(0, 4) === month.slice(0, 4) ? `${Number(m.slice(5, 7))}월` : `${m.slice(0, 4)}년 ${Number(m.slice(5, 7))}월`)
+  return `이 파일은 ${p.start} ~ ${p.end} (${mLabel(sm)}) 자료입니다. ${Number(month.slice(5, 7))}월 칸에는 올릴 수 없습니다. ${mLabel(sm)}을 선택한 뒤 올려 주세요.`
+}
 const mdRange = (p: Period) => `${Number(p.start.slice(5, 7))}/${Number(p.start.slice(8, 10))}~${Number(p.end.slice(5, 7))}/${Number(p.end.slice(8, 10))}`
 const rowCountOf = (d: any): number | null => (Array.isArray(d?.rows) ? d.rows.length : Array.isArray(d?.orders) ? d.orders.length : null)
 const stamp = (iso: string | null) => {
@@ -140,6 +149,12 @@ export default function CoupangPnlPanel(props: {
   const inputPeriod = (kind: PeriodKind): Period => {
     const p = validPeriod(periodInput[kind])
     if (!p) throw new Error(`${PERIOD_LABEL[kind]} 자료 시작일·종료일을 입력하세요`)
+    return p
+  }
+  /** 선택 월과 다른 달 자료면 저장 전에 차단 (throw → 칸 아래 빨간 글씨) */
+  const assertInMonth = (p: Period): Period => {
+    const why = monthMismatch(p, month)
+    if (why) throw new Error(why)
     return p
   }
 
@@ -233,8 +248,8 @@ export default function CoupangPnlPanel(props: {
     try {
       const p = pending[kind]
       if (p) await save(kind, p.data, p.fileName, p.kw)
-      else if (kind === 'ad' && props.storeAdRows.length) await save('ad', { rows: compactAdRows(props.storeAdRows), period: inputPeriod('ad') }, '수익 진단 광고 데이터', props.storeAdRows)
-      else if (kind === 'seller' && props.storeSellerRows?.length) await save('seller', { rows: props.storeSellerRows, period: inputPeriod('seller') }, '수익 진단 3P 판매 데이터')
+      else if (kind === 'ad' && props.storeAdRows.length) await save('ad', { rows: compactAdRows(props.storeAdRows), period: assertInMonth(inputPeriod('ad')) }, '수익 진단 광고 데이터', props.storeAdRows)
+      else if (kind === 'seller' && props.storeSellerRows?.length) await save('seller', { rows: props.storeSellerRows, period: assertInMonth(inputPeriod('seller')) }, '수익 진단 3P 판매 데이터')
     } catch (e) {
       setErrors((x) => ({ ...x, [kind]: errMsg(e) }))
     } finally {
@@ -249,28 +264,29 @@ export default function CoupangPnlPanel(props: {
     try {
       const f = files[0]
       if (kind === 'ad') {
+        const r = parseAdCampaign(await f.arrayBuffer(), f.name)
+        if (r.missingColumns.length) throw new Error(`광고 파일 열 누락: ${r.missingColumns.join(', ')}`)
+        const per = r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate } : extractPeriodFromFileName(f.name)
+        // 다른 달 자료면 여기서 차단 — 아래 초기화·저장 전이라 기존 데이터는 그대로
+        const period = assertInMonth(validPeriod({ start: per?.startDate, end: per?.endDate }) ?? inputPeriod('ad'))
         // 광고를 새로 올리면 같은 달 나머지 파일은 초기화 — 다른 기간 광고와 섞이지 않게 (취소하면 아무것도 안 바뀜)
         const others = KINDS.filter(({ kind: k }) => k !== 'ad' && (!!saved[k] || (k === 'ledger' && !!legacyPo)))
         if (others.length && !window.confirm(
           `광고 파일을 새로 올리면 ${Number(month.slice(5, 7))}월의 나머지 파일 ${others.length}개(${others.map((o) => o.label).join(', ')})가 초기화됩니다. 진행할까요?`,
         )) return
-        const r = parseAdCampaign(await f.arrayBuffer(), f.name)
-        if (r.missingColumns.length) throw new Error(`광고 파일 열 누락: ${r.missingColumns.join(', ')}`)
         for (const o of others) await deleteKindData(o.kind)
         props.onAd(r.rows, { fileName: f.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length },
           r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate, days: r.periodDays || 30 } : null)
-        const per = r.startDate && r.endDate ? { startDate: r.startDate, endDate: r.endDate } : extractPeriodFromFileName(f.name)
-        const period = validPeriod({ start: per?.startDate, end: per?.endDate }) ?? inputPeriod('ad')
         await save('ad', { rows: compactAdRows(r.rows), startDate: per?.startDate ?? null, endDate: per?.endDate ?? null, period }, f.name, r.rows)
       } else if (kind === 'seller') {
-        const period = inputPeriod('seller')
+        const period = assertInMonth(inputPeriod('seller'))
         const r = parseSalesInsight(await f.arrayBuffer())
         const rows = (r as any).rows || []
         if (!rows.length) throw new Error((r as any).error || '3P 판매 행이 없습니다')
         props.onSeller(rows, { fileName: f.name, uploadedAt: new Date().toISOString(), rowCount: rows.length })
         await save('seller', { rows, period }, f.name)
       } else if (kind === 'onep_sales') {
-        const period = inputPeriod('onep_sales')
+        const period = assertInMonth(inputPeriod('onep_sales'))
         const r = parseOnePSalesCsv(await f.text())
         if (r.error) throw new Error(r.error)
         await save('onep_sales', { rows: r.rows, period }, f.name)
