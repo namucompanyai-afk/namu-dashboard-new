@@ -105,6 +105,9 @@ type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
 const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
+// 쉽먼트 등록용 송장 — 개별 복사한 송장번호 (브라우저별, 최근 것만 유지)
+const INVOICE_CHECK_KEY = 'coupangInvoiceCopied'
+const INVOICE_CHECK_MAX = 2000
 /** 열 너비 = 내용 폭(한글 2칸) + 여백, 8~60 */
 const fitWidths = (rows: (string | number)[][]): number[] => {
   const w: number[] = []
@@ -568,7 +571,20 @@ export default function CoupangB2BPage() {
   const [invoiceName, setInvoiceName] = useState('')
   const [invoiceError, setInvoiceError] = useState('')
   const [copiedCenter, setCopiedCenter] = useState('')
-  const [copiedNo, setCopiedNo] = useState('')
+  // 개별 복사한 송장번호 — 쉽먼트에 한 건씩 붙여 넣을 때 어디까지 했는지 (송장번호 기준, 새로고침·재업로드해도 유지)
+  const [checkedNos, setCheckedNos] = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(INVOICE_CHECK_KEY)
+      if (raw) setCheckedNos(new Set(JSON.parse(raw) as string[]))
+    } catch { /* 저장소 못 쓰면 이번 화면에서만 */ }
+  }, [])
+  const saveCheckedNos = useCallback((next: Set<string>) => {
+    setCheckedNos(next)
+    try {
+      localStorage.setItem(INVOICE_CHECK_KEY, JSON.stringify([...next].slice(-INVOICE_CHECK_MAX)))
+    } catch { /* 무시 */ }
+  }, [])
 
   const parseInvoices = useCallback(async (file: File) => {
     setInvoiceError('')
@@ -597,16 +613,20 @@ export default function CoupangB2BPage() {
     }
   }, [])
 
-  // 송장번호 1개만 복사 — 쉽먼트 화면에 한 건씩 붙여 넣을 때
-  const copyInvoiceNo = useCallback(async (key: string, invoiceNo: string) => {
+  // 송장번호 1개만 복사 — 쉽먼트 화면에 한 건씩 붙여 넣을 때. 복사한 송장은 ✅ 로 남긴다 (다시 눌러도 유지)
+  const copyInvoiceNo = useCallback(async (invoiceNo: string) => {
     try {
       await navigator.clipboard.writeText(invoiceNo)
-      setCopiedNo(key)
-      setTimeout(() => setCopiedNo(''), 1500)
+      if (!checkedNos.has(invoiceNo)) saveCheckedNos(new Set([...checkedNos, invoiceNo]))
     } catch {
       setInvoiceError('클립보드 복사에 실패했습니다. 브라우저 권한을 확인해 주세요.')
     }
-  }, [])
+  }, [checkedNos, saveCheckedNos])
+  const resetInvoiceChecks = useCallback((nos: string[]) => {
+    const next = new Set(checkedNos)
+    for (const no of nos) next.delete(no)
+    saveCheckedNos(next)
+  }, [checkedNos, saveCheckedNos])
 
   // 곰표분 — 전 발주 밀크런. PLT 는 봉 수 합(400봉/PLT), 운임은 BASIC×PLT vs 차량 구간 최저가
   const gompyoShipments = useMemo(
@@ -1645,11 +1665,27 @@ export default function CoupangB2BPage() {
                 <div className="px-4 py-3 border-t border-gray-200">
                   <div className="text-xs font-semibold text-gray-700 mb-2">쉽먼트 등록용 송장</div>
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                    {invoiceBlocks.map((b) => (
+                    {invoiceBlocks.map((b) => {
+                      const allNos = b.products.flatMap((p) => p.invoiceNos)
+                      const doneCount = allNos.filter((no) => checkedNos.has(no)).length
+                      const nextNo = allNos.find((no) => !checkedNos.has(no))
+                      return (
                       <div key={b.center} className="rounded border border-gray-200 p-3">
                         <div className="flex items-center justify-between gap-2 mb-2">
                           <span className="text-xs font-semibold">
                             {b.center} · {num(b.count)}건
+                            <span className={`ml-2 font-normal ${doneCount === allNos.length && allNos.length > 0 ? 'text-green-700' : 'text-gray-500'}`}>
+                              {doneCount}/{allNos.length} 복사
+                            </span>
+                            {doneCount > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => resetInvoiceChecks(allNos)}
+                                className="ml-2 text-[11px] font-normal text-gray-400 underline hover:text-gray-700"
+                              >
+                                체크 초기화
+                              </button>
+                            )}
                           </span>
                           <button
                             onClick={() => copyInvoiceNos(b.center, invoiceNosText(b))}
@@ -1665,18 +1701,22 @@ export default function CoupangB2BPage() {
                             </div>
                             <div className="text-[11px] text-gray-700 font-mono leading-relaxed">
                               {p.invoiceNos.map((no) => {
-                                const key = b.center + '|' + p.product + '|' + no
+                                const done = checkedNos.has(no)
+                                const isNext = no === nextNo
                                 return (
-                                  <div key={no} className="flex items-center justify-between gap-2">
-                                    <span>{no}</span>
+                                  <div
+                                    key={no}
+                                    className={`flex items-center justify-between gap-2 rounded px-1 ${done ? 'text-gray-400' : isNext ? 'bg-amber-50 font-bold text-gray-900' : ''}`}
+                                  >
+                                    <span>{no}{isNext && <span className="ml-1.5 font-sans text-[10px] font-normal text-amber-700">다음</span>}</span>
                                     <button
                                       type="button"
-                                      onClick={() => copyInvoiceNo(key, no)}
+                                      onClick={() => copyInvoiceNo(no)}
                                       title="송장번호 복사"
                                       aria-label={no + ' 복사'}
                                       className="shrink-0 px-1 text-gray-400 hover:text-gray-700"
                                     >
-                                      {copiedNo === key ? '✅' : '📋'}
+                                      {done ? '✅' : '📋'}
                                     </button>
                                   </div>
                                 )
@@ -1685,7 +1725,8 @@ export default function CoupangB2BPage() {
                           </div>
                         ))}
                       </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               </>
