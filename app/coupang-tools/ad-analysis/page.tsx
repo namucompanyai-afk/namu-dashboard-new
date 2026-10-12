@@ -2016,8 +2016,8 @@ function ActionGuideHeader() {
             <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11.5 }}>
               ROAS ≥ BEP ROAS×2  → 강화<br />
               BEP ROAS ≤ ROAS&lt;×2 → 유지<br />
-              0 &lt; ROAS &lt; BEP ROAS → 입찰가 ↓<br />
-              ROAS = 0      → 제외 (입찰가 100원)
+              BEP/2 ≤ ROAS &lt; BEP ROAS → 입찰가 ↓<br />
+              판매 0 · ROAS &lt; BEP/2 → 입찰가 ↓ 100원
             </div>
           </div>
           <div style={{ borderTop: '1px solid #374151', margin: '4px 0 6px' }} />
@@ -2062,7 +2062,7 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand, marg
 
   // 입찰가 셀 — bidSource 별 분기.
   //   low_sample        : "—"
-  //   fixed_100         : "100원" (제외 권장)
+  //   fixed_100         : "100원" (판매 0 · ROAS < BEP/2 — 최저가)
   //   revenue + growing : 매출 역산 + "(참고용)" 라벨
   //   revenue + 그 외   : 매출 역산
   let bidCell: React.ReactNode
@@ -2249,8 +2249,8 @@ function ActionLegend() {
       <br /><span style={{ color: '#1F2937', fontWeight: 600 }}>클릭 ≥ 20 (판단 가능)</span>
       <br />• <span className="aa-action-chip action-enhance">강화</span> ROAS ≥ BEP ROAS × 2
       <br />• <span className="aa-action-chip action-maintain">유지</span> BEP ROAS ≤ ROAS &lt; BEP ROAS × 2
-      <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> 0 &lt; ROAS &lt; BEP ROAS — 매출 역산값으로 인하
-      <br />• <span className="aa-action-chip action-exclude">🚫 제외</span> ROAS = 0 — 입찰가 100원 강제
+      <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> BEP ROAS/2 ≤ ROAS &lt; BEP ROAS — 매출 역산값으로 인하 (100원 하한)
+      <br />• <span className="aa-action-chip action-lower-bid">입찰가 ↓</span> 판매 0 또는 ROAS &lt; BEP ROAS/2 — 지우지 않고 최저가 100원
       <br /><br />
       <strong style={{ color: '#1F2937' }}>추천 입찰가 공식 (매출 역산):</strong> 매출 ÷ (클릭수 × BEP ROAS × 1.05) — BEP ROAS·ROAS 는 광고센터 기준(광고비 VAT 별도){' '}
       <span style={{ fontSize: 11 }}>— BEP ROAS 대비 5% 여유 / VAT 별도 = 쿠팡 광고센터 입력값</span>
@@ -2501,7 +2501,7 @@ function ManualKeywordRowComp({ r, checked, onToggle, onChangeBid }: { r: Manual
   const starsClass = r.confidence === 3 ? 'high' : r.confidence === 2 ? 'mid' : 'low'
 
   const verdictBadge =
-    r.deleteCandidate ? <span className="aa-badge badge-bad">🗑 삭제 후보</span> :
+    r.deleteCandidate ? <span className="aa-badge badge-bad">입찰가 ↓ 100원</span> :
     r.bidVerdict === 'ok' ? <span className="aa-badge badge-good">🟢 여유</span> :
     r.bidVerdict === 'high' ? <span className="aa-badge badge-warn">🟡 살짝 높음</span> :
     r.bidVerdict === 'too_high' ? <span className="aa-badge badge-bad">🔴 너무 높음</span> :

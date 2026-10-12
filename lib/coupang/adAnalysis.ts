@@ -191,6 +191,7 @@ export function classifyKeyword(
   revenue: number,
   roasPct: number | null,
   bepPct: number | null,
+  orders?: number,
 ): { action: KeywordAction; bid: number | null; bidSource: KeywordRow['bidSource'] } {
   // 매출 역산 입찰가 = recommendedBid (클릭 20 미만 차단·100원 floor 포함, 단일 진실)
   const revenueBid = (): number | null => recommendedBid(revenue, clicks, bepPct)
@@ -204,9 +205,9 @@ export function classifyKeyword(
     return { action: 'low_sample', bid: null, bidSource: 'low_sample' }
   }
 
-  // clicks >= 20
-  if (roasPct <= 0) {
-    return { action: 'exclude', bid: 100, bidSource: 'fixed_100' }
+  // clicks >= 20 — 판매 0 또는 ROAS < BEP/2 (옛 삭제·제외 대상): 지우지 않고 입찰가 ↓ 최저가 100원 (이번 주 할 일과 같은 기준)
+  if (roasPct <= 0 || orders === 0 || roasPct < bepPct / 2) {
+    return { action: 'lower_bid', bid: MIN_BID_VAT_EXCL, bidSource: 'fixed_100' }
   }
   if (roasPct >= bepPct * 2) {
     return { action: 'enhance', bid: revenueBid(), bidSource: 'revenue' }
@@ -284,7 +285,7 @@ export interface KeywordRow {
   recommendedBidVatExcl: number | null
   /** 입찰가 산출 방식.
    *  'revenue'    = 매출 역산 (성장 중/강화/유지/입찰가 ↓)
-   *  'fixed_100'  = 제외 키워드 강제 100원
+   *  'fixed_100'  = 판매 0 또는 ROAS < BEP/2 키워드 최저가 100원 (입찰가 ↓)
    *  'low_sample' = 모수 부족 (입찰가 노출 안 함)
    *  'bep'        = BEP CPC fallback (옵션 row 등 호환, 키워드 row 신규 흐름에서는 미사용)
    *  null         = 산출 불가 */
@@ -619,7 +620,7 @@ export function buildKeywordRows(
     const roasRaw = roas
     const bep = weightedBep(rows, bepMap, priceMap, exposureByOptionId, marginOff)
     const roasPct = roas != null ? roas * 100 : null
-    const cls = classifyKeyword(clicks, revenue, roasPct, bep)
+    const cls = classifyKeyword(clicks, revenue, roasPct, bep, orders)
     return {
       keyword: key,
       impressions,
@@ -675,7 +676,9 @@ export function buildManualReviewRows(
 ): ManualKeywordRow[] {
   const { search } = buildKeywordRows(campaign, bepMap, priceMap, exposureByOptionId, marginOff)
   return search.map<ManualKeywordRow>((k) => {
-    const bid = recommendedBid(k.revenue, k.clicks, k.bepPct)
+    // 삭제 후보(클릭 20+ · 판매 0 또는 ROAS < BEP/2)는 지우지 않고 최저가 100원으로 — 이번 주 할 일과 같은 기준
+    const deleteCandidate = k.clicks >= 20 && (k.orders === 0 || (k.roasPct != null && k.bepPct != null && k.roasPct < k.bepPct / 2))
+    const bid = deleteCandidate ? MIN_BID_VAT_EXCL : recommendedBid(k.revenue, k.clicks, k.bepPct)
     // UI/다운로드 표시 단위와 동일하게 10원 단위 올림 (쿠팡 광고센터 정책). bidDiff 계산도 이 값 기준.
     const bidCeiled = bid != null ? Math.ceil(bid / 10) * 10 : null
     const cur = currentBidByKeyword.get(k.keyword) ?? null
@@ -698,7 +701,7 @@ export function buildManualReviewRows(
       bidDiff: bidCeiled != null && effective != null ? bidCeiled - effective : null,
       bidVerdict: verdict,
       confidence: conf,
-      deleteCandidate: k.clicks >= 20 && (k.orders === 0 || (k.roasPct != null && k.bepPct != null && k.roasPct < k.bepPct / 2)),
+      deleteCandidate,
     }
   })
 }

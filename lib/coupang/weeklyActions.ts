@@ -5,10 +5,11 @@
  *   A. BEP ROAS 바뀐 AI 캠페인 — 적용값 없음, 또는 올리기(BEP − 적용값 ≥ 10%p),
  *      또는 내리기(적용값 − BEP ≥ 10%p)인데 30일 실제 ROAS ≥ 적용값일 때만.
  *      목표를 못 맞추는 캠페인(실제 ROAS < 적용값)에서 목표를 내리면 입찰이 더 공격적이 돼 손실이 커지므로 유지(bepHold)
- *   B. AI → 수동 이동 — AI 검색 키워드, 클릭 ≥ 20 · 판매 > 0 · BEP/2 ≤ ROAS < BEP
+ *   B. AI → 수동 이동 — AI 검색 키워드, 클릭 ≥ 20 · ROAS < BEP (추천 입찰가, 100원 하한)
  *   C. 수동 입찰가 수정 — 수동 검색 키워드, 클릭 ≥ 20 · 판매 > 0 · 추천 입찰가와 현재 클릭당 비용 차이 ≥ 10%
- *   D. 키워드 삭제 — 클릭 ≥ 20 · (판매 0 또는 ROAS < BEP/2). AI 는 제외 키워드, 수동은 삭제
- *   같은 페어 AI·수동 중복 키워드 — 합산 ROAS ≥ BEP → 수동에서 삭제(D) / < BEP → AI 제외 + 수동 유지(B)
+ *   옛 '삭제'(클릭 ≥ 20 · 판매 0 또는 ROAS < BEP/2)는 지우지 않고 최저가 100원으로 — 매출 기회 유지
+ *     AI → 수동 이동(B) 100원 / 수동 → 입찰가 ↓(C) 100원
+ *   같은 페어 AI·수동 중복 키워드 — 합산 ROAS ≥ BEP → 수동 입찰가 ↓ 100원(AI 가 가져감) / < BEP → AI 제외 + 수동 유지(B)
  * 클릭 20 미만은 판정하지 않고 목록에도 넣지 않는다. 키워드 하나는 한 할 일에만 들어간다.
  */
 import {
@@ -41,6 +42,7 @@ export function parseCampaignTargetKey(name: string): { key: string; kind: 'AI' 
 }
 
 const ceilToTen = (v: number): number => Math.ceil(v / 10) * 10
+const MIN_BID = 100 // 쿠팡 광고센터 최저 입찰가 (VAT 별도) — 옛 삭제 대상·100원 미만 추천가
 
 export type MoveItem = {
   keyword: string
@@ -53,15 +55,6 @@ export type MoveItem = {
   dup: boolean // 수동에 이미 있는 중복 키워드 — AI 제외만, 수동 유지
 }
 export type BidItem = { keyword: string; clicks: number; cur: number; rec: number; up: boolean; roasPct: number | null }
-export type DelItem = {
-  keyword: string
-  clicks: number
-  orders: number
-  roasPct: number | null
-  adCostVat: number
-  reason: 'nosale' | 'low_roas' | 'dup'
-  ai: boolean // true = AI 제외 키워드, false = 수동 삭제
-}
 export type CampaignActions = {
   campaign: CampaignDiag
   targetKey: string | null
@@ -72,7 +65,6 @@ export type CampaignActions = {
   move: MoveItem[]
   bidUp: BidItem[]
   bidDown: BidItem[]
-  del: DelItem[]
   pairManualName: string | null // 수동 이동 대상 수동 캠페인 (같은 prefix)
   count: number
 }
@@ -120,7 +112,6 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
         move: [],
         bidUp: [],
         bidDown: [],
-        del: [],
         pairManualName: null,
         count: 0,
       }
@@ -158,14 +149,14 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
       if (bep == null || cost <= 0) continue
       const roas = (revenue / cost) * 100
       if (roas >= bep) {
-        slot(man).del.push({
-          keyword: mr.keyword, clicks, orders: ar.orders + mr.orders, roasPct: roas, adCostVat: mr.adCostVat, reason: 'dup', ai: false,
-        })
+        // 수동 쪽은 지우지 않고 최저가 — AI 가 가져가게 (이미 100원 이하면 할 일 없음)
+        const cur = (manualRowsOf.get(man.campaignId) || []).find((x) => x.keyword === mr.keyword)?.avgCpcVatExcl ?? null
+        if (cur == null || cur > MIN_BID) slot(man).bidDown.push({ keyword: mr.keyword, clicks, cur: cur ?? 0, rec: MIN_BID, up: false, roasPct: roas })
       } else {
         const bid = recommendedBid(revenue, clicks, bep)
         slot(ai).move.push({
           keyword: ar.keyword, clicks, orders: ar.orders + mr.orders, roasPct: roas, bepPct: bep, adCostVat: ar.adCostVat,
-          bid: bid != null ? ceilToTen(bid) : null, dup: true,
+          bid: bid != null ? Math.max(ceilToTen(bid), MIN_BID) : null, dup: true,
         })
       }
     }
@@ -194,12 +185,16 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
       if (!hasBidSample(r.clicks)) continue
       const bep = r.bepPct
       const roas = r.roasPct
-      // D — 판매 0, 또는 ROAS < BEP/2
+      // 옛 삭제 대상 — 판매 0, 또는 ROAS < BEP/2 → 지우지 않고 최저가 100원 (AI 는 수동으로, 수동은 입찰가 ↓)
       if (r.orders === 0 || (roas != null && bep != null && roas < bep / 2)) {
-        slot(c).del.push({
-          keyword: r.keyword, clicks: r.clicks, orders: r.orders, roasPct: roas, adCostVat: r.adCostVat,
-          reason: r.orders === 0 ? 'nosale' : 'low_roas', ai,
-        })
+        if (ai) {
+          slot(c).move.push({
+            keyword: r.keyword, clicks: r.clicks, orders: r.orders, roasPct: roas, bepPct: bep, adCostVat: r.adCostVat, bid: MIN_BID, dup: false,
+          })
+        } else if (manualRows) {
+          const cur = manualRows.find((x) => x.keyword === r.keyword)?.avgCpcVatExcl ?? null
+          if (cur == null || cur > MIN_BID) slot(c).bidDown.push({ keyword: r.keyword, clicks: r.clicks, cur: cur ?? 0, rec: MIN_BID, up: false, roasPct: roas })
+        }
         continue
       }
       if (roas == null || bep == null) continue
@@ -209,7 +204,7 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
           const bid = recommendedBid(r.revenue, r.clicks, bep)
           slot(c).move.push({
             keyword: r.keyword, clicks: r.clicks, orders: r.orders, roasPct: roas, bepPct: bep, adCostVat: r.adCostVat,
-            bid: bid != null ? ceilToTen(bid) : null, dup: false,
+            bid: bid != null ? Math.max(ceilToTen(bid), MIN_BID) : null, dup: false,
           })
         }
       } else if (manualRows) {
@@ -230,7 +225,7 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
   for (const a of list) {
     const prefix = a.targetKey?.split('::')[0]
     a.pairManualName = a.isAi && prefix ? manualOfPrefix.get(prefix) ?? pairManualOf(view, a.campaign) : null
-    a.count = (a.bepChange ? 1 : 0) + a.move.length + a.bidUp.length + a.bidDown.length + a.del.length
+    a.count = (a.bepChange ? 1 : 0) + a.move.length + a.bidUp.length + a.bidDown.length
   }
   return list.filter((a) => a.count > 0).sort((x, y) => x.campaign.adProfit - y.campaign.adProfit)
 }

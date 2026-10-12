@@ -15,7 +15,6 @@ import {
 } from '@/lib/coupang/weeklyActions'
 
 const won = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`
-const man = (n: number) => (Math.abs(n) >= 10000 ? `${(n / 10000).toFixed(1).replace(/\.0$/, '')}만` : Math.round(n).toLocaleString('ko-KR'))
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${Math.round(n)}%`)
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8 }
 
@@ -211,15 +210,14 @@ function StatusBox({
 }
 
 // ── 6) 요약 카드 4개 + 7) 캠페인별 할 일 ─────────────────────
-type Kind = 'bep' | 'move' | 'bid' | 'del'
+type Kind = 'bep' | 'move' | 'bid'
 const KIND_META: Record<Kind, { title: string; color: string }> = {
   bep: { title: 'BEP ROAS 바뀐 AI 캠페인', color: '#2563EB' },
   move: { title: 'AI → 수동 이동', color: '#7C3AED' },
   bid: { title: '수동 입찰가 수정', color: '#D97706' },
-  del: { title: '키워드 삭제', color: '#DC2626' },
 }
 const hasKind = (a: CampaignActions, k: Kind) =>
-  k === 'bep' ? !!a.bepChange : k === 'move' ? a.move.length > 0 : k === 'bid' ? a.bidUp.length + a.bidDown.length > 0 : a.del.length > 0
+  k === 'bep' ? !!a.bepChange : k === 'move' ? a.move.length > 0 : a.bidUp.length + a.bidDown.length > 0
 
 /** 운영 메모 자동 기록 문구 — 캠페인명 + 반영한 할 일 요약 */
 export function reflectMemoText(a: CampaignActions): string {
@@ -228,7 +226,6 @@ export function reflectMemoText(a: CampaignActions): string {
     a.move.length ? `수동 이동 ${a.move.length}개` : '',
     a.bidUp.length ? `입찰가 ↑${a.bidUp.length}개` : '',
     a.bidDown.length ? `입찰가 ↓${a.bidDown.length}개` : '',
-    a.del.length ? `${a.isAi ? '제외' : '삭제'} ${a.del.length}개` : '',
   ].filter(Boolean)
   return `${a.campaign.campaignName} · ${parts.join(', ')}`
 }
@@ -249,15 +246,10 @@ export function WeeklyActionsSection({
   const [kind, setKind] = useState<Kind | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
   const totals = useMemo(() => {
-    const del = actions.flatMap((a) => a.del)
     return {
       bep: actions.filter((a) => a.bepChange).length,
       move: actions.reduce((s, a) => s + a.move.length, 0),
       bid: actions.reduce((s, a) => s + a.bidUp.length + a.bidDown.length, 0),
-      del: del.length,
-      delCost: del.reduce((s, d) => s + d.adCostVat, 0),
-      noSale: del.filter((d) => d.reason === 'nosale').length,
-      noSaleCost: del.filter((d) => d.reason === 'nosale').reduce((s, d) => s + d.adCostVat, 0),
     }
   }, [actions])
   const shown = kind ? actions.filter((a) => hasKind(a, kind)) : actions
@@ -272,8 +264,8 @@ export function WeeklyActionsSection({
 
   return (
     <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, margin: '12px 0' }}>
-        {(['bep', 'move', 'bid', 'del'] as Kind[]).map((k) => {
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, margin: '12px 0' }}>
+        {(['bep', 'move', 'bid'] as Kind[]).map((k) => {
           const m = KIND_META[k]
           const active = kind === k
           const n = totals[k]
@@ -290,11 +282,6 @@ export function WeeklyActionsSection({
               <div style={{ fontSize: 20, fontWeight: 700, color: n ? m.color : '#94A3B8' }}>
                 {n}{k === 'bep' ? '개' : '건'}
               </div>
-              {k === 'del' && n > 0 && (
-                <div style={{ fontSize: 11, color: '#94A3B8' }}>
-                  광고비 {won(totals.delCost)} · 그중 판매 0 {totals.noSale}개 {won(totals.noSaleCost)}
-                </div>
-              )}
               {active && <div style={{ fontSize: 11, color: m.color }}>▲ 이 할 일만 보는 중 · 다시 누르면 전체</div>}
             </button>
           )
@@ -470,7 +457,7 @@ function CampaignActionRow({
           {show('bid') && a.bidDown.length > 0 && (
             <div style={line}>
               {tag('입찰가 ↓', KIND_META.bid.color)}
-              {kwList(a.bidDown.map((b) => `${b.keyword} ${b.cur.toLocaleString('ko-KR')}→${b.rec.toLocaleString('ko-KR')}`))}
+              {kwList(a.bidDown.map((b) => `${b.keyword} ${b.cur ? `${b.cur.toLocaleString('ko-KR')}→` : ''}${b.rec.toLocaleString('ko-KR')}${b.cur ? '' : '원'}`))}
             </div>
           )}
           {show('bid') && bids.length > 0 && (
@@ -478,20 +465,6 @@ function CampaignActionRow({
               <span style={{ minWidth: 72 }} />
               <button className="aa-btn btn-sm" onClick={() => copy('수동 키워드+입찰가', bids.map((b) => `${b.keyword}\t${b.rec}`))}>
                 수동 키워드+입찰가 복사
-              </button>
-            </div>
-          )}
-          {show('del') && (
-            <div style={line}>
-              {tag('삭제', KIND_META.del.color)}
-              {kwList(
-                a.del.map(
-                  (d) => `${d.keyword}${d.reason === 'nosale' ? ' (판매 0)' : d.reason === 'dup' ? ' (AI와 중복)' : ` (ROAS ${pct(d.roasPct)})`}`,
-                ),
-              )}
-              <span style={{ fontSize: 11, color: '#94A3B8' }}>광고비 {man(a.del.reduce((s, d) => s + d.adCostVat, 0))}원</span>
-              <button className="aa-btn btn-sm" onClick={() => copy(a.isAi ? 'AI 제외 키워드' : '삭제 키워드', a.del.map((d) => d.keyword))}>
-                {a.isAi ? 'AI 제외 키워드 복사' : '삭제 키워드 복사'}
               </button>
             </div>
           )}
