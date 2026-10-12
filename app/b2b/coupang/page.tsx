@@ -325,7 +325,8 @@ export default function CoupangB2BPage() {
       setWikeepMadeDate('')
       setGompyoLoadDate('')
       setGompyoMadeDate('')
-      setFileNames(files.map((f) => f.name))
+      // zip 이면 안의 발주서 파일 기준 (읽힌 발주서 수가 보이게)
+      setFileNames(Array.from(new Set(parsed.map((i) => i.sourceFile))))
       setSkipped(skip)
       setHistoryMsg('')
       setHistorySaved(false)
@@ -952,13 +953,13 @@ export default function CoupangB2BPage() {
             dragOver ? 'border-teal-500 bg-teal-50' : 'border-gray-300 bg-white'
           }`}
         >
-          <div className="text-sm font-medium mb-1">② 쿠팡 발주서 (.xlsx · 여러 개)</div>
-          <p className="text-xs text-gray-500 mb-3">발주서리스트_*.xlsx 드래그앤드롭 또는 클릭</p>
+          <div className="text-sm font-medium mb-1">② 쿠팡 발주서 (.xlsx · .zip · 여러 개)</div>
+          <p className="text-xs text-gray-500 mb-3">발주서리스트_*.xlsx 또는 .zip · 여러 개 — 드래그앤드롭 또는 클릭</p>
           <label className="inline-block px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs cursor-pointer hover:bg-gray-700">
             파일 선택
             <input
               type="file"
-              accept=".xlsx,.xls"
+              accept=".xlsx,.xls,.zip"
               multiple
               className="hidden"
               onChange={(e) => {

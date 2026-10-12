@@ -1,8 +1,9 @@
 /**
- * 쿠팡 발주서 xlsx 파싱 (xlsx 의존 — 브라우저에서 실행).
+ * 쿠팡 발주서 xlsx·zip 파싱 (xlsx·jszip 의존 — 브라우저에서 실행).
  * 시트 읽기만 여기서 하고, 도메인 로직은 lib/b2b/coupang.ts 에 있다.
  */
 import * as XLSX from 'xlsx'
+import JSZip from 'jszip'
 import { repairRef } from './kurlyFile'
 import { isCoupangRows, parseCoupangRows, type CoupangOrderItem } from './coupang'
 
@@ -21,31 +22,46 @@ export function parseCoupangWorkbook(wb: XLSX.WorkBook, fileName = ''): CoupangO
   return parseCoupangRows(rows, fileName)
 }
 
-function readFile(file: File): Promise<XLSX.WorkBook> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error(`${file.name}: 파일을 읽지 못했습니다.`))
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target?.result as ArrayBuffer)
-        resolve(XLSX.read(data, { type: 'array', cellDates: true }))
-      } catch (err) {
-        reject(err instanceof Error ? err : new Error(String(err)))
-      }
+const readWorkbook = (buf: ArrayBuffer): XLSX.WorkBook => XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true })
+
+/** 업로드 파일 → 발주서 xlsx 목록. 발주서리스트 zip 은 풀어서 안의 .xlsx 전부 (안쪽 파일명 깨져도 확장자로만 판별) */
+async function expandFiles(files: File[]): Promise<{ name: string; buf: ArrayBuffer }[]> {
+  const out: { name: string; buf: ArrayBuffer }[] = []
+  for (const f of files) {
+    if (/\.zip$/i.test(f.name)) {
+      const zip = await JSZip.loadAsync(await f.arrayBuffer())
+      const entries = Object.values(zip.files).filter((e) => !e.dir && /\.xlsx$/i.test(e.name) && !/(^|\/)(__MACOSX|\._)/.test(e.name))
+      for (const e of entries) out.push({ name: e.name.split('/').pop() || e.name, buf: await e.async('arraybuffer') })
+    } else {
+      out.push({ name: f.name, buf: await f.arrayBuffer() })
     }
-    reader.readAsArrayBuffer(file)
-  })
+  }
+  return out
 }
 
-/** 발주서 여러 개 동시 업로드 → 합친 상품 행 + 쿠팡 파일이 아니라 건너뛴 파일명 */
+/** 발주서 여러 개 동시 업로드(xlsx·zip 섞어도 됨) → 합친 상품 행 + 쿠팡 파일이 아니라 건너뛴 파일명.
+ *  같은 발주번호가 여러 번 들어오면 뒤 파일 것만 남긴다 (쿠팡 손익 parsePurchaseOrderFiles 와 같은 규칙) */
 export async function parseCoupangFiles(files: File[]): Promise<CoupangParseResult> {
-  const items: CoupangOrderItem[] = []
+  const byPo = new Map<string, CoupangOrderItem[]>()
   const skipped: string[] = []
-  for (const f of files) {
-    const wb = await readFile(f)
-    const parsed = parseCoupangWorkbook(wb, f.name)
-    if (parsed.length === 0) skipped.push(f.name)
-    else items.push(...parsed)
+  for (const f of await expandFiles(files)) {
+    let parsed: CoupangOrderItem[]
+    try {
+      parsed = parseCoupangWorkbook(readWorkbook(f.buf), f.name)
+    } catch (err) {
+      throw new Error(`${f.name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (parsed.length === 0) { skipped.push(f.name); continue }
+    const groups = new Map<string, CoupangOrderItem[]>()
+    for (const it of parsed) {
+      const g = groups.get(it.poNumber) || []
+      g.push(it)
+      groups.set(it.poNumber, g)
+    }
+    for (const [po, g] of groups) {
+      byPo.delete(po) // 뒤 파일 우선 — 순서도 뒤 파일 위치로
+      byPo.set(po, g)
+    }
   }
-  return { items, skipped }
+  return { items: Array.from(byPo.values()).flat(), skipped }
 }
