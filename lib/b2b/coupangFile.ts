@@ -25,13 +25,13 @@ export function parseCoupangWorkbook(wb: XLSX.WorkBook, fileName = ''): CoupangO
 const readWorkbook = (buf: ArrayBuffer): XLSX.WorkBook => XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true })
 
 /** 업로드 파일 → 발주서 xlsx 목록. 발주서리스트 zip 은 풀어서 안의 .xlsx 전부 (안쪽 파일명 깨져도 확장자로만 판별) */
-async function expandFiles(files: File[]): Promise<{ name: string; buf: ArrayBuffer }[]> {
-  const out: { name: string; buf: ArrayBuffer }[] = []
+async function expandFiles(files: File[]): Promise<{ name: string; buf: ArrayBuffer; zipName?: string }[]> {
+  const out: { name: string; buf: ArrayBuffer; zipName?: string }[] = []
   for (const f of files) {
     if (/\.zip$/i.test(f.name)) {
       const zip = await JSZip.loadAsync(await f.arrayBuffer())
       const entries = Object.values(zip.files).filter((e) => !e.dir && /\.xlsx$/i.test(e.name) && !/(^|\/)(__MACOSX|\._)/.test(e.name))
-      for (const e of entries) out.push({ name: e.name.split('/').pop() || e.name, buf: await e.async('arraybuffer') })
+      for (const e of entries) out.push({ name: e.name.split('/').pop() || e.name, buf: await e.async('arraybuffer'), zipName: f.name })
     } else {
       out.push({ name: f.name, buf: await f.arrayBuffer() })
     }
@@ -51,7 +51,9 @@ export async function parseCoupangFiles(files: File[]): Promise<CoupangParseResu
     } catch (err) {
       throw new Error(`${f.name}: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (parsed.length === 0) { skipped.push(f.name); continue }
+    if (parsed.length === 0) { skipped.push(f.zipName ? `${f.zipName} › ${f.name}` : f.name); continue }
+    // zip 안 파일명은 옛 한글 인코딩이라 깨짐 — 화면 표시용 파일명을 'zip 이름 › 발주번호 · 센터 · 입고예정일' 로 (디코딩 시도 안 함)
+    if (f.zipName) for (const it of parsed) it.sourceFile = `${f.zipName} › 발주번호 ${it.poNumber} · ${it.center} · ${it.dueDate}`
     const groups = new Map<string, CoupangOrderItem[]>()
     for (const it of parsed) {
       const g = groups.get(it.poNumber) || []
