@@ -429,7 +429,7 @@ function CampaignActionRow({
             <div style={{ ...line, color: '#94A3B8' }}>
               <span style={{ minWidth: 72 }}>BEP ROAS</span>
               <span>
-                목표 미달 — 목표 ROAS 유지, 키워드 정리 먼저 (적용값 {a.bepHold.applied}% · 실제 ROAS {pct(a.bepHold.roasPct)} · BEP ROAS {a.bepHold.next}%)
+                목표 미달 — 목표 ROAS 유지, 키워드 정리 먼저 (<b style={{ color: '#1F2937' }}>적용값 {a.bepHold.applied}%</b> · 실제 ROAS {pct(a.bepHold.roasPct)} · BEP ROAS {a.bepHold.next}%)
               </span>
             </div>
           )}
