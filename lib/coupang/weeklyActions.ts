@@ -247,3 +247,16 @@ export function campaignStatusOf(c: CampaignDiag): CampaignStatus | null {
   const ratio = c.adProfit / c.adCostVat
   return ratio > STATUS_BAND ? 'profit' : ratio >= -STATUS_BAND ? 'even' : 'loss'
 }
+
+// ── 쿠팡 반영 완료 기록 비교 — 할 일 항목 키 (키워드 단위. 입찰가 값은 파일마다 조금씩 달라 키에 넣지 않음) ──
+export type ActionItem = { key: string; label: string }
+export function actionItems(a: CampaignActions): ActionItem[] {
+  const won = (n: number) => n.toLocaleString('ko-KR')
+  const out: ActionItem[] = []
+  if (a.bepChange) out.push({ key: 'bep', label: `BEP ROAS ${a.bepChange.applied ?? '미입력'}→${a.bepChange.next}%` })
+  for (const m of a.move) out.push({ key: `move:${kwKey(m.keyword)}`, label: `${m.keyword}${m.bid != null ? ` (${won(m.bid)}원)` : ''}` })
+  for (const b of [...a.bidUp, ...a.bidDown]) {
+    out.push({ key: `bid:${kwKey(b.keyword)}`, label: `${b.keyword} ${b.up ? '↑' : '↓'} ${b.cur ? `${won(b.cur)}→` : ''}${won(b.rec)}` })
+  }
+  return out
+}

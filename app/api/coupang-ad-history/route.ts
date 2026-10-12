@@ -11,6 +11,7 @@ import { getData, saveData } from "@/lib/supabase";
  * GET    /api/coupang-ad-history             → 전체 메모 조회
  * POST   /api/coupang-ad-history { text, kind?, campaignKey?, campaignName? } → 메모 추가 (서버 타임스탬프)
  *        kind='reflect' = 광고 분석 "쿠팡 반영 완료" 기록 — campaignKey(prefix::타입, 없으면 캠페인명)로 지난주 조정 결과를 찾는다
+ *        period('YYYY-MM-DD~YYYY-MM-DD', 30일 파일 기간)·items(반영한 할 일 키) — 새로고침 후 '반영됨'·새 할 일 판단용
  * DELETE /api/coupang-ad-history?id={id}     → 메모 삭제
  */
 
@@ -23,6 +24,8 @@ interface NoteItem {
   kind?: 'reflect';
   campaignKey?: string;
   campaignName?: string;
+  period?: string;
+  items?: string[];
 }
 interface NotesPayload {
   items: NoteItem[];
@@ -71,7 +74,15 @@ export async function POST(request: Request) {
       text,
       // 쿠팡 반영 완료 기록이면 캠페인 식별값을 별도 필드로 (메모 문구 형식은 그대로)
       ...(body?.kind === 'reflect'
-        ? { kind: 'reflect' as const, campaignKey: str(body?.campaignKey), campaignName: str(body?.campaignName) }
+        ? {
+            kind: 'reflect' as const,
+            campaignKey: str(body?.campaignKey),
+            campaignName: str(body?.campaignName),
+            period: typeof body?.period === 'string' && /^\d{4}-\d{2}-\d{2}~\d{4}-\d{2}-\d{2}$/.test(body.period) ? body.period : undefined,
+            items: Array.isArray(body?.items)
+              ? body.items.filter((x: unknown): x is string => typeof x === 'string' && !!x).slice(0, 500).map((x: string) => x.slice(0, 200))
+              : undefined,
+          }
         : {}),
     };
     items.push(newItem);

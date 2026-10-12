@@ -10,6 +10,7 @@ import type { AdAnalysisView, CampaignDiag } from '@/lib/coupang/adAnalysis'
 import {
   campaignStatusOf,
   parseCampaignTargetKey,
+  type ActionItem,
   type CampaignActions,
   type CampaignStatus,
 } from '@/lib/coupang/weeklyActions'
@@ -232,13 +233,13 @@ export function reflectMemoText(a: CampaignActions): string {
 
 export function WeeklyActionsSection({
   actions,
-  reflected,
+  reflectState,
   onReflect,
   onSetApplied,
   noteOf,
 }: {
   actions: CampaignActions[]
-  reflected: Set<string>
+  reflectState: Map<string, ReflectState>
   onReflect: (a: CampaignActions) => Promise<void>
   onSetApplied: (key: string, value: number | null) => void
   noteOf?: (campaignId: string) => ProductMonthNote | null
@@ -308,7 +309,7 @@ export function WeeklyActionsSection({
                 kind={kind}
                 open={isOpen(a.campaign.campaignId)}
                 onToggle={() => toggle(a.campaign.campaignId)}
-                done={reflected.has(a.campaign.campaignId)}
+                reflect={reflectState.get(a.campaign.campaignId) ?? null}
                 onReflect={() => onReflect(a)}
                 onSetApplied={onSetApplied}
                 note={noteOf?.(a.campaign.campaignId) ?? null}
@@ -326,7 +327,7 @@ function CampaignActionRow({
   kind,
   open,
   onToggle,
-  done,
+  reflect,
   onReflect,
   onSetApplied,
   note,
@@ -335,7 +336,7 @@ function CampaignActionRow({
   kind: Kind | null
   open: boolean
   onToggle: () => void
-  done: boolean
+  reflect: ReflectState | null
   onReflect: () => Promise<void>
   onSetApplied: (key: string, value: number | null) => void
   note: ProductMonthNote | null
@@ -345,6 +346,8 @@ function CampaignActionRow({
   const [edit, setEdit] = useState(false)
   const [editVal, setEditVal] = useState('')
   const c = a.campaign
+  // 반영 기록이 있고 그 뒤 새 할 일이 없으면 끝 — 새 할 일이 생기면 다시 반영 가능
+  const done = !!reflect && reflect.newItems.length === 0
   const flash = (t: string) => {
     setMsg(t)
     setTimeout(() => setMsg(''), 2500)
@@ -376,7 +379,11 @@ function CampaignActionRow({
           {note && <ProductNote note={note} style={{ display: 'block' }} />}
           <AdProductHint adProfit={c.adProfit} note={note} style={{ display: 'block' }} />
         </span>
-        {done && <span style={{ fontSize: 11, fontWeight: 700, color: '#059669', background: '#ECFDF5', borderRadius: 4, padding: '1px 6px' }}>반영됨</span>}
+        {reflect && (
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#059669', background: '#ECFDF5', borderRadius: 4, padding: '1px 6px' }}>
+            반영됨{reflect.newItems.length > 0 && <span style={{ color: '#D97706' }}> · 새 할 일 {reflect.newItems.length}건</span>}
+          </span>
+        )}
         <span className="mono" style={{ fontSize: 12.5, fontWeight: 700, color: c.adProfit < 0 ? '#DC2626' : '#059669' }}>
           {Math.round(c.adProfit).toLocaleString('ko-KR')}원
         </span>
@@ -468,6 +475,13 @@ function CampaignActionRow({
               </button>
             </div>
           )}
+          {!kind && reflect && reflect.newItems.length > 0 && (
+            <div style={line}>
+              {tag('새 할 일', '#D97706')}
+              {kwList(reflect.newItems.map((x) => x.label))}
+              <span style={{ fontSize: 11, color: '#94A3B8', width: '100%' }}>반영한 뒤 새로 생긴 할 일 — 위 목록에도 들어 있음</span>
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 8 }}>
             <button
               className="aa-btn btn-sm"
@@ -485,7 +499,7 @@ function CampaignActionRow({
               }}
               style={{ background: done ? '#ECFDF5' : '#1F2937', color: done ? '#059669' : '#fff', borderColor: done ? '#A7F3D0' : '#1F2937' }}
             >
-              {done ? '반영됨' : busy ? '기록 중…' : '쿠팡 반영 완료'}
+              {done ? '반영됨' : busy ? '기록 중…' : reflect ? '새 할 일 반영 완료' : '쿠팡 반영 완료'}
             </button>
             {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? '#059669' : '#DC2626' }}>{msg}</span>}
           </div>
@@ -505,7 +519,18 @@ export type WeeklySnapshot = {
   total: SnapTotals
   campaigns: (SnapTotals & { campaignId: string; campaignName: string; key: string })[]
 }
-export type ReflectNote = { id: string; ts: string; text: string; kind?: 'reflect'; campaignKey?: string; campaignName?: string }
+export type ReflectNote = {
+  id: string
+  ts: string
+  text: string
+  kind?: 'reflect'
+  campaignKey?: string
+  campaignName?: string
+  period?: string // 'YYYY-MM-DD~YYYY-MM-DD' 30일 파일 기간
+  items?: string[] // 반영한 할 일 키 (actionItems)
+}
+/** 캠페인별 반영 상태 — newItems = 반영 뒤 새로 생긴 할 일, legacy = 기간·항목 없는 옛 기록(비교 불가) */
+export type ReflectState = { newItems: ActionItem[]; legacy: boolean }
 
 /** 주간 파일 분석 결과(기존 buildAdAnalysisView) → 주간 기록 — 값은 화면 계산 그대로 */
 export function snapshotFromView(

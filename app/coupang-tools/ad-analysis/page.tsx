@@ -36,7 +36,7 @@ import {
 } from '@/lib/coupang/adAnalysis'
 import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
-import { buildWeeklyActions, campaignStatusOf, parseCampaignTargetKey, type CampaignActions } from '@/lib/coupang/weeklyActions'
+import { actionItems, buildWeeklyActions, campaignStatusOf, parseCampaignTargetKey, type CampaignActions } from '@/lib/coupang/weeklyActions'
 import {
   ProfitLine,
   StatusBoxes,
@@ -49,6 +49,7 @@ import {
   type ProductMonthNote,
   snapshotFromView,
   type ReflectNote,
+  type ReflectState,
   type WeeklySnapshot,
 } from './WeeklyPanel'
 
@@ -349,6 +350,7 @@ export default function AdAnalysisPage() {
   // 모드별 source 분기
   const sourceRows = mode === 'live' ? (adAnalysisLive?.rows ?? null) : rawAdCampaign
   const sourcePeriod = mode === 'live' ? (adAnalysisLive?.period ?? null) : adPeriod
+  const reflectPeriod = sourcePeriod ? `${sourcePeriod.startDate}~${sourcePeriod.endDate}` : null
   const periodLabel = sourcePeriod
     ? `${sourcePeriod.startDate}_${sourcePeriod.endDate}`
     : new Date().toISOString().slice(0, 10)
@@ -426,7 +428,6 @@ export default function AdAnalysisPage() {
     })
   }, [viewAll, hideBep, marginOff, manualBepMap, masterAug, targets])
   // 쿠팡 반영 완료 — 운영 메모 자동 기록 + (BEP ROAS 바뀐 AI 캠페인이면) 적용값 저장
-  const [reflected, setReflected] = useState<Set<string>>(new Set())
   const [notesReload, setNotesReload] = useState(0)
   const reflectCampaign = async (a: CampaignActions) => {
     const res = await fetch('/api/coupang-ad-history', {
@@ -437,6 +438,8 @@ export default function AdAnalysisPage() {
         kind: 'reflect',
         campaignKey: a.targetKey ?? a.campaign.campaignName,
         campaignName: a.campaign.campaignName,
+        period: reflectPeriod ?? undefined,
+        items: actionItems(a).map((x) => x.key),
       }),
     })
     const j = await res.json().catch(() => null)
@@ -444,7 +447,6 @@ export default function AdAnalysisPage() {
     // 저장 직후 GET 은 옛 값이 읽힐 수 있어 응답 메모를 바로 붙인다 (조정 결과 표용)
     setNotes((prev) => [...prev, j.item as ReflectNote])
     if (a.bepChange && a.targetKey) setTargetForKey(a.targetKey, a.bepChange.next)
-    setReflected((prev) => new Set(prev).add(a.campaign.campaignId))
     setNotesReload((n) => n + 1)
   }
   // 주간 기록(지난주 대비) · 운영 메모(지난주 조정 결과) — 30일 판정과 별개
@@ -466,6 +468,26 @@ export default function AdAnalysisPage() {
       .catch(() => { /* 없으면 빈 메모 */ })
     return () => { cancelled = true }
   }, [notesReload])
+  // 쿠팡 반영 완료 기록(서버 메모) → 캠페인별 '반영됨'·반영 뒤 새로 생긴 할 일 — 같은 30일 기간 기록만.
+  // 기간·항목 없이 저장된 옛 기록은 파일 종료일 다음 날~7일 안에 남긴 것만 같은 기간으로 보고 '반영됨'만 (새 할 일 비교 불가)
+  const reflectState = useMemo(() => {
+    const m = new Map<string, ReflectState>()
+    if (!reflectPeriod || !sourcePeriod) return m
+    const end = sourcePeriod.endDate
+    const legacyUntil = new Date(new Date(`${end}T00:00:00Z`).getTime() + 7 * 86400000).toISOString().slice(0, 10)
+    const kstDay = (ts: string) => new Date(new Date(ts).getTime() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+    for (const a of weeklyActions) {
+      const key = a.targetKey ?? a.campaign.campaignName
+      const hit = notes
+        .filter((n) => n.kind === 'reflect' && n.campaignKey === key)
+        .filter((n) => (n.period ? n.period === reflectPeriod : kstDay(n.ts) > end && kstDay(n.ts) <= legacyUntil))
+        .sort((x, y) => y.ts.localeCompare(x.ts))[0]
+      if (!hit) continue
+      const prev = Array.isArray(hit.items) ? new Set(hit.items) : null
+      m.set(a.campaign.campaignId, { newItems: prev ? actionItems(a).filter((x) => !prev.has(x.key)) : [], legacy: !prev })
+    }
+    return m
+  }, [weeklyActions, notes, reflectPeriod, sourcePeriod])
   /** 주간 파일 → 캠페인별 요약(기존 광고 분석 계산 그대로) → 주간 기록 저장 */
   async function saveWeeklySnapshot(rows: AdCampaignRow[], period: { startDate: string; endDate: string }, fileName: string) {
     const aug = augmentMasterWith1P(marginMaster as Parameters<typeof augmentMasterWith1P>[0], rows)
@@ -692,7 +714,7 @@ export default function AdAnalysisPage() {
           {/* 6) 요약 카드 4개 + 7) 이번 주 할 일 */}
           <WeeklyActionsSection
             actions={weeklyActions}
-            reflected={reflected}
+            reflectState={reflectState}
             onReflect={reflectCampaign}
             onSetApplied={setTargetForKey}
             noteOf={productNoteOf}
