@@ -485,6 +485,7 @@ export type RocketRow = {
   pallet: number | null // 파렛트 수 — 트럭분 묶음 첫 행에만 기입, 나머지는 null
   invoice: string // 송장 (공란)
   centerKnown: boolean // 주소를 못 구하면 false → 행 강조
+  addrFromBook: boolean // 발주서 주소가 비어 센터 주소록 값으로 대체했으면 true → 행에 경고
   masterKnown: boolean // 상품마스터 미등록이면 false → 박스 수 공란
   qtyUnconfirmed: boolean // 납품가능 미확정 → 표에 경고 (양식 값은 H 그대로)
   orderQty: number // 미확정 행 경고에 함께 띄우는 발주수량
@@ -498,9 +499,9 @@ export type RocketRow = {
  *
  * 택배/트럭은 **센터 × 입고예정일 묶음**의 박스 합계로 가른다(groupByCenterDue) —
  * 같은 차로 나가는 발주라면 2박스 단건도 묶음이 9박스를 넘으면 트럭분이다.
- *   택배분 — 주소·전화는 기존 센터 주소록 lookup
- *   트럭분 — 주소는 발주서가 자동 출력한 값, 전화는 그 주소 괄호부의 택배수령담당자
- *            (발주서 값이 비면 주소록으로 대체)
+ *   택배분·트럭분 공통 — 주소는 발주서가 자동 출력한 입고 주소, 전화는 그 주소 괄호부의 택배수령담당자
+ *            (발주서 값이 비면 센터 주소록으로 대체하고 addrFromBook=true 로 경고)
+ *   (2026-10-13 변경: 택배분도 발주서 값 우선 — 주소록 동탄1 택배수령 번호가 발주서와 달랐음)
  * 파렛트 수는 묶음 1회(첫 행)만 기입한다 — pltByGroup(묶음 키 → 실측 PLT 장수).
  * 배송메세지1 에는 묶음의 발주번호를 병기한다.
  * 제조일자는 확정 발주서의 '제조(수입)일자'(it.madeDate)가 있으면 그 값, 없는 행에만 화면 선택값(madeDate).
@@ -521,8 +522,10 @@ export function buildRocketRows(
     const c = findCenter(centers, it.center)
     const g = groupOf.get(shipGroupKey(it))
     const truck = allTruck || (g?.needsPallet ?? false)
-    const address = truck ? it.centerAddress || c?.address || '' : c?.address || ''
-    const phone = formatKrPhone(truck ? it.centerPhone || c?.phone || '' : c?.phone || '')
+    // 택배·트럭 모두 발주서 값 우선, 비었을 때만 센터 주소록
+    const addrFromBook = !it.centerAddress && !!c?.address
+    const address = it.centerAddress || c?.address || ''
+    const phone = formatKrPhone(it.centerPhone || c?.phone || '')
     let pallet: number | null = null
     if (truck && g && !palletDone.has(g.key)) {
       palletDone.add(g.key)
@@ -541,6 +544,7 @@ export function buildRocketRows(
       pallet,
       invoice: '',
       centerKnown: !!address,
+      addrFromBook,
       masterKnown: !!it.master,
       qtyUnconfirmed: it.qtyUnconfirmed,
       orderQty: it.orderQty,

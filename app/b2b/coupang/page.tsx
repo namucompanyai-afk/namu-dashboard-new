@@ -1538,7 +1538,7 @@ export default function CoupangB2BPage() {
 
             <RocketTable
               title={ROCKET_SHEETS['택배'].title}
-              note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1 = 발주번호 · 송장은 공란`}
+              note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 발주서 입고주소(없으면 센터 주소록) · 배송메세지1 = 발주번호 · 송장은 공란`}
               rows={rocketParcel}
               truck={false}
             />
@@ -1773,7 +1773,7 @@ export default function CoupangB2BPage() {
               <FreightRowsTable title="위킵분 운임" rows={wikeepFreightRows} />
               <RocketTable
                 title={ROCKET_SHEETS['택배'].title}
-                note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1 = 발주번호 · 송장은 공란`}
+                note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 발주서 입고주소(없으면 센터 주소록) · 배송메세지1 = 발주번호 · 송장은 공란`}
                 rows={wikeepRocket.parcel}
                 truck={false}
               />
@@ -2190,6 +2190,9 @@ function RocketTable({
     <>
       {r.recipient}
       {!r.centerKnown && <span className="ml-1 text-[11px] text-red-600">주소 없음</span>}
+      {r.centerKnown && r.addrFromBook && (
+        <span className="ml-1 text-[11px] text-amber-600">발주서 주소 없음 — 주소록 값 사용, 확인 필요</span>
+      )}
     </>
   )
   const th = (label: string, align: 'left' | 'right' | 'center' = 'left') => (
