@@ -28,6 +28,7 @@ import {
   buildExposureMapByOptionId,
   splitRowRevenue,
   isSearchPlacement,
+  keywordGroupKey,
   type CampaignDiag,
   type KeywordRow,
   type ManualKeywordRow,
@@ -1700,7 +1701,7 @@ function computeKeywordOptions(
 ): KeywordOption[] {
   // 검색 영역 + 해당 키워드만
   const filtered = campaignRows.filter((r) =>
-    isSearchPlacement(r.placement) && (r.keyword || '-') === keyword,
+    isSearchPlacement(r.placement) && (keywordGroupKey(r.keyword) || '-') === keyword, // 띄어쓰기만 다른 표기 묶음
   )
   if (!filtered.length) return []
   const totalSold = filtered.reduce((s, r) => s + (r.sold14d || 0), 0)
@@ -1852,7 +1853,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
 
   // 체크된 모든 키워드를 선택한 카테고리(제외/수동 이동) 텍스트로 복사 — 추천 액션 무관, 사용자 의사 우선
   function copyChecked(target: 'exclude' | 'move') {
-    const list = sorted.filter((r) => checked.has(r.keyword)).map((r) => r.keyword)
+    const list = sorted.filter((r) => checked.has(r.keyword)).flatMap((r) => r.variants.map((v) => v.keyword)) // 묶인 표기마다 한 줄
     if (list.length === 0) {
       alert('선택된 키워드가 없습니다.')
       return
@@ -1937,7 +1938,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
             {sorted.map((r) => {
               const isExpanded = !marginOff && expandedKws.has(r.keyword)
               const opts = isExpanded
-                ? computeKeywordOptions(r.keyword, campaignRows, bepMap, priceMap, rowMap, campaignAvgCvr)
+                ? computeKeywordOptions(r.groupKey, campaignRows, bepMap, priceMap, rowMap, campaignAvgCvr)
                 : []
               return (
                 <React.Fragment key={r.keyword}>
@@ -2544,7 +2545,14 @@ function ManualKeywordRowComp({ r, checked, onToggle, onChangeBid }: { r: Manual
   return (
     <tr style={isLowClick ? { opacity: 0.6 } : undefined}>
       <td className="sticky-left"><input type="checkbox" checked={checked} onChange={onToggle} /></td>
-      <td className="sticky-left-2"><strong>{r.keyword}</strong></td>
+      <td className="sticky-left-2">
+        <strong>{r.keyword}</strong>
+        {r.variantCpc.length > 1 && new Set(r.variantCpc.map((v) => v.avgCpcVatExcl)).size > 1 && (
+          <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 400 }}>
+            {r.variantCpc.map((v) => `${v.keyword} ${v.avgCpcVatExcl != null ? v.avgCpcVatExcl.toLocaleString('ko-KR') : '—'}`).join(' · ')}
+          </div>
+        )}
+      </td>
       <td className="num">{fmtNum(r.impressions)}</td>
       <td className="num">{fmtNum(r.clicks)}</td>
       <td className="num">{fmtPctVal(r.ctrPct, 2)}</td>

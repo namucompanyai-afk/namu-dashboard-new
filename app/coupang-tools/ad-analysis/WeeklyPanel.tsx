@@ -8,6 +8,7 @@
 import React, { useMemo, useState } from 'react'
 import type { AdAnalysisView, CampaignDiag } from '@/lib/coupang/adAnalysis'
 import {
+  bidItemLabel,
   campaignStatusOf,
   parseCampaignTargetKey,
   type ActionItem,
@@ -470,10 +471,10 @@ function CampaignActionRow({
             <div style={line}>
               {tag('수동으로', KIND_META.move.color)}
               {kwList(a.move.map((m) => `${m.keyword}${m.bid != null ? ` (${m.bid.toLocaleString('ko-KR')}원)` : ''}${m.dup ? ' *수동에 있음' : ''}`))}
-              <button className="aa-btn btn-sm" onClick={() => copy('AI 제외 키워드', a.move.map((m) => m.keyword))}>AI 제외 키워드 복사</button>
+              <button className="aa-btn btn-sm" onClick={() => copy('AI 제외 키워드', a.move.flatMap((m) => m.variants))}>AI 제외 키워드 복사</button>
               <button
                 className="aa-btn btn-sm"
-                onClick={() => copy('수동 키워드+입찰가', a.move.filter((m) => !m.dup).map((m) => `${m.keyword}\t${m.bid ?? ''}`))}
+                onClick={() => copy('수동 키워드+입찰가', a.move.filter((m) => !m.dup).flatMap((m) => m.variants.map((v) => `${v}\t${m.bid ?? ''}`)))}
                 disabled={!a.move.some((m) => !m.dup)}
               >
                 수동 키워드+입찰가 복사
@@ -484,19 +485,19 @@ function CampaignActionRow({
           {show('bid') && a.bidUp.length > 0 && (
             <div style={line}>
               {tag('입찰가 ↑', KIND_META.bid.color)}
-              {kwList(a.bidUp.map((b) => `${b.keyword} ${b.cur.toLocaleString('ko-KR')}→${b.rec.toLocaleString('ko-KR')}`))}
+              {kwList(a.bidUp.map(bidItemLabel))}
             </div>
           )}
           {show('bid') && a.bidDown.length > 0 && (
             <div style={line}>
               {tag('입찰가 ↓', KIND_META.bid.color)}
-              {kwList(a.bidDown.map((b) => `${b.keyword} ${b.cur ? `${b.cur.toLocaleString('ko-KR')}→` : ''}${b.rec.toLocaleString('ko-KR')}${b.cur ? '' : '원'}`))}
+              {kwList(a.bidDown.map(bidItemLabel))}
             </div>
           )}
           {show('bid') && bids.length > 0 && (
             <div style={{ ...line, borderTop: 'none', paddingTop: 0 }}>
               <span style={{ minWidth: 72 }} />
-              <button className="aa-btn btn-sm" onClick={() => copy('수동 키워드+입찰가', bids.map((b) => `${b.keyword}\t${b.rec}`))}>
+              <button className="aa-btn btn-sm" onClick={() => copy('수동 키워드+입찰가', bids.flatMap((b) => b.variants.map((v) => `${v.keyword}\t${b.rec}`)))}>
                 수동 키워드+입찰가 복사
               </button>
             </div>

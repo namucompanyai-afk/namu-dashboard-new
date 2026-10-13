@@ -259,8 +259,25 @@ export interface CampaignDiag {
   rows: AdCampaignRow[]
 }
 
-export interface KeywordRow {
+/** 키워드 묶음 키 — 공백만 다른 표기(예: '유기농 오트밀'·'유기농오트밀')는 같은 검색어로 보고 합산 판정 */
+export function keywordGroupKey(keyword: string | null | undefined): string {
+  return String(keyword ?? '').replace(/\s+/g, '')
+}
+
+export interface KeywordVariant {
+  /** 광고 파일의 원본 표기 */
   keyword: string
+  clicks: number
+  adCostRaw: number
+}
+
+export interface KeywordRow {
+  /** 표시용 키워드 — 공백만 다른 표기가 묶이면 원본 표기를 ' · ' 로 이어 붙임 (묶음 1개면 원본 그대로) */
+  keyword: string
+  /** 묶음 키 (공백 제거) — 같은 캠페인·AI↔수동 짝 사이 키워드 비교용 */
+  groupKey: string
+  /** 묶인 원본 표기 (클릭 많은 순). 복사·쿠팡 등록은 이 표기마다 한 줄씩 */
+  variants: KeywordVariant[]
   impressions: number
   clicks: number
   ctrPct: number | null  // %
@@ -306,6 +323,8 @@ export interface ManualKeywordRow extends KeywordRow {
   confidence: 1 | 2 | 3
   /** 삭제 후보 — 클릭 20 이상인데 판매 0, 또는 ROAS 가 BEP(필수 ROAS)의 절반 미만 */
   deleteCandidate: boolean
+  /** 묶인 원본 표기별 평균 CPC (VAT 별도) — 표기마다 기존 입찰가가 다를 수 있어 표시용 */
+  variantCpc: { keyword: string; avgCpcVatExcl: number | null }[]
 }
 
 /** 마진M 미매칭 옵션 집계 — KPI/표 산출에서 제외된 분량 안내용 */
@@ -596,13 +615,24 @@ export function buildKeywordRows(
   for (const r of campaign.rows) {
     const isSearch = isSearchPlacement(r.placement)
     const target = isSearch ? search : nonSearch
-    const key = isSearch ? (r.keyword || '-') : (r.placement || '비검색')
+    // 검색 키워드는 공백 제거 키로 묶음 (띄어쓰기만 다른 표기 합산)
+    const key = isSearch ? (keywordGroupKey(r.keyword) || '-') : (r.placement || '비검색')
     const arr = target.get(key) ?? []
     arr.push(r)
     target.set(key, arr)
   }
 
-  const aggregate = (key: string, rows: AdCampaignRow[]): KeywordRow => {
+  const aggregate = (key: string, rows: AdCampaignRow[], isSearch: boolean): KeywordRow => {
+    // 원본 표기별 클릭·광고비 (클릭 많은 순, 같으면 광고비·표기 순)
+    const byVariant = new Map<string, KeywordVariant>()
+    for (const r of rows) {
+      const name = isSearch ? (r.keyword || '-') : key
+      const v = byVariant.get(name) ?? { keyword: name, clicks: 0, adCostRaw: 0 }
+      v.clicks += r.clicks || 0
+      v.adCostRaw += r.adCost || 0
+      byVariant.set(name, v)
+    }
+    const variants = [...byVariant.values()].sort((a, b) => b.clicks - a.clicks || b.adCostRaw - a.adCostRaw || a.keyword.localeCompare(b.keyword))
     const impressions = rows.reduce((s, r) => s + (r.impressions || 0), 0)
     const clicks = rows.reduce((s, r) => s + (r.clicks || 0), 0)
     // 주문 라벨이지만 sold14d (진단 일관)
@@ -622,7 +652,9 @@ export function buildKeywordRows(
     const roasPct = roas != null ? roas * 100 : null
     const cls = classifyKeyword(clicks, revenue, roasPct, bep, orders)
     return {
-      keyword: key,
+      keyword: variants.map((v) => v.keyword).join(' · '),
+      groupKey: key,
+      variants,
       impressions,
       clicks,
       ctrPct: ctr != null ? ctr * 100 : null,
@@ -646,10 +678,10 @@ export function buildKeywordRows(
   const searchRows: KeywordRow[] = []
   for (const [k, arr] of search) {
     if (k === '-' || !k) continue  // 키워드 없는 검색 행은 제외
-    searchRows.push(aggregate(k, arr))
+    searchRows.push(aggregate(k, arr, true))
   }
   const nonSearchRows: KeywordRow[] = []
-  for (const [k, arr] of nonSearch) nonSearchRows.push(aggregate(k, arr))
+  for (const [k, arr] of nonSearch) nonSearchRows.push(aggregate(k, arr, false))
 
   searchRows.sort((a, b) => b.adCostVat - a.adCostVat)
   nonSearchRows.sort((a, b) => b.adCostVat - a.adCostVat)
@@ -702,6 +734,7 @@ export function buildManualReviewRows(
       bidVerdict: verdict,
       confidence: conf,
       deleteCandidate,
+      variantCpc: k.variants.map((v) => ({ keyword: v.keyword, avgCpcVatExcl: v.clicks > 0 ? Math.round(v.adCostRaw / v.clicks) : null })),
     }
   })
 }
@@ -826,7 +859,7 @@ export interface DuplicateKeywordEntry {
   manualCampaignName: string
   /** 양 캠페인 옵션ID 합집합 (참고용 표시) */
   optionIds: string[]
-  /** 중복(교집합) 활성 키워드 */
+  /** 중복(교집합) 활성 키워드 — 묶음 키(공백 제거) */
   keywords: string[]
 }
 
@@ -859,7 +892,7 @@ function activeKeywordsOf(rows: AdCampaignRow[]): Set<string> {
     const kw = (r.keyword || '').trim()
     if (NON_SEARCH_KEYWORD_TOKENS.has(kw)) continue
     if ((r.adCost || 0) <= 0) continue
-    s.add(kw)
+    s.add(keywordGroupKey(kw)) // 띄어쓰기만 다른 표기는 같은 키워드
   }
   return s
 }
@@ -979,10 +1012,10 @@ export function buildDuplicateKeywordExportRows(
     for (const kw of dup.keywords) {
       const matched: AdCampaignRow[] = []
       for (const r of aiCamp.rows) {
-        if ((r.keyword || '').trim() === kw && (r.adCost || 0) > 0) matched.push(r)
+        if (keywordGroupKey(r.keyword) === kw && (r.adCost || 0) > 0) matched.push(r)
       }
       for (const r of manualCamp.rows) {
-        if ((r.keyword || '').trim() === kw && (r.adCost || 0) > 0) matched.push(r)
+        if (keywordGroupKey(r.keyword) === kw && (r.adCost || 0) > 0) matched.push(r)
       }
       if (matched.length === 0) continue
 
