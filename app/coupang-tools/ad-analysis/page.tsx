@@ -3,19 +3,22 @@
 /**
  * 광고 분석 페이지 (/coupang-tools/ad-analysis)
  *
- * 데이터 소스: store 의 rawAdCampaign (parseAdCampaign 결과) + marginMaster (BEP).
- * 1차 범위: 캠페인 진단 + AI 키워드 분석 + 수동 입찰가 점검 (현재 입찰가는 사용자 직접 입력).
- * 자동 입찰 적용은 영구 안 함 — 사용자가 키워드 복사해서 쿠팡 광고센터에 직접 입력.
+ * 주 1회 광고센터에서 바꿀 것을 보는 화면. 탭 두 개:
+ *   - 주간 (라이브, 기본): 광고 엑셀 직접 업로드 — 10일 이하 = 주간 기록 저장, 25일 이상 = 30일 분석(할 일·표)
+ *   - 월 저장본: 쿠팡 손익 화면이 저장한 월 광고 파일 (store 의 rawAdCampaign)
+ * BEP 는 marginMaster(나무_마스터). 자동 입찰 적용은 영구 안 함 — 키워드 복사해서 쿠팡 광고센터에 직접 입력.
+ * 권한은 서버 역할(/api/me)로만: 관리자 = 전부, 게스트 = 라이브 업로드 분석만 (회사 기록 조회·저장 없음).
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { getDefaultConstants } from '@/lib/coupang/costBook'
 import { build1PView, isRetailRow, augmentMasterWith1P, type OnePView } from '@/lib/coupang/onePAnalysis'
 import { downloadFormattedXlsx, type XlsxCol } from '@/lib/xlsxExport'
-import { unpackAdRows } from '@/lib/coupang/adRowsPack'
+import { packAdRows, unpackAdRows } from '@/lib/coupang/adRowsPack'
 import { extractPeriodFromFileName } from '@/lib/coupang/parsers/adCampaign'
 import { useConfirm } from '@/components/ui/useConfirm'
 import { useMarginStore } from '@/lib/coupang/store'
+import { useServerRole } from '@/lib/useCLevel'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
 import {
   buildAdAnalysisView,
@@ -39,6 +42,8 @@ import type { AdCampaignRow } from '@/lib/coupang/parsers/adCampaign'
 import { ChannelBadge } from '../_lib/channel'
 import { actionItems, buildWeeklyActions, campaignStatusOf, parseCampaignTargetKey, type CampaignActions } from '@/lib/coupang/weeklyActions'
 import {
+  ChBadge,
+  attributionLag,
   ProfitLine,
   StatusBoxes,
   WarningLine,
@@ -68,8 +73,6 @@ const fmtPctVal = (n: number | null | undefined, digits = 0): string =>
   (n == null || !Number.isFinite(n)) ? '—' : `${n.toFixed(digits)}%`
 const fmtRoas = (n: number | null | undefined): string =>
   (n == null || !Number.isFinite(n)) ? '—' : `${Math.round(n)}%`
-const fmtBid = (n: number | null | undefined): string =>
-  (n == null || !Number.isFinite(n)) ? '—' : `${Math.round(n).toLocaleString('ko-KR')}원`
 // 쿠팡 입찰가 10원 단위 정책 — 추천 입찰가 노출 우선 올림
 const ceilToTen = (v: number): number => Math.ceil(v / 10) * 10
 
@@ -169,7 +172,7 @@ export default function AdAnalysisPage() {
   const setSalesInsight = useMarginStore((s) => s.setSalesInsight)
   const setAdAnalysisLive = useMarginStore((s) => s.setAdAnalysisLive)
   const clearAdAnalysisLive = useMarginStore((s) => s.clearAdAnalysisLive)
-  const [mode, setMode] = useState<Mode>('saved')
+  const [mode, setMode] = useState<Mode>('live')
   const [openCampId, setOpenCampId] = useState<string | null>(null)
   // 캠페인 진단 표 인라인 옵션 드릴다운: 옵션 클릭 시 상세 영역 키워드도 옵션 단위로 필터링.
   const [selectedOptionId, setSelectedOptionId] = useState<string | null>(null)
@@ -212,24 +215,17 @@ export default function AdAnalysisPage() {
   }
   const [uploadError, setUploadError] = useState<string | null>(null)
 
-  // 게스트 계정(role='게스트'): 라이브 탭만 사용. 저장 탭·추세차트·저장데이터 로드 전부 차단.
-  const [isGuest, setIsGuest] = useState(false)
-  useEffect(() => {
-    try {
-      if (JSON.parse(localStorage.getItem('user') || '{}')?.role === '게스트') {
-        setIsGuest(true)
-        setMode('live') // 라이브 고정
-      }
-    } catch {
-      /* 파싱 실패 무시 */
-    }
-  }, [])
+  // 권한 — 서버 역할(/api/me)로만 판단 (localStorage 역할은 브라우저에서 바꿀 수 있어 쓰지 않음).
+  // 확인 전(null)에는 회사 기록을 불러오지 않는다. 관리자가 아니면(이 페이지는 관리자·게스트만) 게스트 화면:
+  // 주간(라이브) 탭 업로드 분석만 — 월 저장본·지난주 대비·운영 메모·주간 기록 저장·목표 ROAS 저장·쿠팡 반영 완료 없음
+  const role = useServerRole()
+  const isAdmin = role === 'admin'
+  const isGuest = role !== null && role !== 'admin'
 
   // 목표 ROAS — 사용자 입력값 (prefix::타입 → %). 분석 갱신과 무관하게 유지.
   const [targets, setTargets] = useState<Record<string, number>>({})
   useEffect(() => {
-    // 게스트는 회사 저장데이터(목표 ROAS 포함) 미조회
-    try { if (JSON.parse(localStorage.getItem('user') || '{}')?.role === '게스트') return } catch {}
+    if (!isAdmin) return // 목표 ROAS 는 회사 저장데이터 — 관리자만
     let cancelled = false
     ;(async () => {
       try {
@@ -243,8 +239,9 @@ export default function AdAnalysisPage() {
       }
     })()
     return () => { cancelled = true }
-  }, [])
+  }, [isAdmin])
   const setTargetForKey = (key: string, value: number | null) => {
+    if (!isAdmin) return
     setTargets((prev) => {
       const next = { ...prev }
       if (value == null) delete next[key]
@@ -276,17 +273,15 @@ export default function AdAnalysisPage() {
   // settle/price/savedAnalyses 등 광고 분석에서 안 쓰는 것은 생략.
   // 이미 store 에 데이터가 있으면 fetch 안 함 (다른 페이지에서 먼저 로드된 경우).
   useEffect(() => {
-    // 게스트는 저장 분석(마진마스터·주차 진단) 자동 로드 차단 — 라이브 업로드만 사용
-    try {
-      if (JSON.parse(localStorage.getItem('user') || '{}')?.role === '게스트') {
-        setAutoLoading(false)
-        return
-      }
-    } catch {}
+    if (role === null) return // 역할 확인 전
+    // 게스트는 저장 분석(마진마스터·월 저장본) 자동 로드 안 함 — 라이브 업로드만 사용
+    if (role !== 'admin') {
+      setAutoLoading(false)
+      return
+    }
     let cancelled = false
     const needMaster = !marginMaster
     const needAd = !rawAdCampaign || rawAdCampaign.length === 0 || !adPeriod
-
 
     ;(async () => {
       try {
@@ -346,7 +341,33 @@ export default function AdAnalysisPage() {
     })()
 
     return () => { cancelled = true }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [role]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 30일 파일 서버 저장본 (/api/coupang-ad-live, 기능 스위치 AD_LIVE_30D_SAVE) — 관리자만.
+  // 스위치가 꺼져 있으면 enabled:false → 지금처럼 화면 메모리만 (새로고침하면 사라짐)
+  const [liveSaveOn, setLiveSaveOn] = useState(false)
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    fetch('/api/coupang-ad-live', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled || j?.enabled !== true) return
+        setLiveSaveOn(true)
+        const it = j.item
+        // 이미 이 화면에서 올린 30일 파일이 있으면 덮지 않음
+        if (!it || useMarginStore.getState().adAnalysisLive) return
+        const rows = unpackAdRows(it.rows)
+        if (!rows.length) return
+        setAdAnalysisLive(
+          rows,
+          { fileName: it.fileName, uploadedAt: it.savedAt, rowCount: rows.length, downloadedAt: it.downloadedAt },
+          it.period ?? null,
+        )
+      })
+      .catch(() => { /* 없으면 업로드 화면 */ })
+    return () => { cancelled = true }
+  }, [isAdmin]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 모드별 source 분기
   const sourceRows = mode === 'live' ? (adAnalysisLive?.rows ?? null) : rawAdCampaign
@@ -409,7 +430,7 @@ export default function AdAnalysisPage() {
     () => buildAdAnalysisView(filteredRows, masterAug as any, marginOff ? manualBepMap : undefined),
     [filteredRows, masterAug, marginOff, manualBepMap],
   )
-  // 주간 판정·상태 3칸·손익 줄은 채널 필터와 무관하게 전체(상품 필터만 적용) 기준 — 채널 필터는 아래 전체 캠페인 표 전용
+  // 손익 줄·지난주 대비·상태 3칸은 채널 필터와 무관하게 전체(상품 필터만 적용) 기준 — 채널 필터는 할 일·캠페인 진단 표에만
   const rowsAllCh = useMemo(
     () => (sourceRows && aliasCampaignIds ? sourceRows.filter((r) => aliasCampaignIds.has(r.campaignId)) : sourceRows),
     [sourceRows, aliasCampaignIds],
@@ -428,6 +449,11 @@ export default function AdAnalysisPage() {
       targets,
     })
   }, [viewAll, hideBep, marginOff, manualBepMap, masterAug, targets])
+  // 할 일은 전체 기준으로 판정(AI·수동 짝 겹침 포함)한 뒤 채널 필터만 적용
+  const weeklyActionsShown = useMemo(
+    () => (chFilter === 'all' ? weeklyActions : weeklyActions.filter((a) => a.campaign.channel === chFilter)),
+    [weeklyActions, chFilter],
+  )
   // 쿠팡 반영 완료 — 운영 메모 자동 기록 + (BEP ROAS 바뀐 AI 캠페인이면) 적용값 저장
   const [notesReload, setNotesReload] = useState(0)
   const reflectCampaign = async (a: CampaignActions) => {
@@ -453,22 +479,24 @@ export default function AdAnalysisPage() {
   // 주간 기록(지난주 대비) · 운영 메모(지난주 조정 결과) — 30일 판정과 별개
   const [weekly, setWeekly] = useState<WeeklySnapshot[]>([])
   useEffect(() => {
+    if (!isAdmin) return
     let cancelled = false
     fetch('/api/coupang-ad-weekly', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (!cancelled && Array.isArray(j?.items)) setWeekly(j.items as WeeklySnapshot[]) })
       .catch(() => { /* 없으면 빈 기록 */ })
     return () => { cancelled = true }
-  }, [])
+  }, [isAdmin])
   const [notes, setNotes] = useState<ReflectNote[]>([])
   useEffect(() => {
+    if (!isAdmin) return
     let cancelled = false
     fetch('/api/coupang-ad-history', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (!cancelled && Array.isArray(j?.items)) setNotes(j.items as ReflectNote[]) })
       .catch(() => { /* 없으면 빈 메모 */ })
     return () => { cancelled = true }
-  }, [notesReload])
+  }, [notesReload, isAdmin])
   // 쿠팡 반영 완료 기록(서버 메모) → 캠페인별 '반영됨'·반영 뒤 새로 생긴 할 일 — 같은 30일 기간 기록만.
   // 기간·항목 없이 저장된 옛 기록은 파일 종료일 다음 날~7일 안에 남긴 것만 같은 기간으로 보고 '반영됨'만 (새 할 일 비교 불가)
   const reflectState = useMemo(() => {
@@ -513,7 +541,7 @@ export default function AdAnalysisPage() {
   // 상품 월 손익 — 쿠팡 손익이 저장한 가장 최근 달 상품별 판정 요약(pnl_verdict_YYYY-MM, 관리자만)
   const [productMonth, setProductMonth] = useState<{ month: string; byAlias: Map<string, { profit: number; adShare: number | null; revenue?: number }> } | null>(null)
   useEffect(() => {
-    if (isGuest) return
+    if (!isAdmin) return
     let cancelled = false
     ;(async () => {
       try {
@@ -535,7 +563,7 @@ export default function AdAnalysisPage() {
       } catch { /* 없으면 표시 안 함 */ }
     })()
     return () => { cancelled = true }
-  }, [isGuest])
+  }, [isAdmin])
   // 캠페인 → 별칭: 광고 행 광고집행 옵션ID → 3P/1P 행 별칭 (상품 필터와 같은 연결), 여러 개면 광고비 가장 큰 별칭
   const campaignAlias = useMemo(() => {
     const m = new Map<string, string>()
@@ -601,15 +629,18 @@ export default function AdAnalysisPage() {
     <OptionBepInputCard options={optionList} manualBep={manualBep} onChange={(id, v) => setManualBep((prev) => ({ ...prev, [id]: v }))} />
   ) : null
 
-  // 라이브 광고 엑셀 업로드 핸들러 — store 의 rawAdCampaign 안 건드림.
-  // 라이브 광고 엑셀 업로드 — 여러 파일. 파일명 기간으로 구분: 10일 이하 = 주간 기록 저장, 25일 이상 = 30일 분석 화면
+  // 라이브 광고 엑셀 업로드 — 여러 파일, store 의 rawAdCampaign 안 건드림. 파일명 기간으로 구분:
+  // 10일 이하 = 주간 기록 저장(관리자만) · 25일 이상 = 30일 분석 화면(+ 스위치 켜졌으면 서버 저장) · 11~24일 = 건너뜀
   const [uploadNote, setUploadNote] = useState<string | null>(null)
+  // 이 화면에서 올린 주간 파일 (기간 끝이 가장 늦은 것) — 상태 바·종료일 차이 경고용
+  const [sessionWeekly, setSessionWeekly] = useState<{ startDate: string; endDate: string; days: number; fileName: string; saved: boolean } | null>(null)
   async function handleLiveFiles(files: File[]) {
     setUploadError(null)
     setUploadNote(null)
     const notes: string[] = []
     const warns: string[] = []
-    let monthly: { rows: AdCampaignRow[]; meta: { fileName: string; uploadedAt: string; rowCount: number }; period: { startDate: string; endDate: string; days: number } | null; end: string } | null = null
+    let monthly: { rows: AdCampaignRow[]; meta: { fileName: string; uploadedAt: string; rowCount: number; downloadedAt: string }; period: { startDate: string; endDate: string; days: number } | null; end: string } | null = null
+    let weeklyFile: { startDate: string; endDate: string; days: number; fileName: string; saved: boolean } | null = null
     for (const file of files) {
       try {
         const r = parseAdCampaign(await file.arrayBuffer(), file.name)
@@ -624,15 +655,22 @@ export default function AdAnalysisPage() {
         const period = startDate && endDate && days ? { startDate, endDate, days } : null
         const label = period ? `${fmtMd(period.startDate)}~${fmtMd(period.endDate)}(${period.days}일)` : file.name
         if (period && period.days <= WEEKLY_MAX_DAYS) {
-          const overlaps = await saveWeeklySnapshot(r.rows, period, file.name)
-          notes.push(`주간 기록 저장 ${label}`)
-          if (overlaps.length) {
-            warns.push(`${label}: 다른 주간 기록과 기간이 겹침 — ${overlaps.map((x) => `${fmtMd(x.startDate)}~${fmtMd(x.endDate)}`).join(', ')}`)
+          // 주간 기록은 회사 기록 — 관리자만 저장 (게스트는 마진마스터가 없어 손익이 틀리게 남음)
+          if (isAdmin) {
+            const overlaps = await saveWeeklySnapshot(r.rows, period, file.name)
+            notes.push(`주간 기록 저장 ${label}`)
+            if (overlaps.length) {
+              warns.push(`${label}: 다른 주간 기록과 기간이 겹침 — ${overlaps.map((x) => `${fmtMd(x.startDate)}~${fmtMd(x.endDate)}`).join(', ')}`)
+            }
+          } else {
+            warns.push(`${label}: 주간 파일은 이 계정에서 쓰지 않음 — 30일 파일(25일 이상)을 올리세요`)
           }
+          if (!weeklyFile || period.endDate > weeklyFile.endDate) weeklyFile = { ...period, fileName: file.name, saved: isAdmin }
         } else if (period && period.days >= MONTHLY_MIN_DAYS) {
-          // 30일 파일이 여러 개면 기간 끝이 가장 늦은 것
+          // 30일 파일이 여러 개면 기간 끝이 가장 늦은 것. 받은 날 = 파일 수정 시각(KST 날짜) — 14일 전환 미반영 경고용
           if (!monthly || period.endDate > monthly.end) {
-            monthly = { rows: r.rows, meta: { fileName: file.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length }, period, end: period.endDate }
+            const downloadedAt = new Date(file.lastModified + 9 * 3600 * 1000).toISOString().slice(0, 10)
+            monthly = { rows: r.rows, meta: { fileName: file.name, uploadedAt: new Date().toISOString(), rowCount: r.rows.length, downloadedAt }, period, end: period.endDate }
           }
           notes.push(`30일 분석 ${label}`)
         } else {
@@ -642,10 +680,39 @@ export default function AdAnalysisPage() {
         warns.push(`${file.name}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    if (monthly) setAdAnalysisLive(monthly.rows, monthly.meta, monthly.period)
+    if (weeklyFile) setSessionWeekly(weeklyFile)
+    if (monthly) {
+      setAdAnalysisLive(monthly.rows, monthly.meta, monthly.period)
+      if (isAdmin && liveSaveOn && monthly.period) {
+        try {
+          const res = await fetch('/api/coupang-ad-live', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item: { fileName: monthly.meta.fileName, period: monthly.period, downloadedAt: monthly.meta.downloadedAt, rows: packAdRows(monthly.rows) } }),
+          })
+          const j = await res.json().catch(() => null)
+          if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`)
+          if (j.enabled === true) notes.push('30일 파일 서버 저장')
+        } catch (err) {
+          warns.push(`30일 파일 서버 저장 실패 — 이 화면에서만 보임 (${err instanceof Error ? err.message : String(err)})`)
+        }
+      }
+    }
     if (notes.length) setUploadNote(notes.join(' · '))
     if (warns.length) setUploadError(warns.join(' / '))
   }
+
+  // 업로드 상태 바 — 주간 파일 = 이 화면에서 올린 것, 없으면 마지막 주간 기록 (관리자만)
+  const lastWeeklyRecord = weekly.length ? weekly[weekly.length - 1] : null
+  const weeklySlot = sessionWeekly
+    ?? (lastWeeklyRecord
+      ? { startDate: lastWeeklyRecord.startDate, endDate: lastWeeklyRecord.endDate, days: daysOf(lastWeeklyRecord.startDate, lastWeeklyRecord.endDate), fileName: lastWeeklyRecord.fileName || '', saved: true }
+      : null)
+  const livePeriod = adAnalysisLive?.period ?? null
+  // 두 파일 종료일 3일 이상 차이 → 같은 날 다시 받기 (주간 판정과 30일 키워드가 다른 기간이 됨)
+  const endGap = weeklySlot && livePeriod ? Math.abs(dayDiff(weeklySlot.endDate, livePeriod.endDate)) : null
+  const liveDownloadedAt = adAnalysisLive?.meta?.downloadedAt
+  const liveLag = mode === 'live' && livePeriod && liveDownloadedAt ? attributionLag(livePeriod.endDate, livePeriod.days, liveDownloadedAt) : null
 
   // 셀렉터/공통 헤더 — 어떤 분기든 항상 노출
   const headerNode = (
@@ -653,7 +720,7 @@ export default function AdAnalysisPage() {
       <Header
         mode={mode}
         onMode={setMode}
-        isGuest={isGuest}
+        role={role}
         adPeriodLabel={sourcePeriod ? `${sourcePeriod.startDate} ~ ${sourcePeriod.endDate} (${sourcePeriod.days}일)` : undefined}
       />
       {aliasFilter && (
@@ -662,7 +729,7 @@ export default function AdAnalysisPage() {
           <button onClick={clearAliasFilter} style={{ marginLeft: 'auto', border: '1px solid #FDBA74', borderRadius: 6, background: '#fff', padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>필터 해제</button>
         </div>
       )}
-      {mode === 'saved' && !isGuest && (
+      {mode === 'saved' && isAdmin && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 12px', padding: '8px 14px', borderRadius: 8, border: '1px solid #BFDBFE', background: '#EFF6FF', fontSize: 13, color: '#1E3A8A' }}>
           <span>📅 월</span>
           <select
@@ -685,7 +752,7 @@ export default function AdAnalysisPage() {
     </>
   )
 
-  // ── 본문 (라이브·저장 공통) — 경고 · 30일 손익 · 상태 3칸 · 할 일 · 전체 캠페인 표 · 운영 메모 ──
+  // ── 본문 (라이브·저장 공통) — 경고 · 손익 · 지난주 대비 · 상태 3칸 · 채널 필터 · 할 일 · 캠페인 진단 표 · 운영 메모 ──
   const renderBody = () => (
     <>
       {marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
@@ -703,28 +770,32 @@ export default function AdAnalysisPage() {
         unlinked1P={onePView.unlinked}
         unmatched={hideBep ? [] : viewAll.unmatched.list ?? []}
         noBep={hideBep ? [] : viewAll.campaigns.filter((c) => campaignStatusOf(c) == null)}
+        lag={liveLag}
       />
       {!hideBep && viewAll.loaded && (
         <>
-          {/* 3) 30일 손익 1줄 */}
+          {/* 3) 기간 손익 1줄 */}
           <ProfitLine view={viewAll} days={sourcePeriod?.days ?? null} />
-          {/* 4) 지난주 대비 · 지난주 조정 결과 (주간 기록 기준) */}
-          <WeekCompareBox snapshots={weekly} notes={notes} />
+          {/* 4) 지난주 대비 · 지난주 조정 결과 (주간 기록 기준, 관리자만) */}
+          {isAdmin && <WeekCompareBox snapshots={weekly} notes={notes} />}
           {/* 5) 캠페인 상태 3칸 */}
           <StatusBoxes campaigns={viewAll.campaigns} onPick={pickCampaign} noteOf={productNoteOf} />
-          {/* 6) 요약 카드 4개 + 7) 이번 주 할 일 */}
-          <WeeklyActionsSection
-            actions={weeklyActions}
-            reflectState={reflectState}
-            onReflect={reflectCampaign}
-            onSetApplied={setTargetForKey}
-            noteOf={productNoteOf}
-          />
         </>
       )}
-      {/* 8) 전체 캠페인 표 — 채널 필터는 이 표 전용 */}
+      {/* 6) 채널 필터 한 줄 — 아래 할 일·캠페인 진단 표에 같이 적용 */}
       <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
       {chFilter === '1P' && !onePView.loaded && <div style={{ ...noticeBoxOrange, padding: 12, fontSize: 13, margin: '12px 0' }}>이 광고 데이터에는 1P(판매방식 Retail) 광고 행이 없습니다.</div>}
+      {!hideBep && viewAll.loaded && (
+        /* 7) 요약 카드 3개 + 이번 주 할 일 — 반영 기록·적용값 저장은 관리자만 */
+        <WeeklyActionsSection
+          actions={weeklyActionsShown}
+          reflectState={reflectState}
+          onReflect={isAdmin ? reflectCampaign : undefined}
+          onSetApplied={isAdmin ? setTargetForKey : undefined}
+          noteOf={productNoteOf}
+        />
+      )}
+      {/* 8) 캠페인 진단 표 */}
       <CampaignSection
         view={view}
         master={masterAug as any}
@@ -735,31 +806,45 @@ export default function AdAnalysisPage() {
         onOpen={toggleCampaign}
         selectedOptionId={selectedOptionId}
         onSelectOption={openCampaignAndOption}
-        targets={targets}
-        onTargetChange={setTargetForKey}
         noteOf={productNoteOf}
         renderDetail={(c) => c.type === 'manual'
           ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-          : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={targets} onTargetChange={setTargetForKey} />}
+          : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={isAdmin ? targets : undefined} onTargetChange={isAdmin ? setTargetForKey : undefined} />}
       />
-      {/* 9) 운영 메모 (접힌 상태) */}
-      <HistoryNotesSection reloadKey={notesReload} />
+      {/* 9) 운영 메모 (접힌 상태, 관리자만) */}
+      {isAdmin && <HistoryNotesSection reloadKey={notesReload} />}
     </>
   )
 
-  // ── 라이브 모드 ──
+  // ── 주간 (라이브) 모드 — 업로드 상태 바(주간 파일 · 30일 파일) + 30일 파일 있으면 본문 ──
   if (mode === 'live') {
+    const filesBar = (
+      <LiveFilesBar
+        weekly={isAdmin ? weeklySlot : null}
+        showWeekly={isAdmin}
+        live={adAnalysisLive ? { meta: adAnalysisLive.meta, period: livePeriod } : null}
+        endGap={endGap}
+        onFiles={handleLiveFiles}
+        onClear={() => { clearAdAnalysisLive(); setUploadError(null) }}
+      />
+    )
+    const uploadMsgs = (
+      <>
+        {uploadNote && <div style={{ ...noticeBoxOrange, padding: '8px 12px', fontSize: 12, textAlign: 'left', margin: '0 0 8px' }}>✓ {uploadNote}</div>}
+        {uploadError && <div style={errorBox}>{uploadError}</div>}
+      </>
+    )
     if (!adAnalysisLive) {
       return (
         <div style={pageWrap}>
           <Style />
           {headerNode}
-          <LiveUploadBox onFiles={handleLiveFiles} error={uploadError} />
-          {uploadNote && <div style={{ ...noticeBoxOrange, padding: '8px 12px', fontSize: 12, textAlign: 'left', marginTop: 8 }}>✓ {uploadNote}</div>}
+          {filesBar}
+          <LiveUploadBox onFiles={handleLiveFiles} />
+          {uploadMsgs}
         </div>
       )
     }
-    // 라이브 데이터 있음 → 정상 view
     return (
       <div style={{
         fontFamily: 'Pretendard, -apple-system, sans-serif',
@@ -767,14 +852,8 @@ export default function AdAnalysisPage() {
       }}>
         <Style />
         {headerNode}
-        <LiveActiveBar
-          meta={adAnalysisLive.meta}
-          onReplace={handleLiveFiles}
-          onClear={() => { clearAdAnalysisLive(); setUploadError(null) }}
-        />
-        {uploadNote && <div style={{ ...noticeBoxOrange, padding: '8px 12px', fontSize: 12, textAlign: 'left', margin: '0 0 8px' }}>✓ {uploadNote}</div>}
-        {uploadError && <div style={errorBox}>{uploadError}</div>}
-        {/* 게스트: 저장 히스토리 기반 추세차트 숨김(회사 저장데이터) */}
+        {filesBar}
+        {uploadMsgs}
         {renderBody()}
       </div>
     )
@@ -797,7 +876,7 @@ export default function AdAnalysisPage() {
         <Style />
         {headerNode}
         <div style={noticeBoxOrange}>
-          저장된 광고 분석이 없습니다. 「수익 진단」 페이지에서 광고 엑셀을 업로드/저장하거나, 위 「라이브」 탭에서 직접 업로드하세요.
+          저장된 광고 분석이 없습니다. 「쿠팡 손익」 화면에서 광고 파일을 저장하거나, 위 「주간 (라이브)」 탭에서 직접 업로드하세요.
         </div>
       </div>
     )
@@ -815,13 +894,7 @@ export default function AdAnalysisPage() {
   )
 }
 
-// ── 채널 필터 (전체 / 3P / 1P) + 배지 ─────────────────────────
-function SaleChBadge({ ch }: { ch: '3P' | '1P' }) {
-  const s: React.CSSProperties = ch === '1P'
-    ? { background: '#EDE9FE', color: '#5B21B6', border: '1px solid #C4B5FD' }
-    : { background: '#E0F2FE', color: '#075985', border: '1px solid #7DD3FC' }
-  return <span style={{ ...s, fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '1px 5px', marginRight: 6, verticalAlign: 'middle' }}>{ch}</span>
-}
+// ── 채널 필터 (전체 / 3P / 1P) — 할 일·캠페인 진단 표 공통 ─────────
 
 function ChannelFilterBar({ value, onChange, has1P }: { value: 'all' | '3P' | '1P'; onChange: (v: 'all' | '3P' | '1P') => void; has1P: boolean }) {
   const opts: { v: 'all' | '3P' | '1P'; label: string }[] = [{ v: 'all', label: '전체' }, { v: '3P', label: '3P (윙)' }, { v: '1P', label: '1P (로켓 직매입)' }]
@@ -839,6 +912,11 @@ function ChannelFilterBar({ value, onChange, has1P }: { value: 'all' | '3P' | '1
 }
 
 const fmtMd = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+/** 'YYYY-MM-DD' 두 날짜 차이 (b − a, 일) */
+const dayDiff = (a: string, b: string) => Math.round((new Date(`${b}T00:00:00Z`).getTime() - new Date(`${a}T00:00:00Z`).getTime()) / 86400000)
+/** 기간 일수 (시작·끝 포함) */
+const daysOf = (start: string, end: string) => dayDiff(start, end) + 1
+const END_GAP_MAX = 3 // 주간·30일 파일 종료일이 이만큼 이상 차이 나면 다시 받기
 const WEEKLY_MAX_DAYS = 10 // 이하 = 주간 파일 (지난주 대비 기록)
 const MONTHLY_MIN_DAYS = 25 // 이상 = 30일 파일 (할 일·상태·손익)
 
@@ -848,7 +926,7 @@ const noticeBoxOrange: React.CSSProperties = { background: '#FFF7ED', border: '1
 const errorBox: React.CSSProperties = { background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 6, padding: '8px 12px', margin: '8px 0', fontSize: 12, color: '#991B1B' }
 
 // ── 라이브 모드 업로드 박스 (드래그 + 클릭) ───────────────────
-function LiveUploadBox({ onFiles, error }: { onFiles: (fs: File[]) => void; error: string | null }) {
+function LiveUploadBox({ onFiles }: { onFiles: (fs: File[]) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
 
@@ -883,7 +961,10 @@ function LiveUploadBox({ onFiles, error }: { onFiles: (fs: File[]) => void; erro
           쿠팡 광고센터 → pa_total_campaign 다운로드 파일 (.xlsx)
         </div>
         <div style={{ fontSize: 12, color: '#A16207', marginTop: 8 }}>
-          파일을 끌어다 놓거나 클릭해서 선택하세요 (여러 개 가능). 기간은 파일명에서 자동 인식 — 10일 이하 = 주간 기록, 25일 이상 = 30일 분석
+          파일을 끌어다 놓거나 클릭해서 선택하세요 (여러 개 가능). 기간은 파일명에서 자동 인식 — 10일 이하 = 주간 파일, 25일 이상 = 30일 파일
+        </div>
+        <div style={{ fontSize: 12, color: '#A16207', marginTop: 4 }}>
+          주간 파일과 30일 파일은 같은 날 받아서 같이 올리세요 (종료일 {END_GAP_MAX}일 이상 차이 나면 경고)
         </div>
         <input
           ref={inputRef}
@@ -894,79 +975,96 @@ function LiveUploadBox({ onFiles, error }: { onFiles: (fs: File[]) => void; erro
           onChange={(e) => { handleFiles(e.target.files); if (inputRef.current) inputRef.current.value = '' }}
         />
       </div>
-      {error && <div style={errorBox}>{error}</div>}
     </>
   )
 }
 
-// ── 라이브 활성 상태 표시줄 (파일명 + 다시 업로드 / 닫기) ────────
-function LiveActiveBar({ meta, onReplace, onClear }: {
-  meta: { fileName: string; uploadedAt: string; rowCount: number } | null
-  onReplace: (fs: File[]) => void
+// ── 업로드 상태 바 — 주간 파일(10일 이하) · 30일 파일(25일 이상) 두 칸 + 파일 올리기 ───────
+type FileSlot = { startDate: string; endDate: string; days: number; fileName: string; saved: boolean }
+function LiveFilesBar({ weekly, showWeekly, live, endGap, onFiles, onClear }: {
+  /** 주간 파일 — 이 화면에서 올린 것, 없으면 마지막 주간 기록 */
+  weekly: FileSlot | null
+  /** 주간 칸 표시 (관리자만 — 게스트는 주간 기록을 쓰지 않음) */
+  showWeekly: boolean
+  live: { meta: { fileName: string; rowCount: number; downloadedAt?: string } | null; period: { startDate: string; endDate: string; days: number } | null } | null
+  endGap: number | null
+  onFiles: (fs: File[]) => void
   onClear: () => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const range = (p: { startDate: string; endDate: string; days: number }) => `${fmtMd(p.startDate)}~${fmtMd(p.endDate)} (${p.days}일)`
+  const slot: React.CSSProperties = { flex: '1 1 260px', minWidth: 0, padding: '6px 10px', borderRadius: 6, background: '#fff', border: '1px solid #FED7AA' }
+  const label: React.CSSProperties = { fontSize: 11, color: '#B45309', marginBottom: 2 }
+  const btn: React.CSSProperties = { padding: '4px 10px', border: '1px solid #FED7AA', background: '#FFFBF5', borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#92400E' }
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-      background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6,
-      padding: '8px 12px', margin: '8px 0 16px', fontSize: 12, color: '#92400E',
-    }}>
-      <div>
-        📂 <strong>라이브:</strong> {meta?.fileName || '—'}
-        {meta?.rowCount != null && <span style={{ marginLeft: 8, color: '#B45309' }}>· {meta.rowCount.toLocaleString()} rows</span>}
+    <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', borderRadius: 6, padding: '8px 12px', margin: '8px 0 12px', fontSize: 12, color: '#92400E' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'stretch' }}>
+        {showWeekly && (
+          <div style={slot}>
+            <div style={label}>주간 파일 (10일 이하) — 지난주 대비</div>
+            {weekly
+              ? <div><b>{range(weekly)}</b> {weekly.saved ? '주간 기록 저장됨' : ''}</div>
+              : <div style={{ color: '#94A3B8' }}>주간 기록 없음</div>}
+          </div>
+        )}
+        <div style={slot}>
+          <div style={label}>30일 파일 (25일 이상) — 할 일·키워드·입찰가</div>
+          {live
+            ? (
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={live.meta?.fileName}>
+                <b>{live.period ? range(live.period) : '기간 불명'}</b>
+                <span style={{ color: '#B45309' }}> · {live.meta?.fileName || '—'}{live.meta?.rowCount != null ? ` · ${live.meta.rowCount.toLocaleString('ko-KR')}행` : ''}</span>
+              </div>
+            )
+            : <div style={{ color: '#94A3B8' }}>아직 안 올림</div>}
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={() => inputRef.current?.click()} style={btn}>파일 올리기</button>
+          {live && <button onClick={onClear} style={{ ...btn, border: '1px solid #FECACA', background: '#FEF2F2', color: '#991B1B' }}>닫기</button>}
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const fs = e.target.files ? Array.from(e.target.files) : []
+              if (fs.length) onFiles(fs)
+              if (inputRef.current) inputRef.current.value = ''
+            }}
+          />
+        </div>
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          onClick={() => inputRef.current?.click()}
-          style={{ padding: '4px 10px', border: '1px solid #FED7AA', background: '#FFFBF5', borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#92400E' }}
-        >
-          다시 업로드
-        </button>
-        <button
-          onClick={onClear}
-          style={{ padding: '4px 10px', border: '1px solid #FECACA', background: '#FEF2F2', borderRadius: 4, cursor: 'pointer', fontSize: 12, color: '#991B1B' }}
-        >
-          닫기
-        </button>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".xlsx,.xls"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            const fs = e.target.files ? Array.from(e.target.files) : []
-            if (fs.length) onReplace(fs)
-            if (inputRef.current) inputRef.current.value = ''
-          }}
-        />
-      </div>
+      {endGap != null && endGap >= END_GAP_MAX && (
+        <div style={{ ...errorBox, margin: '8px 0 0', fontSize: 12.5, fontWeight: 600 }}>
+          ⚠ 두 파일 종료일 {endGap}일 차이 — 같은 날 다시 받기 (주간 {fmtMd(weekly!.endDate)} · 30일 {fmtMd(live!.period!.endDate)})
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Header ────────────────────────────────────────────────────
-function Header({ mode, onMode, adPeriodLabel, isGuest }: {
+function Header({ mode, onMode, adPeriodLabel, role }: {
   mode: Mode
   onMode: (m: Mode) => void
   adPeriodLabel?: string
-  isGuest?: boolean
+  /** 서버 역할 — null = 확인 중(탭 숨김), 관리자만 월 저장본 탭 */
+  role: string | null
 }) {
   const allTabs: { id: Mode; label: string; sub: string }[] = [
-    { id: 'saved', label: '저장 (월)', sub: '쿠팡 손익 월 저장본' },
-    { id: 'live', label: '라이브', sub: '광고 엑셀 직접 업로드' },
+    { id: 'live', label: '주간 (라이브)', sub: '광고 엑셀 직접 업로드 — 주 1회 조정용' },
+    { id: 'saved', label: '월 저장본', sub: '쿠팡 손익 화면이 저장한 월 광고 파일' },
   ]
-  // 게스트는 라이브 탭만 노출 (저장 탭 숨김)
-  const tabs = isGuest ? allTabs.filter((t) => t.id === 'live') : allTabs
+  const tabs = role === 'admin' ? allTabs : []
   return (
     <div className="aa-page-header">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div>
           <div className="aa-title">광고 분석</div>
-          <div className="aa-desc">캠페인별 효율 진단 · 제외 키워드 추출 · 수동 캠페인 입찰가 가이드 {adPeriodLabel && <span style={{ marginLeft: 8, color: '#94A3B8' }}>· {adPeriodLabel}</span>}</div>
+          <div className="aa-desc">주 1회 광고센터에서 바꿀 것 · 캠페인별 BEP ROAS · 키워드 입찰가 {adPeriodLabel && <span style={{ marginLeft: 8, color: '#94A3B8' }}>· {adPeriodLabel}</span>}</div>
         </div>
-        <div className="aa-period-bar" title="14일 어트리뷰션 윈도우 중첩 회피 — 30/90일은 라이브 모드에서 직접 업로드">
+        <div className="aa-period-bar">
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -1195,7 +1293,7 @@ function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
 }
 
 // ── Campaign Section ──────────────────────────────────────────
-function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, targets, onTargetChange, renderDetail, noteOf }: {
+function CampaignSection({ view, master, marginOff = false, hideBep = false, manualBep, openCampId, onOpen, selectedOptionId, onSelectOption, renderDetail, noteOf }: {
   view: ReturnType<typeof buildAdAnalysisView>
   master: any
   marginOff?: boolean
@@ -1205,8 +1303,6 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
   onOpen: (id: string) => void
   selectedOptionId: string | null
   onSelectOption: (campaignId: string, optionId: string | null) => void
-  targets: Record<string, number>
-  onTargetChange: (key: string, value: number | null) => void
   /** 펼친 캠페인의 키워드 분석(AI)·입찰가 점검(수동) — 옵션 행 바로 아래 표 안에 표시 */
   renderDetail?: (c: CampaignDiag) => React.ReactNode
   /** 상품 월 손익 (쿠팡 손익 상품별 판정 저장본) — 캠페인명 아래 */
@@ -1261,8 +1357,7 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
           <tbody>
             {sorted.map((c) => {
               const isOpen = c.campaignId === openCampId
-              const isExpanded = isOpen
-              const opts = !marginOff && isExpanded
+              const opts = !marginOff && isOpen
                 ? computeOptions(c.rows, bepMap, priceMap, rowMap, exposureMap)
                 : []
               return (
@@ -1272,14 +1367,10 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
                   marginOff={marginOff}
                   hideBep={hideBep}
                   isOpen={isOpen}
-                  isExpanded={isExpanded}
                   onToggle={() => onOpen(c.campaignId)}
-                  onToggleExpand={() => onOpen(c.campaignId)}
                   options={opts}
                   selectedOptionId={isOpen ? selectedOptionId : null}
                   onSelectOption={(optId) => onSelectOption(c.campaignId, optId)}
-                  targets={targets}
-                  onTargetChange={onTargetChange}
                   detail={isOpen && renderDetail ? renderDetail(c) : null}
                   note={noteOf?.(c.campaignId) ?? null}
                 />
@@ -1292,40 +1383,29 @@ function CampaignSection({ view, master, marginOff = false, hideBep = false, man
   )
 }
 
-function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExpanded, onToggle, onToggleExpand, options, selectedOptionId, onSelectOption, targets, onTargetChange, detail, note }: {
+function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, onToggle, options, selectedOptionId, onSelectOption, detail, note }: {
   detail?: React.ReactNode
   note?: ProductMonthNote | null
   c: CampaignDiag
   marginOff?: boolean
   hideBep?: boolean
+  /** 펼침 — 옵션 행·키워드 분석이 같이 열림 */
   isOpen: boolean
-  isExpanded: boolean
   onToggle: () => void
-  onToggleExpand: () => void
   options: OptionDiag[]
   selectedOptionId: string | null
   onSelectOption: (optionId: string) => void
-  targets: Record<string, number>
-  onTargetChange: (key: string, value: number | null) => void
 }) {
   const roasUnder = c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct
   // BEP 숨김이면 색상 없이 중립
   const roasClass = hideBep ? '' : (roasUnder ? 'text-bad' : (c.roasPct != null && c.bepPct != null && c.roasPct < c.bepPct * 1.2 ? 'text-warn' : ''))
-  const gapClass = c.gapPct != null && c.gapPct < 0 ? 'text-bad' : c.gapPct != null && c.gapPct > 0 ? 'text-good' : ''
 
   const typeBadge =
     c.type === 'ai' ? <span className="aa-badge badge-ai">🤖 AI</span> :
     c.type === 'manual' ? <span className="aa-badge badge-manual">🎯 수동</span> :
     <span className="aa-badge badge-unsorted">미분류</span>
 
-  const searchPct = Math.round(c.searchShare * 100)
   const isManual = c.type === 'manual'
-  const cvrPct = c.clicks > 0 ? (c.orders / c.clicks) * 100 : null
-
-  // 목표 ROAS — 캠페인명에서 prefix+타입 추출. 수동 또는 비표준 네이밍이면 입력 비활성화.
-  const targetInfo = parseCampaignTargetKey(c.campaignName)
-  const targetEditable = targetInfo != null && (targetInfo.kind === 'AI' || targetInfo.kind === '스마트')
-  const targetValue = targetInfo ? (targets[targetInfo.key] ?? null) : null
 
   return (
     <>
@@ -1333,12 +1413,12 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
         <td className="sticky-left">
           <span
             className="aa-expand-toggle"
-            onClick={(e) => { e.stopPropagation(); onToggleExpand() }}
-            title={isExpanded ? '옵션 접기' : '옵션 펼치기'}
+            onClick={(e) => { e.stopPropagation(); onToggle() }}
+            title={isOpen ? '옵션 접기' : '옵션 펼치기'}
           >
-            {isExpanded ? '▾' : '▸'}
+            {isOpen ? '▾' : '▸'}
           </span>
-          <strong><SaleChBadge ch={c.channel} />{c.campaignName}</strong>
+          <strong><ChBadge ch={c.channel} />{c.campaignName}</strong>
           {note && <div style={{ paddingLeft: 22 }}><ProductNote note={note} /></div>}
           {note && <div style={{ paddingLeft: 22 }}><AdProductHint adProfit={c.adProfit} note={note} /></div>}
         </td>
@@ -1356,7 +1436,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
         <td className="num">{fmtNum(c.orders)}</td>
         <td className="num text-muted">{c.otherProductRevenue > 0 ? fmtMan(c.otherProductRevenue) : '—'}</td>
       </tr>
-      {!marginOff && isExpanded && options.map((o) => (
+      {!marginOff && isOpen && options.map((o) => (
         <OptionInlineRow
           key={`${c.campaignId}::${o.optionId}`}
           o={o}
@@ -1365,7 +1445,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
           hideBep={hideBep}
         />
       ))}
-      {!marginOff && isExpanded && options.length === 0 && (
+      {!marginOff && isOpen && options.length === 0 && (
         <tr className="aa-option-row">
           <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 없음</td>
         </tr>
@@ -1377,7 +1457,7 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
           </td>
         </tr>
       )}
-      {marginOff && isExpanded && (
+      {marginOff && isOpen && (
         <tr className="aa-option-row">
           <td className="sticky-left aa-option-cell" colSpan={hideBep ? 7 : 9} style={{ textAlign: 'center', color: '#94A3B8' }}>옵션 상세는 마진마스터 필요 (옵션 판정은 상단 BEP ROAS 입력값 기준)</td>
         </tr>
@@ -1389,9 +1469,6 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, isExp
 function OptionInlineRow({ o, isSelected, onClick, hideBep = false }: { o: OptionDiag; isSelected: boolean; onClick: () => void; hideBep?: boolean }) {
   const roasUnder = o.roasPct != null && o.bepPct != null && o.roasPct < o.bepPct
   const roasClass = o.roasPct == null || o.bepPct == null ? '' : (roasUnder ? 'text-bad' : 'text-good')
-  const gapClass = o.gapPct == null ? '' : (o.gapPct < 0 ? 'text-bad' : 'text-good')
-  const adCostRaw = o.searchAdCostRaw + o.nonSearchAdCostRaw
-  const searchPct = Math.round(o.searchShare * 100)
 
   return (
     <tr
@@ -1402,7 +1479,7 @@ function OptionInlineRow({ o, isSelected, onClick, hideBep = false }: { o: Optio
         <span className="aa-option-prefix">└─</span>
         <span className="aa-option-text">
           {o.alias && <span className="aa-option-alias">{o.alias}</span>}
-          <span className="aa-option-name"><SaleChBadge ch={o.saleCh} />{o.optionName}</span>
+          <span className="aa-option-name"><ChBadge ch={o.saleCh} />{o.optionName}</span>
           {!o.matched && <span style={{ marginLeft: 4, fontSize: 10, color: '#92400E' }}>⚠</span>}
           <ChannelBadge raw={o.channel} />
         </span>
@@ -1851,7 +1928,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
   const belowBepCount = sorted.filter((r) => campaignBep != null && r.roasPct != null && r.roasPct < campaignBep).length
   const totalCost = sorted.reduce((s, r) => s + r.adCostVat, 0)
 
-  // 체크된 모든 키워드를 선택한 카테고리(제외/수동 이동) 텍스트로 복사 — 추천 액션 무관, 사용자 의사 우선
+  // 체크된 모든 키워드를 선택한 카테고리(AI 제외/수동 이동) 텍스트로 복사 — 추천 액션 무관, 사용자 의사 우선
   function copyChecked(target: 'exclude' | 'move') {
     const list = sorted.filter((r) => checked.has(r.keyword)).flatMap((r) => r.variants.map((v) => v.keyword)) // 묶인 표기마다 한 줄
     if (list.length === 0) {
@@ -1859,7 +1936,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
       return
     }
     const text = list.join('\n')
-    const label = target === 'exclude' ? '제외' : '수동 이동'
+    const label = target === 'exclude' ? 'AI 제외' : '수동 이동'
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text).then(() => alert(`✓ ${list.length}개 키워드 복사 완료 (${label})`)).catch(() => {
         prompt('복사 실패 — 직접 복사해주세요:', text)
@@ -1970,7 +2047,7 @@ function KeywordTable({ rows, campaignRows, campaignBep, marginOff = false, hide
       <div className="aa-bulk-action">
         <div><strong>{checked.size}개</strong> 선택됨 — 어느 카테고리로 복사할지 선택하세요 (추천 액션은 가이드일 뿐)</div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="aa-btn btn-sm btn-bad" onClick={() => copyChecked('exclude')}>🚫 제외 키워드 복사 ({checked.size})</button>
+          <button className="aa-btn btn-sm btn-bad" onClick={() => copyChecked('exclude')}>AI 제외 키워드 복사 ({checked.size})</button>
           <button className="aa-btn btn-sm btn-info" onClick={() => copyChecked('move')}>➡️ 수동 이동 키워드 복사 ({checked.size})</button>
         </div>
       </div>
@@ -2053,23 +2130,19 @@ function ActionGuideHeader() {
   )
 }
 
-// 추천 액션 6단 → 배지 렌더 (테이블 셀 + 엑셀 라벨 공통)
+// 추천 액션 4단 → 배지 렌더 (테이블 셀 + 엑셀 라벨 공통)
 const ACTION_LABEL: Record<KeywordRow['action'], string> = {
-  growing: '성장 중',
   low_sample: '모수 부족',
   enhance: '강화',
   maintain: '유지',
   lower_bid: '입찰가 ↓',
-  exclude: '제외',
 }
 function actionBadge(action: KeywordRow['action']): React.ReactElement {
   switch (action) {
-    case 'growing':    return <span className="aa-action-chip action-growing">⭐ 성장 중</span>
     case 'low_sample': return <span className="aa-action-chip action-low-sample">모수 부족</span>
     case 'enhance':    return <span className="aa-action-chip action-enhance">강화</span>
     case 'maintain':   return <span className="aa-action-chip action-maintain">유지</span>
     case 'lower_bid':  return <span className="aa-action-chip action-lower-bid">입찰가 ↓</span>
-    case 'exclude':    return <span className="aa-action-chip action-exclude">🚫 제외</span>
   }
 }
 
@@ -2086,8 +2159,7 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand, marg
   // 입찰가 셀 — bidSource 별 분기.
   //   low_sample        : "—"
   //   fixed_100         : "100원" (판매 0 · ROAS < BEP/2 — 최저가)
-  //   revenue + growing : 매출 역산 + "(참고용)" 라벨
-  //   revenue + 그 외   : 매출 역산
+  //   revenue           : 매출 역산
   let bidCell: React.ReactNode
   if (r.bidSource === 'low_sample' || r.recommendedBidVatExcl == null) {
     bidCell = <span className="text-muted" style={{ fontSize: 11 }}>—</span>
@@ -2098,9 +2170,6 @@ function KeywordRowComp({ r, checked, onToggle, isExpanded, onToggleExpand, marg
       <>
         <span className="bid-recommend">{ceilToTen(r.recommendedBidVatExcl).toLocaleString('ko-KR')}원</span>
         <span className="bid-vat-incl">(+VAT) {ceilToTen(r.recommendedBidVatExcl * 1.1).toLocaleString('ko-KR')}원</span>
-        {r.action === 'growing' && (
-          <span style={{ display: 'block', fontSize: 10, color: '#94A3B8', marginTop: 2 }}>(참고용)</span>
-        )}
       </>
     )
   }
@@ -2593,17 +2662,11 @@ function Style() {
       .aa-title { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
       .aa-desc { color: #64748B; font-size: 13px; margin-top: 4px; }
       .mono { font-family: 'JetBrains Mono', monospace; }
-      .aa-vat-tag { display: inline-block; font-size: 10px; background: #F1F5F9; color: #94A3B8; padding: 1px 5px; border-radius: 3px; font-weight: 500; }
       .aa-section { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 20px; overflow: clip; }
       .aa-section-header { padding: 16px 20px; border-bottom: 1px solid #E2E8F0; display: flex; justify-content: space-between; align-items: center; }
       .aa-section-title { font-size: 15px; font-weight: 600; }
       .aa-section-desc { font-size: 12px; color: #64748B; margin-top: 2px; }
       .aa-section-body { padding: 16px 20px; }
-      .aa-kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
-      .aa-kpi-card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 8px; padding: 16px 18px; }
-      .aa-kpi-label { font-size: 12px; color: #64748B; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; }
-      .aa-kpi-value { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; font-family: 'JetBrains Mono', monospace; }
-      .aa-kpi-sub { font-size: 11px; color: #94A3B8; margin-top: 4px; }
       .aa-period-bar { display: flex; gap: 4px; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 3px; width: fit-content; }
       .aa-period-btn { padding: 6px 12px; border: none; background: transparent; color: #64748B; cursor: pointer; border-radius: 4px; font-size: 12px; font-weight: 500; }
       .aa-period-btn.active { background: #FFFFFF; color: #1F2937; box-shadow: 0 0 0 1px #E2E8F0; }
@@ -2643,12 +2706,7 @@ function Style() {
       .aa-badge.badge-warn { background: #FEF3C7; color: #92400E; }
       .aa-badge.badge-bad { background: #FEE2E2; color: #991B1B; }
       .aa-badge.badge-info { background: #DBEAFE; color: #1E40AF; }
-      .aa-search-bar { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-family: 'JetBrains Mono', monospace; }
-      .aa-search-bar-bg { width: 70px; height: 6px; background: #DBEAFE; border-radius: 3px; position: relative; overflow: hidden; }
-      .aa-search-bar-fill { height: 100%; background: #3B82F6; border-radius: 3px; }
       .aa-action-chip { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; }
-      .aa-action-chip.action-exclude { background: #FEE2E2; color: #991B1B; }
-      .aa-action-chip.action-growing { background: #D1FAE5; color: #065F46; }
       .aa-action-chip.action-enhance { background: #D1FAE5; color: #065F46; }
       .aa-action-chip.action-maintain { background: #F1F5F9; color: #475569; }
       .aa-action-chip.action-lower-bid { background: #FFEDD5; color: #9A3412; }
@@ -2669,12 +2727,10 @@ function Style() {
       .bid-recommend { font-family: 'JetBrains Mono', monospace; font-weight: 700; font-size: 13.5px; color: #FF6B35; }
       .bid-vat-incl { display: block; font-size: 9.5px; color: #94A3B8; font-family: 'JetBrains Mono', monospace; margin-top: 1px; font-weight: 400; }
       .aa-bulk-action { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: #FFF7ED; border: 1px solid #FED7AA; border-radius: 6px; margin-top: 12px; font-size: 12.5px; }
-      .aa-hint-banner { background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 6px; padding: 10px 14px; font-size: 12px; color: #1E40AF; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
       .aa-stars { font-size: 12px; letter-spacing: 1px; }
       .aa-stars.high { color: #F59E0B; }
       .aa-stars.mid { color: #FCD34D; }
       .aa-stars.low { color: #94A3B8; }
-      .aa-kpi-value.text-bad { color: #EF4444; }
       .aa-expand-toggle { display: inline-block; width: 18px; color: #94A3B8; font-size: 12px; cursor: pointer; user-select: none; margin-right: 4px; }
       .aa-expand-toggle:hover { color: #FF6B35; }
       .aa-table-wrap tr.aa-option-row td { background: #F8FAFC; font-size: 12.5px; padding: 8px 14px; }

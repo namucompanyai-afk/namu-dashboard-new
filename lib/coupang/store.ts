@@ -72,11 +72,13 @@ interface MarginStore {
   sellerPeriodDays: number
 
   /** 광고 분석 페이지 라이브 모드 — 진단 페이지와 분리된 별도 슬롯.
-   *  사용자가 ad-analysis 에서 직접 업로드한 광고 raw. 영구 저장 X (메모리만). */
+   *  사용자가 ad-analysis 에서 직접 업로드한 30일 광고 raw. 기본은 메모리만
+   *  (서버 저장은 /api/coupang-ad-live, 기능 스위치 AD_LIVE_30D_SAVE 켜졌을 때만).
+   *  meta.downloadedAt = 보고서를 받은 날(파일 수정 시각) — 14일 전환 미반영 경고용 */
   adAnalysisLive: {
     rows: AdCampaignRow[]
     period: { startDate: string; endDate: string; days: number } | null
-    meta: UploadMeta | null
+    meta: (UploadMeta & { downloadedAt?: string }) | null
   } | null
 
   // ─────────── 경고 ───────────
@@ -110,7 +112,7 @@ interface MarginStore {
   /** 광고 분석 라이브 모드 업로드 — store 의 rawAdCampaign / adPeriod 안 건드림 */
   setAdAnalysisLive: (
     rows: AdCampaignRow[],
-    meta: UploadMeta,
+    meta: UploadMeta & { downloadedAt?: string },
     period: { startDate: string; endDate: string; days: number } | null,
   ) => void
   clearAdAnalysisLive: () => void

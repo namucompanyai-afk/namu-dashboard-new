@@ -13,7 +13,7 @@ const inAllowed = (pathname: string, allowed: string[]) =>
 // 서버 로그인 확인(nd_auth 쿠키) 대상 API — 401 이면 로그인 쿠키가 없거나 만료된 것
 const AUTH_APIS = [
   '/api/b2b/sheets', '/api/b2b/history', '/api/jindopam/cost',
-  '/api/campaign-targets', '/api/coupang-ad-history', '/api/coupang-diagnoses',
+  '/api/campaign-targets', '/api/coupang-ad-history', '/api/coupang-ad-weekly', '/api/coupang-ad-live', '/api/coupang-diagnoses',
   '/api/coupang-margin-master', '/api/coupang-master', '/api/influencer',
   '/api/jindopam-mapping', '/api/jindopam/settlement', '/api/meta',
   '/api/naver-diagnoses', '/api/ss-product-mapping', '/api/apps-script',
