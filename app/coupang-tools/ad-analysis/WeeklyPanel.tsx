@@ -20,18 +20,19 @@ const won = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${Math.round(n)}%`)
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #E2E8F0', borderRadius: 8 }
 
-function ChBadge({ ch }: { ch: '3P' | '1P' }) {
+/** 판매 채널 배지 (3P 윙 / 1P 로켓) — 할 일·캠페인 진단 표 공용 */
+export function ChBadge({ ch }: { ch: '3P' | '1P' }) {
   const s: React.CSSProperties = ch === '1P'
     ? { background: '#EDE9FE', color: '#5B21B6', border: '1px solid #C4B5FD' }
     : { background: '#E0F2FE', color: '#075985', border: '1px solid #7DD3FC' }
-  return <span style={{ ...s, fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '1px 5px', marginRight: 6 }}>{ch}</span>
+  return <span style={{ ...s, fontSize: 10, fontWeight: 700, borderRadius: 4, padding: '1px 5px', marginRight: 6, verticalAlign: 'middle' }}>{ch}</span>
 }
 
-/** 채널 값 정렬 — 1P → 2P → 3P → 그 외(이름순). 값은 배지 문자열 그대로 */
-const CH_ORDER = ['1P', '2P', '3P']
-function channelsOf(xs: string[]): string[] {
-  const rank = (c: string) => (CH_ORDER.includes(c) ? CH_ORDER.indexOf(c) : CH_ORDER.length)
-  return Array.from(new Set(xs.filter(Boolean))).sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+/** 14일 전환 미반영 — 쿠팡 광고 매출은 클릭 후 14일 전환 기준이라, 종료일 + 14일 전에 받은 파일은 최근 며칠 클릭분 매출이 덜 잡힘.
+ *  coupang-ad-weekly 스킬(weekly.ts lag)과 같은 공식: 받은 날 − 종료일 = d → 미반영 일수 = d ≥ 14 ? 0 : min(기간 일수, 14 − max(d, 0)) */
+export function attributionLag(endDate: string, periodDays: number, asof: string): { missingDays: number; asof: string } {
+  const d = Math.round((new Date(`${asof}T00:00:00Z`).getTime() - new Date(`${endDate}T00:00:00Z`).getTime()) / 86400000)
+  return { missingDays: d >= 14 ? 0 : Math.min(periodDays, 14 - Math.max(d, 0)), asof }
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -48,15 +49,28 @@ export function WarningLine({
   unlinked1P,
   unmatched,
   noBep,
+  lag,
 }: {
   unlinked1P: { optionId: string; name: string; adCostVat: number }[]
   unmatched: { optionId: string; name: string; adCostVat: number }[]
   noBep: CampaignDiag[]
+  /** 30일 파일 14일 전환 미반영 (missingDays > 0 일 때만 표시) */
+  lag?: { missingDays: number; asof: string } | null
 }) {
   const [open, setOpen] = useState(false)
   const cost = [...unlinked1P, ...unmatched].reduce((s, x) => s + x.adCostVat, 0)
-  if (!unlinked1P.length && !unmatched.length && !noBep.length) return null
+  const lagOn = !!lag && lag.missingDays > 0
+  if (!unlinked1P.length && !unmatched.length && !noBep.length && !lagOn) return null
+  const lagText = lagOn ? `최근 ${lag!.missingDays}일 클릭분 매출 미반영, 효율이 낮게 보일 수 있음 (받은 날 ${md(lag!.asof)})` : ''
+  if (!unlinked1P.length && !unmatched.length && !noBep.length) {
+    return (
+      <div style={{ margin: '8px 0', padding: '8px 12px', borderRadius: 6, border: '1px solid #FED7AA', background: '#FFF7ED', fontSize: 12.5, color: '#92400E' }}>
+        ⚠ {lagText}
+      </div>
+    )
+  }
   const parts = [
+    lagText,
     unlinked1P.length ? `1P 미연결 ${unlinked1P.length}개` : '',
     unmatched.length ? `마스터 미등록 ${unmatched.length}개 옵션` : '',
     noBep.length ? `BEP ROAS 없는 캠페인 ${noBep.length}개` : '',
@@ -218,7 +232,7 @@ function StatusBox({
   )
 }
 
-// ── 6) 요약 카드 4개 + 7) 캠페인별 할 일 ─────────────────────
+// ── 6) 요약 카드 3개 + 7) 캠페인별 할 일 ─────────────────────
 type Kind = 'bep' | 'move' | 'bid'
 const KIND_META: Record<Kind, { title: string; color: string }> = {
   bep: { title: 'BEP ROAS 바뀐 AI 캠페인', color: '#2563EB' },
@@ -240,25 +254,23 @@ export function reflectMemoText(a: CampaignActions): string {
 }
 
 export function WeeklyActionsSection({
-  actions: allActions,
+  actions,
   reflectState,
   onReflect,
   onSetApplied,
   noteOf,
 }: {
+  /** 채널 필터(page 의 한 줄 필터)를 적용한 할 일 */
   actions: CampaignActions[]
   reflectState: Map<string, ReflectState>
-  onReflect: (a: CampaignActions) => Promise<void>
-  onSetApplied: (key: string, value: number | null) => void
+  /** 관리자만 — 없으면 '쿠팡 반영 완료' 버튼을 그리지 않음 */
+  onReflect?: (a: CampaignActions) => Promise<void>
+  /** 관리자만 — 없으면 목표 ROAS 적용값 '수정' 을 그리지 않음 */
+  onSetApplied?: (key: string, value: number | null) => void
   noteOf?: (campaignId: string) => ProductMonthNote | null
 }) {
   const [kind, setKind] = useState<Kind | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
-  // 채널 필터 — 캠페인 카드 배지 값(campaign.channel, 캠페인 표 필터와 같은 isRetailRow 판정)을 모아 버튼 자동 생성
-  const [chan, setChan] = useState<string | null>(null)
-  const channels = useMemo(() => channelsOf(allActions.map((a) => a.campaign.channel)), [allActions])
-  const curChan = chan && channels.includes(chan) ? chan : null // 새 파일에 그 채널이 없으면 전체
-  const actions = useMemo(() => (curChan ? allActions.filter((a) => a.campaign.channel === curChan) : allActions), [allActions, curChan])
   const totals = useMemo(() => {
     return {
       bep: actions.filter((a) => a.bepChange).length,
@@ -310,20 +322,6 @@ export function WeeklyActionsSection({
               검색 키워드 · 클릭 20 이상만 판정 · 광고 손익 나쁜 순 · 캠페인 클릭 → 할 일 펼침
             </div>
           </div>
-          {channels.length > 0 && (
-            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              {[null, ...channels].map((ch) => {
-                const on = curChan === ch
-                return (
-                  <button key={ch ?? 'all'} onClick={() => setChan(ch)}
-                    style={{ padding: '4px 12px', borderRadius: 999, fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
-                      border: '1px solid ' + (on ? '#1F2937' : '#CBD5E1'), background: on ? '#1F2937' : '#fff', color: on ? '#fff' : '#334155' }}>
-                    {ch ?? '전체'}
-                  </button>
-                )
-              })}
-            </div>
-          )}
         </div>
         {shown.length === 0 ? (
           <div style={{ padding: 16, fontSize: 13, color: '#94A3B8' }}>이번 주 할 일이 없습니다.</div>
@@ -337,7 +335,7 @@ export function WeeklyActionsSection({
                 open={isOpen(a.campaign.campaignId)}
                 onToggle={() => toggle(a.campaign.campaignId)}
                 reflect={reflectState.get(a.campaign.campaignId) ?? null}
-                onReflect={() => onReflect(a)}
+                onReflect={onReflect ? () => onReflect(a) : undefined}
                 onSetApplied={onSetApplied}
                 note={noteOf?.(a.campaign.campaignId) ?? null}
               />
@@ -364,8 +362,8 @@ function CampaignActionRow({
   open: boolean
   onToggle: () => void
   reflect: ReflectState | null
-  onReflect: () => Promise<void>
-  onSetApplied: (key: string, value: number | null) => void
+  onReflect?: () => Promise<void>
+  onSetApplied?: (key: string, value: number | null) => void
   note: ProductMonthNote | null
 }) {
   const [msg, setMsg] = useState('')
@@ -425,7 +423,7 @@ function CampaignActionRow({
                 쿠팡 목표 ROAS{' '}
                 {a.bepChange.applied != null && <b>{a.bepChange.next > a.bepChange.applied ? '↑ ' : '↓ '}</b>}
                 <b>{a.bepChange.applied != null ? a.bepChange.applied : '미입력'}</b> → <b>{a.bepChange.next}%</b>
-                {a.targetKey && !edit && (
+                {a.targetKey && onSetApplied && !edit && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
@@ -437,7 +435,7 @@ function CampaignActionRow({
                     수정
                   </button>
                 )}
-                {a.targetKey && edit && (
+                {a.targetKey && onSetApplied && edit && (
                   <span style={{ marginLeft: 8 }}>
                     적용값{' '}
                     <input
@@ -509,6 +507,7 @@ function CampaignActionRow({
               <span style={{ fontSize: 11, color: '#94A3B8', width: '100%' }}>반영한 뒤 새로 생긴 할 일 — 위 목록에도 들어 있음</span>
             </div>
           )}
+          {onReflect && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingTop: 8 }}>
             <button
               className="aa-btn btn-sm"
@@ -528,8 +527,9 @@ function CampaignActionRow({
             >
               {done ? '반영됨' : busy ? '기록 중…' : reflect ? '새 할 일 반영 완료' : '쿠팡 반영 완료'}
             </button>
-            {msg && <span style={{ fontSize: 12, color: msg.startsWith('✓') ? '#059669' : '#DC2626' }}>{msg}</span>}
           </div>
+          )}
+          {msg && <div style={{ fontSize: 12, paddingTop: 6, color: msg.startsWith('✓') ? '#059669' : '#DC2626' }}>{msg}</div>}
         </div>
       )}
     </div>
