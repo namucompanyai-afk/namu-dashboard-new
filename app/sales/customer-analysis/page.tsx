@@ -18,13 +18,32 @@ import {
   useXAxisScale,
   usePlotArea,
 } from 'recharts';
-import {
-  listDemographicPeriods,
-  getDemographicsMulti,
-  getAllDemographics,
-  replaceDemographics,
-  type DemographicRow,
-} from '@/lib/supabase';
+import type { DemographicRow } from '@/lib/supabase';
+
+// 데이터는 서버 API(/api/customer-demographics, 로그인 쿠키 확인)를 거친다 — 브라우저가 Supabase 에 직접 붙지 않음.
+// email 인자는 기존 호출 모양 유지용 (서버는 로그인 쿠키로 판단).
+const DEMO_API = '/api/customer-demographics';
+async function demoFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { cache: 'no-store', ...init });
+  const j = await res.json().catch(() => null);
+  if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+  return j as T;
+}
+const listDemographicPeriods = async (_email: string) =>
+  (await demoFetch<{ periods: string[] }>(`${DEMO_API}?periods=1`)).periods;
+const getDemographicsMulti = async (_email: string, periods: string[]) => {
+  if (periods.length === 0) return [] as DemographicRow[];
+  const q = periods.map((p) => `period=${encodeURIComponent(p)}`).join('&');
+  return (await demoFetch<{ rows: DemographicRow[] }>(`${DEMO_API}?${q}`)).rows;
+};
+const getAllDemographics = async (_email: string) =>
+  (await demoFetch<{ rows: DemographicRow[] }>(`${DEMO_API}?all=1`)).rows;
+const replaceDemographics = async (_email: string, period: string, rows: Omit<DemographicRow, 'user_email' | 'period'>[]) =>
+  (await demoFetch<{ inserted: number }>(DEMO_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ period, rows }),
+  })).inserted;
 
 // 집계 입력용 최소 행
 interface Row { 카테고리소: string; 상품명: string; 성별: string; 나이: string; 결제수: number; 매출: number; 환불건수: number; }
