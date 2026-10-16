@@ -2,7 +2,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { DASHBOARD_PAGES, DEFAULT_PAGE_IDS, PAGE_BY_ID } from '@/lib/dashboard-pages';
-import { getUserDashboardPages, saveUserDashboardPages } from '@/lib/supabase';
+
+// 핀은 서버 API(/api/dashboard-pages, 로그인 쿠키의 이메일 기준)를 거친다 — 브라우저가 Supabase 에 직접 붙지 않음.
+// email 인자는 기존 호출 모양 유지용 (서버는 로그인 쿠키로 판단).
+async function pagesFetch(init?: RequestInit) {
+  const res = await fetch('/api/dashboard-pages', { cache: 'no-store', ...init });
+  const j = await res.json().catch(() => null);
+  if (!res.ok || !j?.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+  return j as { ok: true; pageIds?: string[] | null };
+}
+const getUserDashboardPages = async (_email: string) => (await pagesFetch()).pageIds ?? null;
+const saveUserDashboardPages = async (_email: string, pageIds: string[]) => {
+  await pagesFetch({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageIds }) });
+  return true;
+};
 
 function QuickLink({ title, href, emoji }: { title: string; href: string; emoji: string }) {
   return (
@@ -67,7 +80,7 @@ export default function HomePage() {
       setModalOpen(false);
     } catch (err) {
       console.error('대시보드 페이지 저장 실패:', err);
-      alert('저장 중 오류가 발생했습니다.');
+      alert(`저장 중 오류가 발생했습니다.${err instanceof Error && err.message ? `\n${err.message}` : ''}`);
     } finally {
       setSaving(false);
     }

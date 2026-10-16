@@ -1,17 +1,22 @@
+import 'server-only';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
+// 서버 전용 — 화면(클라이언트) 코드에서 import 하면 빌드가 실패한다.
+// 키는 서버 전용 키(SUPABASE_SERVICE_ROLE_KEY, NEXT_PUBLIC_ 아님)라 브라우저로 나가지 않는다.
+// 이 키는 행 보안(RLS)을 거치지 않으므로, 이 모듈을 쓰는 API 라우트는 반드시 requireRole 등으로 로그인을 확인한다.
+//
 // Lazy 초기화 — 모듈 import 시점에 즉시 createClient를 호출하면
 // 빌드의 page-data-collection 단계에서 환경변수 부재 시 throw 됨.
 // 함수 호출 시에만 클라이언트를 만들어 빌드 단계와 런타임을 분리.
 let _client: SupabaseClient | null = null;
 function getClient(): SupabaseClient {
   if (_client) return _client;
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
-    throw new Error('Supabase 환경변수 누락: NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+    throw new Error('Supabase 환경변수 누락: SUPABASE_URL(또는 NEXT_PUBLIC_SUPABASE_URL) / SUPABASE_SERVICE_ROLE_KEY');
   }
-  _client = createClient(url, key);
+  _client = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
   return _client;
 }
 
