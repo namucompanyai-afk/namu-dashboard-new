@@ -10,7 +10,6 @@ import type { AdAnalysisView, CampaignDiag } from '@/lib/coupang/adAnalysis'
 import {
   bidItemLabel,
   campaignStatusOf,
-  parseCampaignTargetKey,
   type ActionItem,
   type CampaignActions,
   type CampaignStatus,
@@ -537,15 +536,9 @@ function CampaignActionRow({
 }
 
 // ── 4) 지난주 대비 + 지난주 조정 결과 (주간 파일 기록 기준) ─────────
-type SnapTotals = { adCostVat: number; revenue: number; roasPct: number | null; bepPct: number | null; adProfit: number }
-export type WeeklySnapshot = {
-  startDate: string
-  endDate: string
-  savedAt?: string
-  fileName?: string
-  total: SnapTotals
-  campaigns: (SnapTotals & { campaignId: string; campaignName: string; key: string })[]
-}
+// 주간 기록 모양·만들기는 lib 로 옮김 (맥 자동 업로드 스크립트와 같은 함수) — 화면 import 는 그대로
+export { snapshotFromView, type WeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
+import type { WeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
 export type ReflectNote = {
   id: string
   ts: string
@@ -558,36 +551,6 @@ export type ReflectNote = {
 }
 /** 캠페인별 반영 상태 — newItems = 반영 뒤 새로 생긴 할 일, legacy = 기간·항목 없는 옛 기록(비교 불가) */
 export type ReflectState = { newItems: ActionItem[]; legacy: boolean }
-
-/** 주간 파일 분석 결과(기존 buildAdAnalysisView) → 주간 기록 — 값은 화면 계산 그대로 */
-export function snapshotFromView(
-  v: AdAnalysisView,
-  period: { startDate: string; endDate: string },
-  fileName: string,
-): WeeklySnapshot {
-  return {
-    startDate: period.startDate,
-    endDate: period.endDate,
-    fileName,
-    total: {
-      adCostVat: v.totalAdCostVat,
-      revenue: v.totalRevenue,
-      roasPct: v.avgRoasPct,
-      bepPct: v.avgBepPct,
-      adProfit: v.campaigns.reduce((s, c) => s + c.adProfit, 0),
-    },
-    campaigns: v.campaigns.map((c) => ({
-      campaignId: c.campaignId,
-      campaignName: c.campaignName,
-      key: parseCampaignTargetKey(c.campaignName)?.key ?? c.campaignName,
-      adCostVat: c.adCostVat,
-      revenue: c.revenue,
-      roasPct: c.roasPct,
-      bepPct: c.bepPct,
-      adProfit: c.adProfit,
-    })),
-  }
-}
 
 const NO_CHANGE_RATIO = 0.05 // 광고 손익 차이가 이번 주 광고비의 5% 이내면 변화 없음
 /** 'YYYY-MM-DD' + n일 */

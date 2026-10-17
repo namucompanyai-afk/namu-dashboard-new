@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  쿠팡 광고 보고서 자동 업로드 — ~/Downloads 가 바뀔 때마다 run.ts 실행 (처리한 파일은 다시 안 올림).
+  등록은 대표 확인 후에만:
+    cp scripts/ad-weekly-upload/com.namucompany.ad-weekly-upload.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.namucompany.ad-weekly-upload.plist
+  해제: launchctl unload ~/Library/LaunchAgents/com.namucompany.ad-weekly-upload.plist
+  로그: ~/.namu-ad-upload/upload.log (처리 한 줄씩) · ~/.namu-ad-upload/launchd.err (실행 오류)
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.ad-weekly-upload</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Documents/GitHub/namu-dashboard-new" &amp;&amp; npx --yes tsx scripts/ad-weekly-upload/run.ts</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>/Users/huguoh/Downloads</string>
+  </array>
+  <!-- 다운로드 직후 연달아 부르지 않게 최소 30초 간격 -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/huguoh/.namu-ad-upload/launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/huguoh/.namu-ad-upload/launchd.err</string>
+</dict>
+</plist>
