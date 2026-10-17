@@ -75,6 +75,7 @@ import {
   DEFAULT_BAG_FEE,
   DEFAULT_BOX_FEE,
   DEFAULT_GOMPYO_BOX_FEE,
+  DEFAULT_GOMPYO_PARCEL_FEE,
   DEFAULT_PARCEL_FEE,
   missingSettings,
   isParcelReviewTarget,
@@ -269,6 +270,7 @@ export default function CoupangB2BPage() {
     boxFee: null,
     gompyoBoxFee: null,
     parcelFee: null,
+    gompyoParcelFee: null,
   })
   const [sheetState, setSheetState] = useState<SheetState>('idle')
   const [sheetError, setSheetError] = useState('')
@@ -629,10 +631,17 @@ export default function CoupangB2BPage() {
     saveCheckedNos(next)
   }, [checkedNos, saveCheckedNos])
 
-  // 곰표분 — 전 발주 밀크런. PLT 는 봉 수 합(400봉/PLT), 운임은 BASIC×PLT vs 차량 구간 최저가
+  // 곰표분 — 전 발주 밀크런. 9박스 이하 밀크런택배(박스 × 입고택배 곰표), 초과는 트럭 — PLT 는 봉 수 합(360봉/PLT),
+  // 트럭 운임은 BASIC×PLT vs 차량 구간 최저가
   const gompyoShipments = useMemo(
-    () => buildGompyoShipments(gompyo, milkrunPrices, priceOrigin['곰표'] ?? ''),
-    [gompyo, milkrunPrices, priceOrigin],
+    () =>
+      buildGompyoShipments(
+        gompyo,
+        milkrunPrices,
+        priceOrigin['곰표'] ?? '',
+        parcelSettings.gompyoParcelFee ?? DEFAULT_GOMPYO_PARCEL_FEE,
+      ),
+    [gompyo, milkrunPrices, priceOrigin, parcelSettings],
   )
   const gompyoTotals = useMemo(() => sumGompyo(gompyoShipments), [gompyoShipments])
   // 위킵·곰표 전달 양식 — 진도팜과 같은 로켓 양식(택배/트럭 판정·주소 규칙은 buildRocketRows 그대로)
@@ -676,17 +685,19 @@ export default function CoupangB2BPage() {
         shipFrom: '곰표',
         boxes: s.boxes,
         kg: kgOfItems(s.items, gramByAlias),
-        plt: s.plt,
+        plt: s.parcel ? null : s.plt,
         vehicle: s.fare.method,
         fee: s.fare.fee,
-        verdict: 'milkrun',
+        verdict: s.parcel ? 'milkrunParcel' : 'milkrun',
         freight:
           s.fare.fee === null || s.units <= 0 ? null : (
             <div className="space-y-0.5">
               <div className="text-base font-bold text-gray-900 whitespace-nowrap">
-                트럭 {num(Math.round(s.fare.fee / s.units))}원/봉
+                {s.parcel ? '택배' : '트럭'} {num(Math.round(s.fare.fee / s.units))}원/봉
               </div>
-              <div className="text-xs text-gray-500 whitespace-nowrap">{num(s.units)}봉 · 택배 불가</div>
+              <div className="text-xs text-gray-500 whitespace-nowrap">
+                {num(s.units)}봉 · {s.parcel ? `${num(s.boxes)}박스 밀크런택배` : `${PALLET_BOX_LIMIT}박스 초과 → 트럭`}
+              </div>
             </div>
           ),
       })),
@@ -712,7 +723,10 @@ export default function CoupangB2BPage() {
   const gompyoSummary = useMemo(
     () =>
       shipFromMarginOf(gompyo, {
-        freightParts: [['밀크런', gompyoTotals.totalFee]],
+        freightParts: [
+          ['밀크런', gompyoTotals.truckFee],
+          ['밀크런택배', gompyoTotals.parcelFee],
+        ],
         boxFee: parcelSettings.gompyoBoxFee ?? DEFAULT_GOMPYO_BOX_FEE,
         bagFee: parcelSettings.bagFee ?? DEFAULT_BAG_FEE,
         unitCostByAlias,
@@ -744,13 +758,17 @@ export default function CoupangB2BPage() {
       })
     }
     for (const s of gompyoShipments) {
+      if (s.parcel) {
+        centers.push({ center: s.center, shipFrom: '곰표', boxes: s.boxes, truck: false, plt: null, loadPct: null, transport: '밀크런택배' })
+        continue
+      }
       centers.push({
         center: s.center,
         shipFrom: '곰표',
         boxes: s.boxes,
         truck: true,
         plt: s.plt,
-        // 곰표 적재율 = 봉수 ÷ (PLT × 400봉)
+        // 곰표 적재율 = 봉수 ÷ (PLT × 360봉)
         loadPct: s.plt > 0 ? Math.round((s.units / (s.plt * GOMPYO_UNITS_PER_PLT)) * 100) : null,
         transport: '밀크런',
       })
@@ -1786,7 +1804,7 @@ export default function CoupangB2BPage() {
             </div>
           )}
 
-          {/* 곰표분 — 전 발주 밀크런 트럭(팔레트), 택배 없음 */}
+          {/* 곰표분 — 전 발주 밀크런: 9박스 이하 밀크런택배, 초과 밀크런 트럭(팔레트) */}
           {gompyo.length > 0 && (
             <div className="space-y-4">
               <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 flex flex-wrap items-center justify-between gap-3">
@@ -1810,8 +1828,9 @@ export default function CoupangB2BPage() {
                   <>
                     <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
                       <span className="text-gray-600">
-                        밀크런 {gompyoShipments.length}건 · 총 {num(gompyoTotals.totalPlt)} PLT (
-                        {num(gompyoTotals.totalUnits)}봉)
+                        밀크런 {gompyoShipments.length}건
+                        {gompyoTotals.parcelCount > 0 && ` (밀크런택배 ${gompyoTotals.parcelCount}건)`} · 총{' '}
+                        {num(gompyoTotals.totalPlt)} PLT ({num(gompyoTotals.totalUnits)}봉)
                       </span>
                       <span className="text-right">
                         <ShipFromSummaryView
@@ -1835,7 +1854,11 @@ export default function CoupangB2BPage() {
                             · 1PLT = {GOMPYO_UNITS_PER_PLT}봉({GOMPYO_BOXES_PER_PLT}박스) 올림 · 같은 센터·같은
                             입고예정일 발주는 봉 수를 합산해 한 건으로 묶는다
                           </p>
-                          <p>· 곰표분은 전 발주 밀크런 — 택배 불가 — 밀크런 트럭(팔레트)만</p>
+                          <p>
+                            · 곰표분은 전 발주 밀크런 — 같은 센터·입고예정일 박스 합 {PALLET_BOX_LIMIT}박스 이하는
+                            밀크런택배(박스 450×280×240mm · 9개입 18kg, 1호 규격), 초과는 밀크런 트럭(팔레트)
+                          </p>
+                          <p>· 밀크런택배 운임 = 박스 수 × 설정 탭 &lsquo;입고택배 곰표&rsquo; (부가세 포함)</p>
                           <p>
                             · 운임은 참고용 — 매 PLT 마다 BASIC(1pt 당)×PLT 와 차량 구간 요금을 계산해 싼 쪽을
                             적용한다 (적용 방식은 차량 칸에 표기)
@@ -2068,10 +2091,10 @@ type FreightRow = {
   shipFrom: string
   boxes: number
   kg: string // 제품 중량 표기 ('1,332kg')
-  plt: number
+  plt: number | null // null = 팔레트 없음(밀크런택배)
   vehicle: string
   fee: number | null | undefined | 'merged' // undefined = 운임 대상 아님(택배), 'merged' = 위 행에 합산
-  verdict: 'pallet' | 'parcel' | 'milkrun'
+  verdict: 'pallet' | 'parcel' | 'milkrun' | 'milkrunParcel'
   freight: React.ReactNode | 'merged' | null
 }
 
@@ -2114,7 +2137,9 @@ function FreightRowsTable({ title, rows, footer }: { title: string; rows: Freigh
                 <td className="px-3 py-2">{r.shipFrom}</td>
                 <td className="px-3 py-2 text-right font-semibold text-gray-900">{num(r.boxes)}</td>
                 <td className="px-3 py-2 text-right text-gray-700">{r.kg}</td>
-                <td className="px-3 py-2 text-right font-semibold text-gray-900">{r.plt}</td>
+                <td className="px-3 py-2 text-right font-semibold text-gray-900">
+                  {r.plt === null ? <span className="font-normal text-gray-400">—</span> : r.plt}
+                </td>
                 <td className="px-3 py-2 text-gray-600">{r.vehicle || <span className="text-gray-400">—</span>}</td>
                 <td className="px-3 py-2 text-right font-semibold text-gray-900">
                   {r.fee === undefined ? (
@@ -2128,7 +2153,11 @@ function FreightRowsTable({ title, rows, footer }: { title: string; rows: Freigh
                   )}
                 </td>
                 <td className="px-3 py-2">
-                  {r.verdict === 'milkrun' ? (
+                  {r.verdict === 'milkrunParcel' ? (
+                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-xs font-semibold">
+                      밀크런택배
+                    </span>
+                  ) : r.verdict === 'milkrun' ? (
                     <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-xs font-semibold">
                       밀크런 (팔레트)
                     </span>

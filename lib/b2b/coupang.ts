@@ -427,11 +427,11 @@ export function groupByCenterDue(items: RoutedItem[]): ShipGroup[] {
 }
 
 // ── 곰표 출고 기준 ───────────────────────────────────────────────
-/** 곰표는 봉 단위로 팔레트를 센다 — 1PLT = 400봉 = 40박스 */
-export const GOMPYO_UNITS_PER_PLT = 400
+/** 곰표는 봉 단위로 팔레트를 센다 — 1PLT = 40박스 × 9개입 = 360봉 (2026-10-16 입수 10→9) */
+export const GOMPYO_UNITS_PER_PLT = 360
 export const GOMPYO_BOXES_PER_PLT = 40
 
-/** 곰표 발주 봉 수 → PLT (400봉/PLT 올림) */
+/** 곰표 발주 봉 수 → PLT (360봉/PLT 올림) */
 export const gompyoPltOf = (units: number): number =>
   Math.ceil(Math.max(0, units) / GOMPYO_UNITS_PER_PLT)
 

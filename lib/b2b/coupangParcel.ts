@@ -11,7 +11,7 @@
  *
  * 기준정보 (나무_마스터, /api/b2b/sheets 가 내려줌. 금액은 부가세 포함):
  *   1봉 원가 = 단가DB '소포장 공급가' · 봉투 여부 = 단가DB '봉투'(Y만 봉투비)
- *   설정 탭 J~M '항목 | 값' 표 — 봉투 단가 · 입고박스 진도팜·곰표 · 입고택배 진도팜 (없으면 아래 기본값 + 화면 경고)
+ *   설정 탭 J~M '항목 | 값' 표 — 봉투 단가 · 입고박스 진도팜·곰표 · 입고택배 진도팜·곰표 (없으면 아래 기본값 + 화면 경고)
  */
 import { norm, resolveCols, toNum } from './kurly'
 import { PALLET_BOX_LIMIT, type RoutedItem, type ShipFrom, type ShipGroup } from './coupang'
@@ -22,7 +22,8 @@ export const PARCEL_REVIEW_MAX_BOXES = 20
 export const PARCEL_KEEP_BOXES = PALLET_BOX_LIMIT // 남길 박스 수 (택배 한도)
 export const DEFAULT_BAG_FEE = 150 // 봉투 1봉
 export const DEFAULT_BOX_FEE = 1495 // 진도팜 쿠팡 입고 박스 1개 (입수 18·16·9 공통) — 설정 탭 못 읽을 때만
-export const DEFAULT_GOMPYO_BOX_FEE = 1000 // 곰표 쿠팡 입고 10개입 박스 1개 — 설정 탭 못 읽을 때만
+export const DEFAULT_GOMPYO_BOX_FEE = 1000 // 곰표 쿠팡 입고 9개입 박스 1개 — 설정 탭 못 읽을 때만
+export const DEFAULT_GOMPYO_PARCEL_FEE = 2200 // 곰표 밀크런택배 1박스 — 1호(세변합 1,000mm 이하) 2,000 + 부가세. 설정 탭 못 읽을 때만
 export const DEFAULT_PARCEL_FEE = 4000 // 택배 1박스 (무게·크기 구분 없음)
 /** PLT 1장 최대 박스 — 손익분기 차량의 최대 적재 박스 = 최대 PLT × 이 값 */
 export const BOXES_PER_PLT: Partial<Record<ShipFrom, number>> = { 진도팜: 30, 곰표: 40 }
@@ -64,7 +65,8 @@ export type ParcelSettings = {
   bagFee: number | null
   boxFee: number | null // 입고박스 진도팜
   gompyoBoxFee: number | null // 입고박스 곰표
-  parcelFee: number | null // 입고택배 진도팜 (택배 판정은 진도팜만)
+  parcelFee: number | null // 입고택배 진도팜
+  gompyoParcelFee: number | null // 입고택배 곰표 (밀크런택배 박스당)
 }
 
 export function parseParcelSettings(rows: unknown[][]): ParcelSettings {
@@ -73,6 +75,7 @@ export function parseParcelSettings(rows: unknown[][]): ParcelSettings {
     boxFee: settingValue(rows, SETTING_BOX_FEE_PREFIX + '진도팜'),
     gompyoBoxFee: settingValue(rows, SETTING_BOX_FEE_PREFIX + '곰표'),
     parcelFee: settingValue(rows, SETTING_PARCEL_FEE_PREFIX + '진도팜'),
+    gompyoParcelFee: settingValue(rows, SETTING_PARCEL_FEE_PREFIX + '곰표'),
   }
 }
 
@@ -82,6 +85,7 @@ export const missingSettings = (s: ParcelSettings): string[] =>
     s.boxFee === null ? `${SETTING_BOX_FEE_PREFIX}진도팜` : '',
     s.gompyoBoxFee === null ? `${SETTING_BOX_FEE_PREFIX}곰표` : '',
     s.parcelFee === null ? `${SETTING_PARCEL_FEE_PREFIX}진도팜` : '',
+    s.gompyoParcelFee === null ? `${SETTING_PARCEL_FEE_PREFIX}곰표` : '',
   ].filter(Boolean)
 
 export type ParcelLine = {

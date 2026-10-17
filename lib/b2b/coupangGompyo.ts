@@ -1,11 +1,14 @@
 /**
  * 쿠팡 곰표 출고분 — 팔레트 산정 + 밀크런 운임 최저가 선택 + 상차 안내문.
  *
- * 곰표는 전 발주 밀크런이라 택배/트럭 판정이 없고, 팔레트는 박스가 아니라
- * **봉 수**로 센다(1PLT = 400봉 = 40박스). 같은 센터·같은 입고예정일 발주는
- * 합산해 한 건으로 묶는다.
+ * 곰표는 전 발주 밀크런. 같은 센터·같은 입고예정일 발주는 합산해 한 건으로 묶고,
+ * 묶음 박스 합이 9박스(PALLET_BOX_LIMIT) 이하면 **밀크런택배**(박스 단위, 팔레트 없음),
+ * 넘거나 박스입수 미등록 행이 섞이면 밀크런 트럭(팔레트) (2026-10-16 대표 결정 — 이전엔 트럭만).
+ * 곰표 박스 450×280×240mm(세변합 970) · 9개입 18kg → 밀크런택배 1호 규격(1,000mm·20kg) 안.
+ * 트럭분 팔레트는 박스가 아니라 **봉 수**로 센다(1PLT = 360봉 = 40박스 × 9개입).
  *
- * 운임은 가격표의 두 방식을 매번 계산해 싼 쪽을 쓴다 — 고정 경계 없이
+ * 밀크런택배 운임 = 박스 수 × 입고택배 곰표 단가(설정 탭, 부가세 포함).
+ * 트럭 운임은 가격표의 두 방식을 매번 계산해 싼 쪽을 쓴다 — 고정 경계 없이
  * 시트 값이 바뀌면 선택도 따라 바뀐다.
  *   ① BASIC(1pt 당) × PLT
  *   ② 해당 PLT 를 커버하는 차량 구간 요금 (구간은 가격표 라벨에서 읽는다)
@@ -13,7 +16,7 @@
  * 곰표는 엑셀 없이 카톡 전달 멘트로만 넘긴다(buildGompyoMessage).
  * 파싱·출고지 분기·진도팜 로켓 양식·위킵 라벨 로직은 소비만 하고 건드리지 않는다.
  */
-import { findCenter, formatKrPhone, gompyoPltOf, type CenterAddress, type RoutedItem } from './coupang'
+import { findCenter, formatKrPhone, gompyoPltOf, PALLET_BOX_LIMIT, type CenterAddress, type RoutedItem } from './coupang'
 import {
   chooseFare,
   type CoupangMilkrunRow,
@@ -31,7 +34,9 @@ export type GompyoShipment = {
   items: RoutedItem[]
   units: number // 납품가능수량 합 (봉)
   boxes: number // 박스 합 (마스터 미등록 행은 0)
-  plt: number
+  boxesKnown: boolean // 박스입수 미등록 행(boxes=null)이 섞이면 false → 트럭으로 본다
+  parcel: boolean // 밀크런택배 (박스 합 9 이하, 박스 수를 다 알 때)
+  plt: number // 트럭분만. 밀크런택배는 0
   fare: FareChoice
 }
 
@@ -44,13 +49,15 @@ const EMPTY_FARE: FareChoice = {
 }
 
 /**
- * 곰표 출고 행 → 센터·입고예정일 묶음. PLT 는 봉 수 합에서 올림한다.
- * priceShipFrom 이 비면(상품마스터 '요금표 출고지' 미입력) 운임은 전부 '요금 미등록'.
+ * 곰표 출고 행 → 센터·입고예정일 묶음. 9박스 이하는 밀크런택배(박스 × parcelFee),
+ * 나머지는 트럭 — PLT 는 봉 수 합에서 올림한다.
+ * priceShipFrom 이 비면(상품마스터 '요금표 출고지' 미입력) 트럭 운임은 '요금 미등록'.
  */
 export function buildGompyoShipments(
   items: RoutedItem[],
   prices: CoupangMilkrunRow[],
   priceShipFrom: string,
+  parcelFee: number,
 ): GompyoShipment[] {
   const map = new Map<string, GompyoShipment>()
   for (const it of items) {
@@ -65,6 +72,8 @@ export function buildGompyoShipments(
         items: [],
         units: 0,
         boxes: 0,
+        boxesKnown: true,
+        parcel: false,
         plt: 0,
         fare: EMPTY_FARE,
       }
@@ -74,9 +83,16 @@ export function buildGompyoShipments(
     if (!s.poNumbers.includes(it.poNumber)) s.poNumbers.push(it.poNumber)
     s.units += it.confirmQty
     s.boxes += it.boxes ?? 0
+    if (it.boxes === null && it.confirmQty > 0) s.boxesKnown = false
   }
   const list = [...map.values()]
   for (const s of list) {
+    s.parcel = s.boxesKnown && s.boxes > 0 && s.boxes <= PALLET_BOX_LIMIT
+    if (s.parcel) {
+      s.plt = 0
+      s.fare = { ...EMPTY_FARE, fee: s.boxes * parcelFee, method: '밀크런택배' }
+      continue
+    }
     s.plt = gompyoPltOf(s.units)
     s.fare = priceShipFrom
       ? chooseFare(prices, priceShipFrom, s.center, s.plt)
@@ -87,13 +103,27 @@ export function buildGompyoShipments(
   )
 }
 
-export type GompyoTotals = { totalPlt: number; totalUnits: number; totalFee: number; unpriced: number }
+export type GompyoTotals = {
+  totalPlt: number
+  totalUnits: number
+  totalFee: number
+  truckFee: number // 밀크런 트럭분 운임 합
+  parcelFee: number // 밀크런택배분 운임 합
+  parcelCount: number // 밀크런택배 건수
+  unpriced: number
+}
 
 export function sumGompyo(shipments: GompyoShipment[]): GompyoTotals {
+  const fee = (list: GompyoShipment[]) => list.reduce((a, s) => a + (s.fare.fee ?? 0), 0)
+  const parcel = shipments.filter((s) => s.parcel)
+  const truck = shipments.filter((s) => !s.parcel)
   return {
     totalPlt: shipments.reduce((a, s) => a + s.plt, 0),
     totalUnits: shipments.reduce((a, s) => a + s.units, 0),
-    totalFee: shipments.reduce((a, s) => a + (s.fare.fee ?? 0), 0),
+    totalFee: fee(shipments),
+    truckFee: fee(truck),
+    parcelFee: fee(parcel),
+    parcelCount: parcel.length,
     unpriced: shipments.filter((s) => s.fare.fee === null).length,
   }
 }
@@ -146,7 +176,9 @@ export function buildGompyoMessage(
         `${load} ${names} 상차건`,
         `상차일 ${load} ${weekdayOf(o.loadDate)}요일`,
         `제조일자 ${mdOf(s.items.find((it) => it.madeDate)?.madeDate || o.madeDate)}`,
-        `수량 ${s.plt}P /  ${s.units}봉 ${s.boxes}박스 / 총 ${totalPlt}P`,
+        s.parcel
+          ? `수량 밀크런택배 ${s.boxes}박스 / ${s.units}봉`
+          : `수량 ${s.plt}P /  ${s.units}봉 ${s.boxes}박스 / 총 ${totalPlt}P`,
         `하차지 : ${s.center}`,
         '',
         `주소   ${address}`,
