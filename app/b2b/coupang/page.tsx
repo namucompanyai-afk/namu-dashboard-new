@@ -70,6 +70,7 @@ import { downloadCoupangPalletPdf, LOW_BOX_PLT_WARN } from '@/lib/b2b/coupangPal
 import { useCLevel } from '@/lib/useCLevel'
 import { buildCoupangSlackReport, slackReportKey, vehicleKgOf, type SlackCenterRow } from '@/lib/b2b/coupangSlack'
 import { buildGompyoMessage, buildGompyoShipments, sumGompyo } from '@/lib/b2b/coupangGompyo'
+import { buildLeadAlerts, mdOf, type LeadAlert } from '@/lib/b2b/coupangLeadTime'
 import {
   compareFreight,
   DEFAULT_BAG_FEE,
@@ -401,6 +402,13 @@ export default function CoupangB2BPage() {
   )
   // 미납품 — 확정 발주서 안의 납품가능 0 행. 차단하지 않고 표기만 한다
   const notDelivered = useMemo(() => routed.filter((r) => r.notDelivered), [routed])
+  // 입고예정일 촉박 — 발주서 받은 날 기준 여유 일수 (경고만, 수량·입고예정일은 안 바꿈)
+  const lead = useMemo(() => buildLeadAlerts(routed), [routed])
+  const leadByPo = useMemo(() => {
+    const m: Record<string, LeadAlert> = {}
+    for (const a of lead.alerts) if (!m[a.poNumber] || a.level === 'urgent') m[a.poNumber] = a
+    return m
+  }, [lead])
   const fileStats = useMemo(() => summarizeCoupangFiles(items), [items])
 
   // 팔레트 필요 안내 — 센터 × 입고예정일 × 출고지 박스 합계 기준
@@ -1087,6 +1095,7 @@ export default function CoupangB2BPage() {
           컬럼을 추가하고 진도팜 행 <b>전남진도_2</b> · 위킵 행 <b>화성시_1</b> · 곰표 행 <b>시흥시_1</b> 을 채워 주세요.
         </div>
       )}
+      {lead.alerts.length > 0 && <LeadAlertBox alerts={lead.alerts} />}
       {notDelivered.length > 0 && (
         <div className="rounded-lg border border-gray-200 bg-gray-50 text-gray-600 p-3 text-sm">
           미납품 {notDelivered.length}건 — 확정 발주서의 납품가능 0 품목입니다. 로켓 양식·박스·PLT·세일즈
@@ -1270,6 +1279,7 @@ export default function CoupangB2BPage() {
                                 {g.poNumber.split('/').map((po) => (
                                   <span key={po} className="block">
                                     {po}
+                                    <LeadBadge alert={leadByPo[po]} />
                                   </span>
                                 ))}
                               </span>
@@ -1788,7 +1798,7 @@ export default function CoupangB2BPage() {
                   </button>
                 </div>
               </div>
-              <FreightRowsTable title="위킵분 운임" rows={wikeepFreightRows} />
+              <FreightRowsTable title="위킵분 운임" rows={wikeepFreightRows} leadByPo={leadByPo} />
               <RocketTable
                 title={ROCKET_SHEETS['택배'].title}
                 note={`${PALLET_BOX_LIMIT}박스 이하 발주 · 주소·전화는 센터 주소록 · 배송메세지1 = 발주번호 · 송장은 공란`}
@@ -1824,6 +1834,7 @@ export default function CoupangB2BPage() {
               <FreightRowsTable
                 title="곰표분 운임"
                 rows={gompyoFreightRows}
+                leadByPo={leadByPo}
                 footer={
                   <>
                     <div className="px-4 py-2 border-t border-gray-200 bg-gray-50 flex items-baseline justify-between text-sm">
@@ -2082,6 +2093,56 @@ function DatePick({
   )
 }
 
+/** 입고예정일 촉박 요약 — 화면 상단. 촉박(D+1 이하) 먼저, 같은 단계면 금액 큰 순 */
+function LeadAlertBox({ alerts }: { alerts: LeadAlert[] }) {
+  const urgent = alerts.filter((a) => a.level === 'urgent').length
+  const caution = alerts.length - urgent
+  const byUpload = alerts.some((a) => a.basis === 'upload')
+  return (
+    <div
+      className={
+        'rounded-lg border-2 p-3 text-sm ' +
+        (urgent > 0 ? 'border-red-400 bg-red-50 text-red-800' : 'border-amber-300 bg-amber-50 text-amber-800')
+      }
+    >
+      <div className="font-bold">
+        ⚠️ 입고예정일 촉박
+        {urgent > 0 && ` ${urgent}건`}
+        {caution > 0 && ` · 주의 ${caution}건`} — 서플라이어허브 발주 확정에서 입고예정일 변경 필요
+      </div>
+      <ul className="mt-1.5 space-y-0.5">
+        {alerts.map((a) => (
+          <li key={`${a.poNumber}|${a.shipFrom}`} className={a.level === 'urgent' ? 'font-semibold' : ''}>
+            {a.level === 'urgent' ? '촉박' : '주의'} · {a.poNumber} {a.center} ({a.shipFrom}) — 발주 {mdOf(a.receivedDate)} → 입고{' '}
+            {mdOf(a.dueDate)} (D+{a.days}) · {a.boxes === null ? '박스 —' : `${num(a.boxes)}박스`} · {num(a.amount)}원 ·{' '}
+            {a.products.join(', ')}
+          </li>
+        ))}
+      </ul>
+      <div className="mt-1.5 text-xs opacity-80">
+        기준: 진도팜 D+1 이하 촉박 · D+2 주의 / 위킵·곰표 D+1 이하 촉박 · 발주서에 발주 일시 칸이 없어{' '}
+        {byUpload ? '발주서 받은 시각(파일 생성 시각, 없으면 업로드 시각)' : '발주서 받은 시각(파일 생성 시각)'} 기준 · 금액 = 수량 × 매입가
+      </div>
+    </div>
+  )
+}
+
+/** 발주번호 옆 촉박 표시 (해당 발주 행) */
+function LeadBadge({ alert }: { alert?: LeadAlert }) {
+  if (!alert) return null
+  return (
+    <span
+      className={
+        'ml-1 px-1 rounded text-[11px] font-bold ' +
+        (alert.level === 'urgent' ? 'bg-red-600 text-white' : 'bg-amber-200 text-amber-900')
+      }
+      title={`발주 ${mdOf(alert.receivedDate)} → 입고 ${mdOf(alert.dueDate)} — 서플라이어허브에서 입고예정일 변경 필요`}
+    >
+      {alert.level === 'urgent' ? '촉박' : '주의'} D+{alert.days}
+    </span>
+  )
+}
+
 /** 출고지 섹션 운임 표 한 줄 — 팔레트 필요 안내와 같은 컬럼, 값은 계산 결과를 받아 표시만 */
 type FreightRow = {
   key: string
@@ -2098,7 +2159,17 @@ type FreightRow = {
   freight: React.ReactNode | 'merged' | null
 }
 
-function FreightRowsTable({ title, rows, footer }: { title: string; rows: FreightRow[]; footer?: React.ReactNode }) {
+function FreightRowsTable({
+  title,
+  rows,
+  footer,
+  leadByPo = {},
+}: {
+  title: string
+  rows: FreightRow[]
+  footer?: React.ReactNode
+  leadByPo?: Record<string, LeadAlert>
+}) {
   return (
     <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50">
@@ -2129,6 +2200,7 @@ function FreightRowsTable({ title, rows, footer }: { title: string; rows: Freigh
                   {r.poNumber.split('/').map((po) => (
                     <span key={po} className="block">
                       {po}
+                      <LeadBadge alert={leadByPo[po]} />
                     </span>
                   ))}
                 </td>

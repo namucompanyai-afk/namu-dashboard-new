@@ -36,6 +36,10 @@ export type CoupangOrderItem = {
   lotKey: LotMgmt // 발주서 관리 구분('제조일자관리'/'소비기한관리') — 진도팜 자투리 판정용 (못 읽으면 '')
   madeDate: string // 확정 발주서 '제조(수입)일자' (YYYY-MM-DD, 없으면 '') — 있으면 화면 선택값보다 우선
   sourceFile: string
+  // 발주서를 받은 시각 (ISO) — 발주서에 '발주 일시' 칸이 없어 xlsx 생성 시각(SUPPLIER HUB 다운로드 시각)을 쓰고,
+  // 없으면 업로드 시각. 입고예정일 촉박 경고(coupangLeadTime)용
+  receivedAt: string
+  receivedBasis: 'file' | 'upload'
 }
 
 const cellAt = (rows: unknown[][], r: number, c: number): unknown => rows[r]?.[c]
@@ -192,6 +196,8 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       lotKey: lotKeyOf(cellAt(rows, r, lotCol), cellAt(rows, r + 1, lotCol)),
       madeDate: madeCol >= 0 ? madeDateOf(cellAt(rows, r, madeCol)) : '',
       sourceFile,
+      receivedAt: '',
+      receivedBasis: 'upload',
     })
   }
 

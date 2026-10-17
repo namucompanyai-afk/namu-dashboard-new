@@ -19,7 +19,12 @@ export function parseCoupangWorkbook(wb: XLSX.WorkBook, fileName = ''): CoupangO
   repairRef(ws) // 컬리 파일과 같은 !ref 함정 대비(있어도 없어도 안전)
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: true, defval: '' })
   if (!isCoupangRows(rows)) return []
-  return parseCoupangRows(rows, fileName)
+  // 발주서 받은 시각 = xlsx 생성 시각 (SUPPLIER HUB 가 다운로드 때 만든다). 없으면 parseCoupangFiles 가 업로드 시각으로 채움
+  const created = wb.Props?.CreatedDate
+  const receivedAt = created instanceof Date && !Number.isNaN(created.getTime()) ? created.toISOString() : ''
+  return parseCoupangRows(rows, fileName).map((it) =>
+    receivedAt ? { ...it, receivedAt, receivedBasis: 'file' as const } : it,
+  )
 }
 
 const readWorkbook = (buf: ArrayBuffer): XLSX.WorkBook => XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true })
@@ -44,6 +49,7 @@ async function expandFiles(files: File[]): Promise<{ name: string; buf: ArrayBuf
 export async function parseCoupangFiles(files: File[]): Promise<CoupangParseResult> {
   const byPo = new Map<string, CoupangOrderItem[]>()
   const skipped: string[] = []
+  const uploadedAt = new Date().toISOString()
   for (const f of await expandFiles(files)) {
     let parsed: CoupangOrderItem[]
     try {
@@ -52,6 +58,7 @@ export async function parseCoupangFiles(files: File[]): Promise<CoupangParseResu
       throw new Error(`${f.name}: ${err instanceof Error ? err.message : String(err)}`)
     }
     if (parsed.length === 0) { skipped.push(f.zipName ? `${f.zipName} › ${f.name}` : f.name); continue }
+    for (const it of parsed) if (!it.receivedAt) it.receivedAt = uploadedAt
     // zip 안 파일명은 옛 한글 인코딩이라 깨짐 — 화면 표시용 파일명을 'zip 이름 › 발주번호 · 센터 · 입고예정일' 로 (디코딩 시도 안 함)
     if (f.zipName) for (const it of parsed) it.sourceFile = `${f.zipName} › 발주번호 ${it.poNumber} · ${it.center} · ${it.dueDate}`
     const groups = new Map<string, CoupangOrderItem[]>()
