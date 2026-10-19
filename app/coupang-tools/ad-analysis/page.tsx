@@ -26,7 +26,7 @@ import { findMarginMissing } from '@/lib/coupang/marginMissing'
 import { buildWeeks13, type BackfillRow, type SalesRow, type WeeklyComment } from '@/lib/coupang/adWeekly13'
 import type { SnapshotDiff } from '@/lib/coupang/weeklySnapshots'
 import { WeeklyOverview } from './WeeklyOverview'
-import { HistoryNotesSection } from './HistoryNotes'
+import { HistoryNotesSection, type MemoPrefill } from './HistoryNotes'
 import { AiSection, CampaignSection, ManualSection, OptionInlineRow, Style, computeOptions, fmtMan, fmtNum } from './CampaignDetail'
 import { CampaignSummary, CampaignTable, LastWeekChips, MobileNote, TodoBlock, WEEKLY_BLOCKS_CSS, type TodoRow } from './WeeklyBlocks'
 import { buildTodoPlans, followupLastWeek, judgeCampaigns, judgeInputFromSnapshot, prevWeekOf, snapFind, summarizeActions, type JudgeInput, type TodoPlan } from '@/lib/coupang/weeklyJudge'
@@ -811,6 +811,17 @@ export default function AdAnalysisPage() {
       ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selected} onClearOption={clear} onSelectOption={select} onClose={close} />
       : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selected} onClearOption={clear} onSelectOption={select} onClose={close} targets={isAdmin ? targets : undefined} onTargetChange={isAdmin ? setTargetForKey : undefined} />
   }
+  // 운영 메모 칸 — 관리자 라이브 모드에선 파일 유무와 상관없이 전체 캠페인 표 아래 항상 (2026-10-19 대표 "메모가 어딨어")
+  const [memoPrefill, setMemoPrefill] = useState<MemoPrefill | null>(null)
+  const memoCampaignNames = useMemo(() => judged.map((j) => j.campaignName).sort(), [judged])
+  const notesNode = isAdmin ? (
+    <HistoryNotesSection
+      reloadKey={notesReload}
+      campaignNames={memoCampaignNames}
+      prefill={memoPrefill}
+      onSaved={(item) => setNotes((prev) => [...prev, item as ReflectNote])} // 저장 즉시 판정·태그 갱신 (OFF 면 그 캠페인 태그 OFF)
+    />
+  ) : null
   // 새 전체 캠페인 표 — 여러 행 동시 펼침 (정렬·필터 바꿔도 유지), 행마다 옵션 선택 따로
   const [openCampIds, setOpenCampIds] = useState<Set<string>>(new Set())
   const toggleCampId = (id: string) => setOpenCampIds((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
@@ -839,6 +850,10 @@ export default function AdAnalysisPage() {
           has30={has30}
           reflected={sessionReflected.get(campaignId) ?? null}
           onReflect={isAdmin ? () => reflectTodo({ j, plan: todoPlans?.get(j.campaignName) ?? null, done: null }) : undefined}
+          onAddMemo={isAdmin ? () => {
+            setMemoPrefill({ campaignName: j.campaignName, nonce: Date.now() })
+            setTimeout(() => document.getElementById('aa-history-notes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+          } : undefined}
         />
         {c30 && (
           <>
@@ -877,6 +892,7 @@ export default function AdAnalysisPage() {
         renderDetail={renderRowDetail}
         has30={has30}
       />
+      {notesNode}
     </div>
   ) : null
 
@@ -954,7 +970,8 @@ export default function AdAnalysisPage() {
         />
       )}
       {/* 9) 운영 메모 (접힌 상태, 관리자만) */}
-      {isAdmin && <HistoryNotesSection reloadKey={notesReload} />}
+      {/* 관리자 라이브 모드는 위 3블록 아래(notesNode)에 항상 있음 — 월 저장본 탭만 여기 */}
+      {isAdmin && !adminNew && notesNode}
     </>
   )
 

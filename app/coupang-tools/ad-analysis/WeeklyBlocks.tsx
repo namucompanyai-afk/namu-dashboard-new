@@ -298,7 +298,7 @@ export function decisionText(j: CampaignJudgement): string {
     default: return 'BEP 없음 — 전환 옵션이 마진계산에 없거나 판매 0 (클릭 모름) · 확인 필요'
   }
 }
-export function CampaignSummary({ j, prevC, curC, notes, has30, reflected, onReflect }: {
+export function CampaignSummary({ j, prevC, curC, notes, has30, reflected, onReflect, onAddMemo }: {
   j: CampaignJudgement
   prevC: SnapCamp | null
   curC: SnapCamp | null
@@ -307,6 +307,8 @@ export function CampaignSummary({ j, prevC, curC, notes, has30, reflected, onRef
   /** 이 세션에서 반영 완료 누른 시각 */
   reflected: string | null
   onReflect?: () => Promise<void>
+  /** '메모 추가' — 아래 운영 메모 칸으로 가서 캠페인 이름 자동 채움 */
+  onAddMemo?: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
@@ -343,7 +345,9 @@ export function CampaignSummary({ j, prevC, curC, notes, has30, reflected, onRef
           )}
         </div>
         <div>
-          <div className="adw-sum-h">운영 메모 <span className="muted small">{mine.length}건</span></div>
+          <div className="adw-sum-h">운영 메모 <span className="muted small">{mine.length}건</span>
+            {onAddMemo && <button type="button" className="adw-btn" style={{ minHeight: 24, padding: '0 8px', fontSize: 11, marginLeft: 'auto' }} onClick={(e) => { e.stopPropagation(); onAddMemo() }}>메모 추가</button>}
+          </div>
           {mine.length === 0 ? <div className="muted small">이 캠페인 메모 없음</div> : (
             <ul className="adw-notes">
               {mine.slice(0, 8).map((n) => (

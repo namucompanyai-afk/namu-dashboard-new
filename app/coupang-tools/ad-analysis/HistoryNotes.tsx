@@ -10,7 +10,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useConfirm } from '@/components/ui/useConfirm'
 import { NOTE_KINDS, NOTE_KIND_LABEL, type NoteKind } from '@/lib/coupang/weeklyJudge'
 
-type HistoryNote = { id: string; ts: string; text: string; kind?: string; reason?: string; campaignName?: string }
+export type HistoryNote = { id: string; ts: string; text: string; kind?: string; reason?: string; campaignName?: string }
 
 function fmtNoteTs(iso: string): string {
   const d = new Date(iso)
@@ -19,10 +19,25 @@ function fmtNoteTs(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-export function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
+export type MemoPrefill = { campaignName: string; nonce: number }
+export function HistoryNotesSection({ reloadKey = 0, campaignNames = [], prefill = null, onSaved }: {
+  reloadKey?: number
+  /** 캠페인 이름 자동완성(주간 기록 캠페인) — 오타로 매칭 안 되는 것 방지 */
+  campaignNames?: string[]
+  /** 행 드롭다운 '메모 추가' → 캠페인 이름 자동 채움 + 칸 열기 */
+  prefill?: MemoPrefill | null
+  /** 저장 직후 화면 판정·태그 즉시 갱신용 (page 가 notes 에 바로 붙임) */
+  onSaved?: (item: HistoryNote) => void
+}) {
   const { confirm, confirmModal } = useConfirm()
   const [items, setItems] = useState<HistoryNote[]>([])
   const [open, setOpen] = useState(false)
+  const [campaignName, setCampaignName] = useState('')
+  useEffect(() => {
+    if (!prefill) return
+    setOpen(true)
+    setCampaignName(prefill.campaignName)
+  }, [prefill])
   const [text, setText] = useState('')
   const [kind, setKind] = useState<NoteKind>('note')
   const [reason, setReason] = useState('')
@@ -50,7 +65,9 @@ export function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
   )
 
   async function add() {
-    const t = text.trim()
+    const name = campaignName.trim()
+    // 캠페인 이름을 따로 적으면 글 앞에 붙여 저장 — weeklyJudge 가 '글에 캠페인 이름 전체 포함'으로 그 캠페인 메모로 잡음
+    const t = name ? `${name} · ${text.trim()}`.replace(/ · $/, '') : text.trim()
     if (!t || busy) return
     setBusy(true)
     try {
@@ -58,11 +75,13 @@ export function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // 종류(kind)·이유(reason) — OFF 는 종류로만 판정. 글 앞에 캠페인 이름을 그대로 쓰면 그 캠페인 메모로 잡힘
-        body: JSON.stringify({ text: t, kind: kind === 'note' ? undefined : kind, reason: reason.trim() || undefined }),
+        body: JSON.stringify({ text: t, kind: kind === 'note' ? undefined : kind, reason: reason.trim() || undefined, campaignName: name || undefined }),
       })
       const j = await res.json()
       if (j?.item) {
         setItems((prev) => [...prev, j.item as HistoryNote])
+        onSaved?.(j.item as HistoryNote)
+        setCampaignName('')
         setText('')
         setReason('')
         setKind('note')
@@ -95,7 +114,7 @@ export function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
   }
 
   return (
-    <div className="aa-sub-section" style={{ marginTop: 16 }}>
+    <div id="aa-history-notes" className="aa-sub-section" style={{ marginTop: 16, scrollMarginTop: 80 }}>
       {confirmModal}
       <div className="aa-sub-section-title" style={{ cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
         <span>📝 운영 메모 ({loading ? '…' : `${sorted.length}건`})</span>
@@ -116,10 +135,21 @@ export function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
             </select>
             <input
               type="text"
+              list="aa-campaign-names"
+              value={campaignName}
+              onChange={(e) => setCampaignName(e.target.value)}
+              placeholder="캠페인 이름 (목록에서 고르기 · OFF·1P 이동은 필수)"
+              disabled={busy}
+              aria-label="캠페인 이름"
+              style={{ flex: '2 1 240px', padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, fontFamily: 'inherit' }}
+            />
+            <datalist id="aa-campaign-names">{campaignNames.map((n) => <option key={n} value={n} />)}</datalist>
+            <input
+              type="text"
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) add() }}
-              placeholder={kind === 'off' ? '캠페인 이름 그대로 (예: [보배마을]_흑보리_AI_415/325/349/458)' : kind === 'move1p' ? '캠페인 이름 · 1P 이동' : '예: 5.5일 제외 키워드 셋팅'}
+              placeholder={kind === 'off' ? '내용 (예: 1P 이동으로 OFF, 광고센터 중지 확인)' : kind === 'move1p' ? '내용 (예: 1P 캠페인으로 이동)' : '예: 5.5일 제외 키워드 셋팅'}
               disabled={busy}
               style={{ flex: '2 1 260px', padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, fontFamily: 'inherit' }}
             />
@@ -135,8 +165,8 @@ export function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
             <button
               className="aa-btn btn-sm"
               onClick={add}
-              disabled={busy || !text.trim()}
-              style={{ opacity: busy || !text.trim() ? 0.5 : 1 }}
+              disabled={busy || (!text.trim() && !campaignName.trim()) || ((kind === 'off' || kind === 'move1p') && !campaignName.trim())}
+              style={{ opacity: busy || (!text.trim() && !campaignName.trim()) ? 0.5 : 1 }}
             >
               추가
             </button>
