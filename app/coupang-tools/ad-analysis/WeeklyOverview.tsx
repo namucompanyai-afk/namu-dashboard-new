@@ -15,6 +15,9 @@ import { headlineAuto, type SalesRow, type WeekPoint, type WeeklyComment } from 
 type Key = 'cost' | 'rev' | 'total' | 'profit' | 'adShare' | 'roas'
 type Tip = { x: number; y: number; html: React.ReactNode } | null
 
+/** 1P/3P 토글 — 채널별 주간 자료가 생기는 2차에서 켠다 (지금은 렌더만 끔, 코드는 유지) */
+const SHOW_CHANNEL_TOGGLE = false
+
 const won = (v: number) => Math.round(v).toLocaleString('ko-KR')
 const md = (ymd: string) => `${ymd.slice(5, 7)}/${ymd.slice(8, 10)}`
 const sgn = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(Math.round(v)).toLocaleString('ko-KR')}`
@@ -36,7 +39,9 @@ function Line({
   const w = big ? 760 : 200, h = big ? 280 : 56, padL = big ? 72 : 2, padR = big ? 28 : 4, top = big ? 44 : 6
   const xs = (i: number) => padL + (i * (w - padL - padR)) / Math.max(1, n - 1)
   const val = (wk: WeekPoint, key: string) => (wk as unknown as Record<string, number | undefined>)[key]
-  const all = [k, ...(refKey ? [refKey] : [])].flatMap((key) => weeks.map((wk) => val(wk, key)).filter((v): v is number => v != null))
+  // 기준선(목표·BEP)은 본값이 있는 주에만 — 자료 없는 왼쪽 구간엔 아무것도 안 그림 (2026-10-19 레이아웃 수정)
+  const has = (wk: WeekPoint) => val(wk, k) != null
+  const all = [k, ...(refKey ? [refKey] : [])].flatMap((key) => weeks.filter(has).map((wk) => val(wk, key)).filter((v): v is number => v != null))
   if (!all.length) return <div className="ado-ph">자료 없음</div>
   const rawMax = Math.max(...all), rawMin = Math.min(0, ...all), rawSpan = rawMax - rawMin || 1
   const max = big ? rawMax + rawSpan * 0.12 : rawMax
@@ -47,7 +52,7 @@ function Line({
   const pathOf = (key: string) => {
     let d = '', pen = false
     weeks.forEach((wk, i) => {
-      const v = val(wk, key)
+      const v = has(wk) ? val(wk, key) : undefined
       if (v == null) { pen = false; return }
       d += `${pen ? 'L' : 'M'}${xs(i).toFixed(1)} ${ys(v).toFixed(1)}`
       pen = true
@@ -55,7 +60,6 @@ function Line({
     return d
   }
   const step = (w - padL - padR) / Math.max(1, n - 1)
-  const firstIdx = weeks.findIndex((wk) => val(wk, k) != null)
   const onMove = (ev: React.MouseEvent<SVGSVGElement>) => {
     const r = ev.currentTarget.getBoundingClientRect()
     const fx = (ev.clientX - r.left) / r.width
@@ -91,15 +95,7 @@ function Line({
       onMouseMove={onMove}
       onMouseLeave={() => { setHot(null); setTip(null) }}
     >
-      {/* 자료 없는 주 = 회색 칸 (앞쪽 연속 구간엔 안내 글자) */}
-      {weeks.map((wk, i) => (val(wk, k) == null ? (
-        <rect key={`g${i}`} x={(i === 0 ? (big ? padL : 0) : xs(i) - step / 2).toFixed(1)} y={top} width={(i === 0 ? step / 2 + (big ? 0 : padL) : step).toFixed(1)} height={h - top} className="ado-gap" />
-      ) : null))}
-      {firstIdx >= 3 && (
-        <text x={((xs(0) + xs(firstIdx - 1)) / 2).toFixed(1)} y={(h / 2 + 4).toFixed(1)} textAnchor="middle" className="ado-gapl">
-          {md(weeks[firstIdx].s)} 이전 {k === 'profit' ? '손익 ' : k === 'adShare' || k === 'total' ? '전체 매출 ' : ''}자료 없음
-        </text>
-      )}
+      {/* 자료 없는 주는 비워 둔다 (회색 상자·안내 글자 없음 — 가로축만 다른 타일과 맞춤) */}
       {big && Array.from({ length: 5 }, (_, t) => min + (span / 4) * t).map((v, t) => (
         <g key={`t${t}`}>
           <line x1={padL} x2={w - padR} y1={ys(v).toFixed(1)} y2={ys(v).toFixed(1)} className="ado-grid" />
@@ -145,7 +141,15 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   )
 }
 
-type TileDef = { key: Key; label: string; unit: string; note?: string; hero?: boolean; vclass?: 'blue' | 'amber' | 'sign'; refKey?: 'bep' | 'target'; pendingNote?: string }
+/** note = 타일 각주(1줄, 넘치면 말줄임) · noteFull = 확대 팝업 하단 출처 줄(전체 문장) */
+type TileDef = { key: Key; label: string; unit: string; note?: string; noteFull?: string; hero?: boolean; vclass?: 'blue' | 'amber' | 'sign'; refKey?: 'bep' | 'target'; pendingNote?: string }
+
+/** 자료가 13주 중간부터 있으면 "MM/DD부터 기록" (앞 구간이 비어 있는 타일만) */
+const sinceText = (weeks: WeekPoint[], k: Key) => {
+  const i = weeks.findIndex((w) => w[k] != null)
+  return i > 0 ? `${md(weeks[i].s)}부터 기록` : ''
+}
+const joinNote = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(' · ')
 
 function Tile({ d, weeks, setTip, onOpen }: { d: TileDef; weeks: WeekPoint[]; setTip: (t: Tip) => void; onOpen: () => void }) {
   const cur = weeks[weeks.length - 1]?.[d.key]
@@ -153,6 +157,7 @@ function Tile({ d, weeks, setTip, onOpen }: { d: TileDef; weeks: WeekPoint[]; se
   const pending = cur == null
   const delta = cur != null && prev != null ? cur - prev : null
   const vcls = d.vclass === 'sign' ? (cur != null && cur < 0 ? 'neg' : 'pos') : d.vclass ?? ''
+  const note = pending && d.pendingNote ? d.pendingNote : joinNote(d.note, sinceText(weeks, d.key))
   return (
     <div
       className={`ado-kpi${d.hero ? ' hero' : ''}${pending ? ' pending' : ''} clickable`}
@@ -167,9 +172,20 @@ function Tile({ d, weeks, setTip, onOpen }: { d: TileDef; weeks: WeekPoint[]; se
         {delta != null && delta !== 0 && <> · <b className={delta > 0 ? 'up' : 'down'}>{delta > 0 ? '▲' : '▼'} {d.unit === '%' ? `${sgn(delta)}%p` : sgn(delta)}</b></>}
       </div>
       <Line weeks={weeks} k={d.key} unit={d.unit} refKey={d.refKey} label={d.label} setTip={setTip} />
-      {pending && d.pendingNote ? <div className="note">{d.pendingNote}</div> : d.note ? <div className="note">{d.note}</div> : null}
+      {note && <div className="note line1" title={note}>{note}</div>}
     </div>
   )
+}
+
+/** 출처 설명 전체 문장 — 블록 부제에서 뺀 내용 (ⓘ 말풍선·확대 팝업 하단 출처 줄) */
+const sourceText = (weeks: WeekPoint[]) => {
+  const daily = weeks.filter((w) => w.src === 'daily')
+  const firstWeekly = weeks.find((w) => w.src === 'weekly')
+  return [
+    daily.length > 0 ? `${md(daily[0].s)}~${md(daily[daily.length - 1].s)} 주는 일별 보고서 환산(쿠팡 전환매출 기준)` : '',
+    firstWeekly ? `${md(firstWeekly.s)}~는 주간 기록 · 손익·BEP·전체 매출·광고비 비중은 주간 기록 주만` : '',
+    '마우스 올리면 값',
+  ].filter(Boolean).join(' · ')
 }
 
 function TileModal({ d, weeks, setTip, onClose }: { d: TileDef; weeks: WeekPoint[]; setTip: (t: Tip) => void; onClose: () => void }) {
@@ -193,6 +209,7 @@ function TileModal({ d, weeks, setTip, onClose }: { d: TileDef; weeks: WeekPoint
           })}
         </tbody>
       </table>
+      <div className="note">{joinNote(d.noteFull ?? d.note, sinceText(weeks, d.key), sourceText(weeks))}</div>
     </Modal>
   )
 }
@@ -263,7 +280,7 @@ function DonutTile({ weeks, setTip, onOpen }: { weeks: WeekPoint[]; setTip: (t: 
   const c = weeks[weeks.length - 1], p = weeks[weeks.length - 2]
   const ok = c?.total != null && c.rev != null
   return (
-    <div className={`ado-kpi clickable${ok ? '' : ' pending'}`} role="button" tabIndex={0} title="클릭하면 크게" onClick={onOpen}
+    <div className={`ado-kpi donut clickable${ok ? '' : ' pending'}`} role="button" tabIndex={0} title="클릭하면 크게" onClick={onOpen}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen() } }}>
       <div className="lb">자연 매출 vs 광고 매출 (이번 주) <span className="ado-zoom" aria-hidden="true">⤢</span></div>
       {ok ? (
@@ -278,7 +295,7 @@ function DonutTile({ weeks, setTip, onOpen }: { weeks: WeekPoint[]; setTip: (t: 
               )}
             </ul>
           </div>
-          <div className="note">자연 매출 = 전체 매출 − 광고 매출(14일 전환, 실판매가 기준)이라 대략치</div>
+          <div className="note line1" title="자연 매출 = 전체 매출 − 광고 매출(14일 전환, 실판매가 기준)이라 대략치">자연 매출 = 전체 매출 − 광고 매출(14일 전환, 실판매가 기준)이라 대략치</div>
         </>
       ) : (
         <div className="note" style={{ marginTop: 8 }}>이번 주 전체 매출(1P+3P) 입력 필요 — 아래 &lsquo;전체 매출 입력&rsquo;</div>
@@ -340,17 +357,17 @@ export function WeeklyOverview({
   const prev = weeks[weeks.length - 2]
   const auto = useMemo(() => headlineAuto(cur, prev), [cur, prev])
   if (!cur) return null
+  // 각주(note)는 1줄 — 전체 문장(noteFull)은 확대 팝업 하단 출처 줄에
   const tiles: TileDef[] = [
     { key: 'cost', label: '광고비 (VAT 포함)', unit: '원', vclass: 'blue' },
     { key: 'rev', label: '광고 매출 (14일 전환, 실판매가 기준)', unit: '원' },
-    { key: 'total', label: '전체 매출 (1P+3P 소비자 판매)', unit: '원', note: cur.adRevShare != null ? `1P 서플라이어허브 + 3P 윙 판매 분석 · 광고 매출 비중 ${Math.round(cur.adRevShare)}%` : '1P 서플라이어허브 + 3P 윙 판매 분석', pendingNote: '이번 주 값 입력 필요 — 아래 ‘전체 매출 입력’' },
+    { key: 'total', label: '전체 매출 (1P+3P 소비자 판매)', unit: '원', note: '1P 허브 + 3P 윙 판매 분석', noteFull: `1P 서플라이어허브 판매 분석(로켓배송) + 3P 윙 판매 분석(판매자배송+그로스)${cur.adRevShare != null ? ` · 광고 매출 비중 ${Math.round(cur.adRevShare)}%` : ''}`, pendingNote: '이번 주 값 입력 필요 — 아래 ‘전체 매출 입력’' },
     { key: 'profit', label: '광고 손익', unit: '원', hero: true, vclass: 'sign' },
-    { key: 'adShare', label: '광고비 비중 (광고비 ÷ 전체 매출)', unit: '%', hero: true, vclass: 'amber', refKey: 'target', note: '수익 개선 KPI · 점선 = 12월 목표 15%', pendingNote: '전체 매출 입력 후 계산 · 점선 = 12월 목표 15%' },
-    { key: 'roas', label: 'ROAS (참고)', unit: '%', refKey: 'bep', note: `실선 ROAS · 점선 BEP(주별)${cur.bep != null ? ` · BEP ${Math.round(cur.bep)}%` : ''} · 분모는 광고비 VAT 제외(광고센터 방식)` },
+    { key: 'adShare', label: '광고비 비중 (광고비 ÷ 전체 매출)', unit: '%', hero: true, vclass: 'amber', refKey: 'target', note: '점선 = 12월 목표 15%', noteFull: '수익 개선 KPI · 점선 = 12월 목표 15%', pendingNote: '전체 매출 입력 후 계산 · 점선 = 12월 목표 15%' },
+    { key: 'roas', label: 'ROAS (참고)', unit: '%', refKey: 'bep', note: `점선 = BEP${cur.bep != null ? ` ${Math.round(cur.bep)}%` : ''} (분모 VAT 제외)`, noteFull: `실선 ROAS · 점선 BEP(주별)${cur.bep != null ? ` · BEP ${Math.round(cur.bep)}%` : ''} · ROAS·BEP 분모는 광고비 VAT 제외(광고센터 방식)` },
   ]
   const openTile = tiles.find((t) => t.key === open)
-  const dailyWeeks = weeks.filter((w) => w.src === 'daily')
-  const firstWeekly = weeks.find((w) => w.src === 'weekly')
+  const srcInfo = sourceText(weeks)
   return (
     <div className="ado">
       <style>{CSS}</style>
@@ -376,15 +393,24 @@ export function WeeklyOverview({
       {/* ② 이번 주 성과 */}
       <section className="ado-card" aria-labelledby="ado-h-kpi">
         <h2 id="ado-h-kpi">이번 주 성과 <span className="sub">
-          주간 {md(cur.s)}~{md(cur.e)} · 꺾은선 = 최근 13주(주 단위) · 큰 점 = 이번 주 · 마우스 올리면 값
-          {dailyWeeks.length > 0 && ` · ${md(dailyWeeks[0].s)}~${md(dailyWeeks[dailyWeeks.length - 1].s)} 주는 일별 보고서 환산(쿠팡 전환매출 기준)`}
-          {firstWeekly && ` · ${md(firstWeekly.s)}~는 주간 기록 · 손익·BEP 는 주간 기록 주만`}
+          주간 {md(cur.s)}~{md(cur.e)} · 최근 13주 꺾은선 · 큰 점 = 이번 주
+          {/* 출처·범위 설명은 ⓘ 말풍선으로 (부제 한 줄 유지) */}
+          <button
+            type="button" className="ado-info" aria-label={`출처: ${srcInfo}`} title={srcInfo}
+            onMouseMove={(ev) => setTip({ x: ev.clientX, y: ev.clientY, html: <>{srcInfo}</> })}
+            onMouseLeave={() => setTip(null)}
+            onFocus={(ev) => { const r = ev.currentTarget.getBoundingClientRect(); setTip({ x: r.left, y: r.bottom, html: <>{srcInfo}</> }) }}
+            onBlur={() => setTip(null)}
+            onClick={(ev) => ev.stopPropagation()}
+          >ⓘ</button>
         </span>
-          <span className="ado-toggle" role="group" aria-label="채널">
-            <button className="ado-chip" aria-pressed="true" type="button">전체</button>
-            <button className="ado-chip" type="button" disabled title="채널별 주간 자료 준비 중">1P</button>
-            <button className="ado-chip" type="button" disabled title="채널별 주간 자료 준비 중">3P</button>
-          </span>
+          {SHOW_CHANNEL_TOGGLE && (
+            <span className="ado-toggle" role="group" aria-label="채널">
+              <button className="ado-chip" aria-pressed="true" type="button">전체</button>
+              <button className="ado-chip" type="button" disabled title="채널별 주간 자료 준비 중">1P</button>
+              <button className="ado-chip" type="button" disabled title="채널별 주간 자료 준비 중">3P</button>
+            </span>
+          )}
         </h2>
         <div className="ado-kpis">
           {tiles.map((d) => <Tile key={d.key} d={d} weeks={weeks} setTip={setTip} onOpen={() => setOpen(d.key)} />)}
@@ -420,7 +446,7 @@ export function WeeklyOverview({
 // 시안 v5 CSS 토큰 (아이보리·흰 카드·#e9e5dc 테두리·Pretendard·둥글기 16·hero 크림) — .ado 안에만
 const CSS = `
 .ado{--ado-bg:#f6f4ef;--ado-card:#FFFFFF;--ado-fg:#111827;--ado-muted:#f1efe9;--ado-muted-fg:#6b7280;--ado-border:#e9e5dc;--ado-primary:#1E40AF;--ado-accent:#B45309;--ado-accent-soft:#D97706;--ado-danger:#DC2626;--ado-ok:#15803D;--ado-ring:#1E40AF;
-  background:var(--ado-bg);color:var(--ado-fg);font:14px/1.5 Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",Roboto,sans-serif;padding:16px;border-radius:16px;margin:8px 0 16px}
+  background:var(--ado-bg);color:var(--ado-fg);font:14px/1.5 Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Segoe UI",Roboto,sans-serif;padding:16px;border-radius:16px;margin:8px auto 16px;max-width:1280px}
 .ado .muted{color:var(--ado-muted-fg)}.ado .small{font-size:12px}.ado .num{font-variant-numeric:tabular-nums;white-space:nowrap}
 .ado-card{background:var(--ado-card);border:1px solid var(--ado-border);border-radius:16px;padding:24px;margin-bottom:16px;box-shadow:0 1px 2px rgba(17,24,39,.04),0 1px 1px rgba(17,24,39,.03)}
 .ado-card:last-of-type{margin-bottom:0}
@@ -433,7 +459,11 @@ ol.ado-cmt li{margin:4px 0;font-size:15px}ol.ado-cmt li b{font-weight:800}
 .ado-toggle{margin-left:auto;display:inline-flex;gap:4px}
 .ado-chip{border:1px solid var(--ado-border);border-radius:999px;padding:2px 10px;font-size:12px;background:var(--ado-card);color:var(--ado-fg);cursor:pointer}
 .ado-chip[aria-pressed=true]{background:var(--ado-muted);border-color:var(--ado-primary)}.ado-chip:disabled{opacity:.45;cursor:not-allowed}
-.ado-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}
+.ado-info{border:0;background:none;color:var(--ado-muted-fg);cursor:help;font-size:13px;line-height:1;padding:0 2px;margin-left:4px;vertical-align:-1px}
+.ado-info:hover,.ado-info:focus-visible{color:var(--ado-primary);outline:none}
+/* 타일 격자: 4열 고정 (1줄 광고비·광고 매출·전체 매출·손익 / 2줄 비중·ROAS·도넛 2칸). 화면이 넓어도 4개 넘지 않음 */
+.ado-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.ado-kpi.donut{grid-column:span 2}
 .ado-kpi{border:1px solid var(--ado-border);border-radius:10px;padding:16px;background:var(--ado-card);min-width:0}
 .ado-kpi.hero{background:linear-gradient(180deg,#fffdf8,#fff);border-color:#ead9b8}.ado-kpi.hero .lb{color:#92400e;font-weight:700}.ado-kpi.hero .v{font-size:32px}
 .ado-kpi.pending{border-style:dashed}
@@ -442,6 +472,7 @@ ol.ado-cmt li{margin:4px 0;font-size:15px}ol.ado-cmt li b{font-weight:800}
 .ado-kpi .v.neg{color:var(--ado-danger)}.ado-kpi .v.pos{color:var(--ado-ok)}.ado-kpi .v.amber{color:#B45309}.ado-kpi .v.blue{color:var(--ado-primary)}
 .ado-kpi .d{font-size:12px;color:var(--ado-muted-fg)}.ado-kpi .d b{font-weight:600;font-size:13px}
 .ado-kpi .note{font-size:11px;color:var(--ado-muted-fg);margin-top:4px}
+.ado-kpi .note.line1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ado .up{color:var(--ado-ok)}.ado .down{color:var(--ado-danger)}
 .ado-kpi.clickable{cursor:pointer;transition:box-shadow .2s,transform .2s}.ado-kpi.clickable:hover{box-shadow:0 4px 14px rgba(17,24,39,.08);transform:translateY(-1px)}
 .ado-kpi.clickable:focus-visible{outline:2px solid var(--ado-ring);outline-offset:2px}
@@ -452,9 +483,8 @@ ol.ado-cmt li{margin:4px 0;font-size:15px}ol.ado-cmt li b{font-weight:800}
 .ado-spark .ado-ref{fill:none;stroke:var(--ado-accent);stroke-width:1.5;stroke-dasharray:4 3;vector-effect:non-scaling-stroke}
 .ado-spark .ado-dot{fill:var(--ado-card);stroke:var(--ado-primary);stroke-width:2;vector-effect:non-scaling-stroke}
 .ado-spark .ado-dot.cur{fill:var(--ado-primary)}.ado-spark .ado-dot.hot{stroke:var(--ado-accent-soft);stroke-width:3}
-.ado-spark .ado-gap{fill:var(--ado-border);opacity:.35}.ado-spark .ado-gapl{font-size:9px;fill:var(--ado-muted-fg)}
 .ado-spark .ado-axl{font-size:9px;fill:var(--ado-muted-fg)}.ado-spark .ado-zero{stroke:var(--ado-muted-fg);stroke-dasharray:3 3}
-.ado-spark.big{width:100%;height:auto;margin:12px 0}.ado-spark.big .ado-axl{font-size:11px}.ado-spark.big .ado-gapl{font-size:12px}
+.ado-spark.big{width:100%;height:auto;margin:12px 0}.ado-spark.big .ado-axl{font-size:11px}
 .ado-spark.big .ado-ln{stroke-width:2.5}.ado-spark .ado-grid,.ado-mix .ado-grid{stroke:var(--ado-border);stroke-width:1}
 .ado-spark.big .ado-vlab{font-size:11px;fill:var(--ado-muted-fg);font-variant-numeric:tabular-nums}.ado-spark.big .ado-vlab.cur{font-size:13px;font-weight:800;fill:var(--ado-fg)}
 .ado-donutwrap{display:flex;gap:12px;align-items:center;margin-top:6px}
@@ -479,5 +509,6 @@ ol.ado-cmt li{margin:4px 0;font-size:15px}ol.ado-cmt li b{font-weight:800}
 .ado-btn.primary{background:var(--ado-primary);color:#fff;border-color:var(--ado-primary)}.ado-btn:disabled{opacity:.5;cursor:not-allowed}
 @keyframes adoFade{from{opacity:0}to{opacity:1}}@keyframes adoPop{from{transform:scale(.96);opacity:0}to{transform:scale(1);opacity:1}}
 @media (prefers-reduced-motion:reduce){.ado-modal,.ado-mbox,.ado-kpi.clickable{animation:none;transition:none}}
-@media (max-width:640px){.ado{padding:8px}.ado-card{padding:16px}.ado-kpi .v{font-size:22px}.ado-kpi.hero .v{font-size:26px}.ado-toggle{margin-left:0}}
+@media (max-width:1023px){.ado-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:640px){.ado{padding:8px}.ado-card{padding:16px}.ado-kpis{grid-template-columns:minmax(0,1fr)}.ado-kpi.donut{grid-column:auto}.ado-kpi .v{font-size:22px}.ado-kpi.hero .v{font-size:26px}.ado-toggle{margin-left:0}}
 `
