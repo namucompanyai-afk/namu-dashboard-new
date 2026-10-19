@@ -26,6 +26,17 @@ const pct = (v: number | null | undefined) => (v == null ? '—' : `${Math.round
 const md = (ymd: string) => `${ymd.slice(5, 7)}/${ymd.slice(8, 10)}`
 const sgn = (v: number) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(Math.round(v)).toLocaleString('ko-KR')}`
 const signCls = (v: number | null | undefined) => (v == null ? '' : v < 0 ? 'neg' : v > 0 ? 'pos' : '')
+/** '지난주 → 이번 주' 금액 칸 — 금액은 검정, 증감 방향 ▲▼ 만 부호색(증가 초록·감소 빨강) */
+const BeforeAfter = ({ a, b, fmt = won }: { a: number | null | undefined; b: number | null | undefined; fmt?: (v: number | null | undefined) => string }) => {
+  const d = a != null && b != null ? b - a : null
+  // 좁은 화면에선 '→' 뒤에서만 줄바꿈 (숫자 안에서는 안 끊김)
+  return (
+    <>
+      <span className="nw">{fmt(a)} →</span>{' '}
+      <span className="nw"><b>{fmt(b)}</b>{d != null && d !== 0 && <span className={d > 0 ? 'pos' : 'neg'} aria-label={d > 0 ? '증가' : '감소'}> {d > 0 ? '▲' : '▼'}</span>}</span>
+    </>
+  )
+}
 
 /** 태그 아이콘 (색만으로 뜻을 전하지 않음 — 아이콘 + 글자) */
 const ICON: Record<string, string> = {
@@ -100,20 +111,26 @@ export function LastWeekChips({ followup, judged, prev, cur, clicksKnown }: {
         <span className="muted small">ROAS·손익은 지난주({md(prev.startDate)}~{md(prev.endDate)}) → 이번 주({md(cur.startDate)}~{md(cur.endDate)}) · 반영 7일 안이라 다음 주 재판정{!clicksKnown ? ' · 클릭 20건 미만 판정은 주간 파일 올리면 표시' : ''}</span>
       </div>
       {sel && sel !== '조치 없음' && (
-        <div className="adw-tw"><table className="adw-ltab">
-          <thead><tr><th>캠페인 · 조치</th><th>반영일</th><th className="r">지난주 ROAS → 이번 주</th><th className="r">BEP</th><th className="r">광고 손익 전 → 후</th><th>판정</th></tr></thead>
+        <div className="adw-tw"><table className="adw-ltab adw-fu">
+          <thead><tr>
+            <th>캠페인 · 조치</th><th>반영일</th>
+            <th className="r">광고비 지난주 → 이번 주</th><th className="r">광고 매출 지난주 → 이번 주</th>
+            <th className="r">ROAS 지난주 → 이번 주</th><th className="r">BEP</th><th className="r">광고 손익 전 → 후</th><th>판정</th>
+          </tr></thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={6} className="muted">없음</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={8} className="muted">없음</td></tr>}
             {rows.map((f) => {
               const [camp, ...act] = f.text.split(' · ')
-              const [r0, r1] = f.roas, [p0, p1] = f.adProfit
-              const dir = r0 != null && r1 != null ? (r1 > r0 ? '▲' : r1 < r0 ? '▼' : '') : ''
+              const [p0, p1] = f.adProfit
               const k = VERDICTS.find((x) => x.v === f.verdict)?.k ?? 'none'
               return (
                 <tr key={f.note.id}>
-                  <td><b>{camp}</b><div className="muted small">{act.join(' · ')}</div></td>
+                  <td className="wrap"><b>{camp}</b><div className="muted small">{act.join(' · ')}</div></td>
                   <td className="num small">{md(f.date)}</td>
-                  <td className="r num">{pct(r0)} → <b>{pct(r1)}</b> {dir}</td>
+                  {/* 광고비·광고 매출 = 주간 기록 2주 캠페인 행 (전체 캠페인 표와 같은 값) */}
+                  <td className="r num"><BeforeAfter a={f.before?.adCostVat} b={f.after?.adCostVat} /></td>
+                  <td className="r num"><BeforeAfter a={f.before?.revenue} b={f.after?.revenue} /></td>
+                  <td className="r num"><BeforeAfter a={f.roas[0]} b={f.roas[1]} fmt={pct} /></td>
                   <td className="r num">{pct(f.after?.bepPct)}</td>
                   <td className="r num"><span className={signCls(p0)}>{p0 == null ? '—' : sgn(p0)}</span> → <b className={signCls(p1)}>{p1 == null ? '—' : sgn(p1)}</b></td>
                   <td><Tag k={k} label={f.verdict} /></td>
@@ -386,6 +403,11 @@ export const WEEKLY_BLOCKS_CSS = `
 .adw-under{color:var(--adw-danger);font-weight:700}
 .adw-ch{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;border:1px solid var(--adw-border);color:var(--adw-muted-fg)}.adw-ch.c1P{color:var(--adw-primary);border-color:color-mix(in srgb,var(--adw-primary) 40%,transparent)}
 .adw-ltab{min-width:0!important}.adw-ltab th{position:static!important}
+/* 지난주 조치 목록 — 가로 스크롤 없이: 캠페인 칸을 줄이고 조치 요약은 줄바꿈(2줄 허용) */
+.adw-fu{table-layout:fixed}.adw-fu th:first-child{width:18%}.adw-fu th:nth-child(2){width:48px}.adw-fu th:nth-child(3),.adw-fu th:nth-child(4){width:16%}.adw-fu th:nth-child(7){width:17%}.adw-fu th:nth-child(5){width:14%}.adw-fu th:nth-child(6){width:52px}.adw-fu th:last-child{width:84px}
+.adw-fu th{white-space:normal;line-height:1.3}
+.adw-fu td.wrap{white-space:normal;overflow-wrap:anywhere}.adw-fu td.wrap b{display:block}.adw-fu td.wrap .small{line-height:1.35}
+.adw-fu td.r.num{white-space:normal}.adw-fu .nw{white-space:nowrap}
 .adw tr.adw-detail td{padding:0;background:#fff!important;white-space:normal}.adw-detailbox{max-height:900px;overflow:auto;padding:4px 8px 12px;font-family:Pretendard,-apple-system,sans-serif}
 .adw-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--adw-muted-fg);margin:4px 0 8px}
 .adw-todo-item{display:grid;grid-template-columns:minmax(300px,1.2fr) minmax(130px,.55fr) minmax(260px,1.7fr) auto;gap:12px;align-items:start;padding:12px 0;border-top:1px solid var(--adw-border)}

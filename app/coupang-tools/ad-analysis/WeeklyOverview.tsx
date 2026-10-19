@@ -105,6 +105,19 @@ function Line({
       {/* 0 선 — 0 이 그래프 범위 안일 때만 (값이 전부 음수면 그리지 않음 — 위 글자를 가림) */}
       {min < 0 && max > 0 && <line x1={big ? padL : 0} x2={w} y1={ys(0).toFixed(1)} y2={ys(0).toFixed(1)} className="ado-zero" />}
       {refKey && <path d={pathOf(refKey)} className="ado-ref" />}
+      {/* 확대 팝업: 점선(BEP·목표) 위에도 주별 값 라벨 — 실선 라벨과 겹치면 점선 반대쪽으로 (대표 2026-10-19 "이 점선 뭐야") */}
+      {big && refKey && weeks.map((wk, i) => {
+        if (!has(wk)) return null
+        const rv = val(wk, refKey)
+        if (rv == null) return null
+        const v = val(wk, k)
+        let y = ys(rv) - 6 // 기본: 점선 위
+        if (v != null) {
+          const mainY = ys(v) - 10 // 실선 라벨 위치
+          if (Math.abs(mainY - y) < 12) y = v > rv ? ys(rv) + 13 : ys(rv) - 16
+        }
+        return <text key={`r${i}`} x={xs(i).toFixed(1)} y={y.toFixed(1)} textAnchor="middle" className="ado-rlab">{fmt1(rv, '%', false)}</text>
+      })}
       <path d={pathOf(k)} className="ado-ln" />
       {weeks.map((wk, i) => {
         const v = val(wk, k)
@@ -188,12 +201,19 @@ const sourceText = (weeks: WeekPoint[]) => {
   ].filter(Boolean).join(' · ')
 }
 
+/** 확대 팝업 범례 — 점선이 뭔지 한 줄 (대표 2026-10-19 "이 점선 뭐야") */
+const LEGEND: Record<'bep' | 'target', string> = {
+  bep: '— 실선 ROAS · - - 점선 BEP ROAS(본전, 주별) · 실선이 점선 아래면 손해',
+  target: '— 실선 광고비 비중 · - - 점선 12월 목표 15% · 실선이 점선 위면 목표 미달',
+}
 function TileModal({ d, weeks, setTip, onClose }: { d: TileDef; weeks: WeekPoint[]; setTip: (t: Tip) => void; onClose: () => void }) {
+  const refCol = d.refKey === 'bep' ? 'BEP ROAS' : null
   return (
     <Modal title={`${d.label} — 최근 13주`} onClose={onClose}>
+      {d.refKey && <div className="ado-legend"><span className="ln" aria-hidden="true" /><span className="ref" aria-hidden="true" />{LEGEND[d.refKey]}</div>}
       <Line weeks={weeks} k={d.key} unit={d.unit} refKey={d.refKey} label={d.label} setTip={setTip} big />
       <table className="ado-ltab">
-        <thead><tr><th>주(월~일)</th><th className="r">{d.label}</th><th className="r">전주 대비</th><th>출처</th></tr></thead>
+        <thead><tr><th>주(월~일)</th><th className="r">{d.label}</th>{refCol && <th className="r">{refCol}</th>}<th className="r">전주 대비</th><th>출처</th></tr></thead>
         <tbody>
           {weeks.map((wk, i) => {
             const v = wk[d.key], pv = i > 0 ? weeks[i - 1][d.key] : undefined
@@ -202,6 +222,7 @@ function TileModal({ d, weeks, setTip, onClose }: { d: TileDef; weeks: WeekPoint
               <tr key={wk.s}>
                 <td>{md(wk.s)}~{md(wk.e)}</td>
                 <td className="r num">{fmtVal(v, d.unit)}</td>
+                {refCol && <td className="r num">{wk.bep != null ? `${wk.bep.toFixed(1)}%` : '—'}</td>}
                 <td className={`r num ${dd == null ? '' : dd < 0 ? 'down' : dd > 0 ? 'up' : ''}`}>{dd == null ? '—' : d.unit === '%' ? `${sgn(dd)}%p` : sgn(dd)}</td>
                 <td className="muted small">{srcText(wk)}</td>
               </tr>
@@ -490,6 +511,9 @@ ol.ado-cmt li{margin:4px 0;font-size:15px}ol.ado-cmt li b{font-weight:800}
 .ado-spark.big{width:100%;height:auto;margin:12px 0}.ado-spark.big .ado-axl{font-size:11px}
 .ado-spark.big .ado-ln{stroke-width:2.5}.ado-spark .ado-grid,.ado-mix .ado-grid{stroke:var(--ado-border);stroke-width:1}
 .ado-spark.big .ado-vlab{font-size:11px;fill:var(--ado-muted-fg);font-variant-numeric:tabular-nums}.ado-spark.big .ado-vlab.cur{font-size:13px;font-weight:800;fill:var(--ado-fg)}
+.ado-spark.big .ado-rlab{font-size:9.5px;fill:var(--ado-accent);font-variant-numeric:tabular-nums}
+.ado-legend{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ado-muted-fg);margin:8px 0 0}
+.ado-legend .ln{display:inline-block;width:18px;border-top:2.5px solid var(--ado-primary)}.ado-legend .ref{display:inline-block;width:18px;border-top:2px dashed var(--ado-accent);margin-right:2px}
 .ado-donutwrap{display:flex;gap:12px;align-items:center;margin-top:6px}
 .ado-dnum{font-size:18px;font-weight:700;fill:var(--ado-fg);font-variant-numeric:tabular-nums}.ado-dlab{font-size:9px;fill:var(--ado-muted-fg)}
 .ado-dleg{list-style:none;margin:0;padding:0;font-size:12px;line-height:1.7}.ado-dleg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
