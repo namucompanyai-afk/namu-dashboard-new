@@ -577,17 +577,18 @@ export default function AdAnalysisPage() {
   // 이번 주 = 주간 기록 중 시작일이 가장 늦은 주 · 지난주 = 그 7일 전 기록
   const curWeekSnap = useMemo(() => [...weekly].sort((a, b) => a.startDate.localeCompare(b.startDate)).pop() ?? null, [weekly])
   const prevWeekSnap = useMemo(() => prevWeekOf(weekly, curWeekSnap), [weekly, curWeekSnap])
-  // 판정 입력: 이 화면에서 올린 주간 파일(클릭 있음) → 없으면 주간 기록(클릭 없음 → 모수 부족 판정 못 함)
-  const clicksKnown = !!sessionWeeklyView && !!curWeekSnap && sessionWeeklyView.period.startDate === curWeekSnap.startDate
+  // 판정 입력: 이 화면에서 올린 주간 파일(클릭 있음) → 없으면 주간 기록(클릭은 2026-10-19 밤 이후 기록에만 있음 — 없으면 모수 부족 판정 못 함)
+  const sessionMatches = !!sessionWeeklyView && !!curWeekSnap && sessionWeeklyView.period.startDate === curWeekSnap.startDate
+  const clicksKnown = sessionMatches || !!curWeekSnap?.campaigns.some((c) => typeof c.clicks === 'number')
   const weekInputs = useMemo<JudgeInput[]>(() => {
-    if (clicksKnown && sessionWeeklyView) {
+    if (sessionMatches && sessionWeeklyView) {
       return sessionWeeklyView.view.campaigns.map((c) => ({
         campaignId: c.campaignId, campaignName: c.campaignName, type: c.type, channel: c.channel, clicks: c.clicks,
         adCostVat: c.adCostVat, revenue: c.revenue, roasPct: c.roasPct, bepPct: c.bepPct, adProfit: c.adProfit,
       }))
     }
     return curWeekSnap ? judgeInputFromSnapshot(curWeekSnap) : []
-  }, [clicksKnown, sessionWeeklyView, curWeekSnap])
+  }, [sessionMatches, sessionWeeklyView, curWeekSnap])
   const judged = useMemo(
     () => (curWeekSnap ? judgeCampaigns(weekInputs, { curWeek: curWeekSnap, prevWeek: prevWeekSnap, notes, targets, periodEnd: curWeekSnap.endDate }) : []),
     [weekInputs, curWeekSnap, prevWeekSnap, notes, targets],
@@ -907,7 +908,7 @@ export default function AdAnalysisPage() {
         judged={judged}
         clicksKnown={clicksKnown}
         lag={liveLag}
-        weekLabel={`주간 ${fmtMd(curWeekSnap.startDate)}~${fmtMd(curWeekSnap.endDate)}${clicksKnown ? ' (주간 파일)' : ' (주간 기록)'}`}
+        weekLabel={`주간 ${fmtMd(curWeekSnap.startDate)}~${fmtMd(curWeekSnap.endDate)}${sessionMatches ? ' (주간 파일)' : ' (주간 기록)'}`}
         openId={openCampId}
         onOpen={toggleCampaign}
         renderDetail={renderDetail30}

@@ -16,7 +16,8 @@ export type WeeklySnapshot = {
   savedAt?: string
   fileName?: string
   total: SnapTotals
-  campaigns: (SnapTotals & { campaignId: string; campaignName: string; key: string })[]
+  /** clicks: 캠페인 클릭 수 (2026-10-19 밤부터 기록 — 모수 부족(클릭 <20) 판정용. 그 전 기록엔 없음 → 화면은 '—') */
+  campaigns: (SnapTotals & { campaignId: string; campaignName: string; key: string; clicks?: number })[]
 }
 /** 저장된 기록 — savedAt 은 저장할 때 붙인다 */
 export type StoredWeeklySnapshot = WeeklySnapshot & { savedAt: string }
@@ -49,6 +50,7 @@ export function snapshotFromView(
       bepPct: c.bepPct,
       adProfit: c.adProfit,
       onePConvRevenue: c.onePConvRevenue,
+      clicks: c.clicks,
     })),
   }
 }

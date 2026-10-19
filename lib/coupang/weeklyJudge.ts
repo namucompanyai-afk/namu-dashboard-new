@@ -209,7 +209,7 @@ export function judgeCampaign(c: JudgeInput, ctx: JudgeContext): CampaignJudgeme
 }
 export const judgeCampaigns = (list: JudgeInput[], ctx: JudgeContext): CampaignJudgement[] => list.map((c) => judgeCampaign(c, ctx))
 
-/** 주간 기록 캠페인 행 → 판정 입력 (주간 파일이 이 화면에 없을 때 — 클릭을 모름) */
+/** 주간 기록 캠페인 행 → 판정 입력 (주간 파일이 이 화면에 없을 때 — 클릭은 기록에 있으면 쓰고(2026-10-19 밤~), 없으면 null) */
 export function judgeInputFromSnapshot(s: WeeklySnapshot): JudgeInput[] {
   return s.campaigns.map((c) => {
     const kind = parseCampaignTargetKey(c.campaignName)?.kind
@@ -218,7 +218,7 @@ export function judgeInputFromSnapshot(s: WeeklySnapshot): JudgeInput[] {
       campaignName: c.campaignName,
       type: kind === 'AI' || kind === '스마트' ? 'ai' : kind === '수동' ? 'manual' : 'unknown',
       channel: /1P/.test(c.campaignName) ? '1P' : '3P',
-      clicks: null,
+      clicks: typeof c.clicks === 'number' && Number.isFinite(c.clicks) ? c.clicks : null,
       adCostVat: c.adCostVat,
       revenue: c.revenue,
       roasPct: c.roasPct,
@@ -265,7 +265,9 @@ export function followupLastWeek(prev: WeeklySnapshot | null, cur: WeeklySnapsho
       const before = find(prev)
       const after = find(cur)
       let verdict: Verdict = '비교 불가'
-      if (before && after) {
+      // 이번 주 클릭 20건 미만(기록에 클릭이 있을 때만)은 모수 부족 → 비교 불가. 두 주 중 하나라도 기록에 없어도 비교 불가
+      const lowClicks = after != null && typeof after.clicks === 'number' && after.clicks < MIN_CLICKS
+      if (before && after && !lowClicks) {
         const d = after.adProfit - before.adProfit
         verdict = Math.abs(d) <= after.adCostVat * NO_CHANGE_RATIO ? '변화 없음' : d > 0 ? '개선' : '악화'
       }
