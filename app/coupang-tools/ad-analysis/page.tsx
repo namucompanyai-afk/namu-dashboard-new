@@ -60,6 +60,8 @@ import {
   type WeeklySnapshot,
 } from './WeeklyPanel'
 import { findMarginMissing } from '@/lib/coupang/marginMissing'
+import { buildWeeks13, type BackfillRow, type SalesRow, type WeeklyComment } from '@/lib/coupang/adWeekly13'
+import { WeeklyOverview } from './WeeklyOverview'
 
 type Mode = 'saved' | 'live'
 
@@ -514,6 +516,19 @@ export default function AdAnalysisPage() {
       .catch(() => { /* 없으면 빈 기록 */ })
     return () => { cancelled = true }
   }, [isAdmin])
+  // 상단 2블록 (브레인 코멘트·이번 주 성과) — 주간 기록 + 백필 + 전체 매출 + 그 주 코멘트 (관리자만)
+  const overviewWeek = useMemo(() => [...weekly].sort((a, b) => a.startDate.localeCompare(b.startDate)).pop()?.startDate ?? null, [weekly])
+  const [overview, setOverview] = useState<{ backfill: BackfillRow[]; sales: SalesRow[]; comment: WeeklyComment | null }>({ backfill: [], sales: [], comment: null })
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    fetch(`/api/coupang-ad-overview${overviewWeek ? `?week=${overviewWeek}` : ''}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && j?.ok) setOverview({ backfill: j.backfill || [], sales: j.sales || [], comment: j.comment ?? null }) })
+      .catch(() => { /* 없으면 주간 기록만으로 표시 */ })
+    return () => { cancelled = true }
+  }, [isAdmin, overviewWeek])
+  const weeks13 = useMemo(() => buildWeeks13(weekly, overview.backfill, overview.sales), [weekly, overview.backfill, overview.sales])
   const [notes, setNotes] = useState<ReflectNote[]>([])
   useEffect(() => {
     if (!isAdmin) return
@@ -870,11 +885,15 @@ export default function AdAnalysisPage() {
         {uploadError && <div style={errorBox}>{uploadError}</div>}
       </>
     )
+    const overviewNode = isAdmin && weeks13.length ? (
+      <WeeklyOverview weeks={weeks13} comment={overview.comment} isAdmin={isAdmin} onSalesSaved={(rows) => setOverview((p) => ({ ...p, sales: rows }))} />
+    ) : null
     if (!adAnalysisLive) {
       return (
         <div style={pageWrap}>
           <Style />
           {headerNode}
+          {overviewNode}
           {filesBar}
           <LiveUploadBox onFiles={handleLiveFiles} />
           {uploadMsgs}
@@ -888,6 +907,7 @@ export default function AdAnalysisPage() {
       }}>
         <Style />
         {headerNode}
+        {overviewNode}
         {filesBar}
         {uploadMsgs}
         {renderBody()}
