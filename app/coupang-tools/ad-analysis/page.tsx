@@ -47,6 +47,7 @@ import {
   StatusBoxes,
   WarningLine,
   MarginMissingBar,
+  ReplaceConfirmBox,
   WeekCompareBox,
   WeeklyActionsSection,
   ProductNote,
@@ -60,6 +61,7 @@ import {
 } from './WeeklyPanel'
 import { findMarginMissing } from '@/lib/coupang/marginMissing'
 import { buildWeeks13, type BackfillRow, type SalesRow, type WeeklyComment } from '@/lib/coupang/adWeekly13'
+import type { SnapshotDiff } from '@/lib/coupang/weeklySnapshots'
 import { WeeklyOverview } from './WeeklyOverview'
 import { HistoryNotesSection } from './HistoryNotes'
 import { CampaignTable, LastWeekChips, MobileNote, TodoBlock, WEEKLY_BLOCKS_CSS, type TodoRow } from './WeeklyBlocks'
@@ -664,25 +666,53 @@ export default function AdAnalysisPage() {
     setNotesReload((n) => n + 1)
   }
   /** 주간 파일 → 캠페인별 요약(기존 광고 분석 계산 그대로) → 주간 기록 저장 */
-  async function saveWeeklySnapshot(rows: AdCampaignRow[], period: { startDate: string; endDate: string }, fileName: string) {
-    const aug = augmentMasterWith1P(marginMaster as Parameters<typeof augmentMasterWith1P>[0], rows)
-    const v = buildAdAnalysisView(rows, aug as Parameters<typeof buildAdAnalysisView>[1], marginOff ? manualBepMap : undefined)
-    setSessionWeeklyView({ view: v, period, fileName })
-    const snapshot = snapshotFromView(v, period, fileName)
+  // 같은 기간 저장본과 많이 다른 주간 파일 — 서버가 저장 보류(needConfirm) → 확인 칸 [교체]/[취소] (2026-10-19 업로드 실수 방지)
+  const [pendingReplace, setPendingReplace] = useState<{ snapshot: WeeklySnapshot; view: ReturnType<typeof buildAdAnalysisView>; period: { startDate: string; endDate: string }; fileName: string; diff: SnapshotDiff } | null>(null)
+  async function postWeeklySnapshot(snapshot: WeeklySnapshot, force: boolean): Promise<{ items: WeeklySnapshot[] } | { needConfirm: SnapshotDiff }> {
     const res = await fetch('/api/coupang-ad-weekly', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ snapshot }),
+      body: JSON.stringify({ snapshot, force }),
     })
     const j = await res.json().catch(() => null)
+    if (res.ok && j?.needConfirm && j.diff) return { needConfirm: j.diff as SnapshotDiff }
     if (!res.ok || !j?.ok) throw new Error(`주간 기록 저장 실패: ${j?.error || res.status}`)
     // 저장 직후 GET 은 옛 값이 읽힐 수 있어 POST 응답의 전체 목록을 그대로 쓴다
     const items = Array.isArray(j.items) ? (j.items as WeeklySnapshot[]) : []
     if (items.length) setWeekly(items)
+    return { items }
+  }
+  /** 주간 파일 → 캠페인별 요약(기존 광고 분석 계산 그대로) → 주간 기록 저장. 저장본과 많이 다르면 보류(pending) */
+  async function saveWeeklySnapshot(rows: AdCampaignRow[], period: { startDate: string; endDate: string }, fileName: string): Promise<{ overlaps: WeeklySnapshot[]; pending: SnapshotDiff | null }> {
+    const aug = augmentMasterWith1P(marginMaster as Parameters<typeof augmentMasterWith1P>[0], rows)
+    const v = buildAdAnalysisView(rows, aug as Parameters<typeof buildAdAnalysisView>[1], marginOff ? manualBepMap : undefined)
+    const snapshot = snapshotFromView(v, period, fileName)
+    const r = await postWeeklySnapshot(snapshot, false)
+    if ('needConfirm' in r) {
+      setPendingReplace({ snapshot, view: v, period, fileName, diff: r.needConfirm })
+      return { overlaps: [], pending: r.needConfirm }
+    }
+    setPendingReplace(null)
+    setSessionWeeklyView({ view: v, period, fileName }) // 저장된 파일만 화면 판정에 씀
     // 기간이 겹치는 다른 주간 기록 (같은 기간 덮어쓰기는 제외)
-    return items.filter(
-      (x) => !(x.startDate === period.startDate && x.endDate === period.endDate) && x.startDate <= period.endDate && period.startDate <= x.endDate,
-    )
+    return {
+      overlaps: r.items.filter((x) => !(x.startDate === period.startDate && x.endDate === period.endDate) && x.startDate <= period.endDate && period.startDate <= x.endDate),
+      pending: null,
+    }
+  }
+  /** 확인 칸 [교체] — force 로 다시 저장 (직전 기록은 prev 에 1개 보관됨) */
+  async function confirmReplace() {
+    if (!pendingReplace) return
+    const p = pendingReplace
+    try {
+      await postWeeklySnapshot(p.snapshot, true)
+      setPendingReplace(null)
+      setSessionWeeklyView({ view: p.view, period: p.period, fileName: p.fileName })
+      setSessionWeekly((w) => (w && w.startDate === p.period.startDate ? { ...w, saved: true } : w))
+      setUploadNote(`주간 기록 교체 ${fmtMd(p.period.startDate)}~${fmtMd(p.period.endDate)} (직전 기록 1개 보관)`)
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : String(e))
+    }
   }
 
   // 상품 월 손익 — 쿠팡 손익이 저장한 가장 최근 달 상품별 판정 요약(pnl_verdict_YYYY-MM, 관리자만)
@@ -808,10 +838,16 @@ export default function AdAnalysisPage() {
           }
           // 주간 기록은 회사 기록 — 관리자만 저장 (게스트는 마진마스터가 없어 손익이 틀리게 남음)
           if (isAdmin) {
-            const overlaps = await saveWeeklySnapshot(r.rows, period, file.name)
-            notes.push(`주간 기록 저장 ${label}`)
+            const { overlaps, pending } = await saveWeeklySnapshot(r.rows, period, file.name)
+            if (pending) notes.push(`주간 기록 저장 보류 ${label} — 아래 확인 칸`)
+            else notes.push(`주간 기록 저장 ${label}`)
             if (overlaps.length) {
               warns.push(`${label}: 다른 주간 기록과 기간이 겹침 — ${overlaps.map((x) => `${fmtMd(x.startDate)}~${fmtMd(x.endDate)}`).join(', ')}`)
+            }
+            if (pending) {
+              const downloadedAt = new Date(file.lastModified + 9 * 3600 * 1000).toISOString().slice(0, 10)
+              if (!weeklyFile || period.endDate > weeklyFile.endDate) weeklyFile = { ...period, fileName: file.name, saved: false, downloadedAt }
+              continue
             }
           } else {
             warns.push(`${label}: 주간 파일은 이 계정에서 쓰지 않음 — 30일 파일(25일 이상)을 올리세요`)
@@ -1027,6 +1063,9 @@ export default function AdAnalysisPage() {
       <>
         {uploadNote && <div style={{ ...noticeBoxOrange, padding: '8px 12px', fontSize: 12, textAlign: 'left', margin: '0 0 8px' }}>✓ {uploadNote}</div>}
         {uploadError && <div style={errorBox}>{uploadError}</div>}
+        {pendingReplace && (
+          <ReplaceConfirmBox diff={pendingReplace.diff} fileName={pendingReplace.fileName} onReplace={confirmReplace} onCancel={() => { setPendingReplace(null); setUploadNote(`${fmtMd(pendingReplace.period.startDate)}~${fmtMd(pendingReplace.period.endDate)} 교체 취소 — 저장된 기록 그대로`) }} />
+        )}
       </>
     )
     const overviewNode = isAdmin && weeks13.length ? (

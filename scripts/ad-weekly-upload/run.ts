@@ -37,6 +37,8 @@ import { getDefaultConstants } from '../../lib/coupang/costBook'
 import { MARGIN_TAB, PRICE_TAB, marginMasterFromSheet, type SheetCell } from '../../lib/coupang/marginFromSheet'
 import {
   WEEKLY_SNAPSHOTS_KEY,
+  compareSnapshots,
+  findSamePeriod,
   mergeWeeklySnapshot,
   snapshotFromView,
   type StoredWeeklySnapshot,
@@ -263,6 +265,17 @@ async function main() {
           continue
         }
         const saved = (await getData(WEEKLY_SNAPSHOTS_KEY)) as { items?: StoredWeeklySnapshot[] } | null
+        // 같은 기간 저장본과 캠페인 수·광고비·광고 매출이 ±10% 넘게 다르면 업로드 실수 의심 — 사람이 없으니 저장 안 하고 알림 (손익 숫자는 알림에 안 넣음)
+        const same = findSamePeriod(saved?.items ?? [], snapshot)
+        if (same) {
+          const diff = compareSnapshots(same, snapshot)
+          if (diff.big) {
+            log(c.name, label, WEEKLY_SNAPSHOTS_KEY, '저장 안 함(저장본과 다름)', diff.text)
+            notify('쿠팡 광고 주간 파일 확인 필요', `${label} — 저장된 기록과 다름 (캠페인 ${diff.campaigns[0]}→${diff.campaigns[1]}개, 광고비 ${diff.costPct == null ? '새로 생김' : Math.round(diff.costPct) + '%'}, 매출 ${diff.revPct == null ? '새로 생김' : Math.round(diff.revPct) + '%'}). 대시보드에서 직접 올려 확인`)
+            markProcessed(processed, c.name, 'guard-skip')
+            continue
+          }
+        }
         const { items, replaced } = mergeWeeklySnapshot(saved?.items ?? [], { ...snapshot, savedAt: new Date().toISOString() })
         await saveData(WEEKLY_SNAPSHOTS_KEY, { items })
         log(c.name, label, WEEKLY_SNAPSHOTS_KEY, replaced ? '교체' : '누적', `캠페인 ${snapshot.campaigns.length}개 · 기록 ${items.length}주`)

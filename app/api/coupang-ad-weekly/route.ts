@@ -1,14 +1,18 @@
 import { requireRole } from '@/lib/server-auth'
 import { NextResponse } from 'next/server'
 import { getData, saveData } from '@/lib/supabase'
-import { WEEKLY_SNAPSHOTS_KEY, mergeWeeklySnapshot, type StoredWeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
+import { WEEKLY_SNAPSHOTS_KEY, compareSnapshots, findSamePeriod, mergeWeeklySnapshot, type StoredWeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
 
 /**
  * 쿠팡 광고 주간 기록 API — 광고 분석 "지난주 대비"용
  *
  * 키: coupang_ad_weekly_snapshots   payload: { items: WeeklySnapshot[] }
  * GET  /api/coupang-ad-weekly                 → 전체 주간 기록 (기간 끝 오름차순)
- * POST /api/coupang-ad-weekly { snapshot }    → 같은 기간(시작·끝)이면 덮어쓰기, 아니면 추가 · 응답에 저장된 전체 목록
+ * POST /api/coupang-ad-weekly { snapshot, force? }
+ *      → 같은 기간(시작·끝)이면 덮어쓰기, 아니면 추가 · 응답에 저장된 전체 목록
+ *      같은 기간 저장본과 캠페인 수가 다르거나 광고비·광고 매출 합이 ±10% 넘게 다르면(업로드 실수 의심) 저장하지 않고
+ *      { ok:false, needConfirm:true, diff } — 화면이 확인 칸을 띄우고 '교체'면 force:true 로 다시 보낸다 (2026-10-19)
+ *      교체할 때 직전 기록 1개를 prev 에 보관 (mergeWeeklySnapshot)
  * DELETE /api/coupang-ad-weekly?start=YYYY-MM-DD&end=YYYY-MM-DD → 그 기간 기록 삭제
  * 월 저장 히스토리(coupang-master pnl_*)와는 별개 키라 건드리지 않는다.
  */
@@ -46,7 +50,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'snapshot 형식 오류' }, { status: 400 })
     }
     const snap: WeeklySnapshot = { ...s, savedAt: new Date().toISOString() }
-    const { items } = mergeWeeklySnapshot(await loadItems(), snap)
+    const current = await loadItems()
+    const same = findSamePeriod(current, snap)
+    if (same && body?.force !== true) {
+      const diff = compareSnapshots(same, snap)
+      if (diff.big) return NextResponse.json({ ok: false, needConfirm: true, diff })
+    }
+    const { items } = mergeWeeklySnapshot(current, snap)
     await saveData(KEY, { items })
     // 저장한 전체 목록을 그대로 돌려준다 — 바로 다시 GET 하면 저장 직후 옛 값이 읽힐 수 있어 화면은 이 값을 쓴다
     return NextResponse.json({ ok: true, items })

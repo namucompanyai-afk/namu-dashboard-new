@@ -539,10 +539,58 @@ function CampaignActionRow({
   )
 }
 
+// ── 주간 파일 교체 확인 칸 — 같은 기간 저장본과 많이 다를 때 (업로드 실수 방지, 2026-10-19) ─────────
+export function ReplaceConfirmBox({ diff, fileName, onReplace, onCancel }: {
+  diff: SnapshotDiff
+  fileName: string
+  onReplace: () => Promise<void> | void
+  onCancel: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const num = (v: number) => Math.round(v).toLocaleString('ko-KR')
+  const pctTxt = (p: number | null) => (p == null ? '새로 생김' : `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(Math.round(p))}%`)
+  const row = (label: string, a: string, b: string, warn: boolean) => (
+    <tr style={{ color: warn ? '#B91C1C' : '#334155', fontWeight: warn ? 700 : 400 }}>
+      <td style={{ padding: '2px 10px 2px 0' }}>{label}</td>
+      <td className="mono" style={{ padding: '2px 10px', textAlign: 'right' }}>{a}</td>
+      <td style={{ padding: '2px 6px' }}>→</td>
+      <td className="mono" style={{ padding: '2px 10px', textAlign: 'right' }}>{b}</td>
+    </tr>
+  )
+  const over = (p: number | null) => p == null || Math.abs(p) > REPLACE_WARN_RATIO * 100
+  return (
+    <div role="alertdialog" aria-label="주간 기록 교체 확인" style={{ margin: '0 0 8px', padding: '12px 14px', borderRadius: 8, border: '2px solid #F87171', background: '#FEF2F2', fontSize: 13, color: '#7F1D1D' }}>
+      <div style={{ fontWeight: 800, marginBottom: 6 }}>⚠ {diff.text}</div>
+      <div style={{ fontSize: 12, color: '#991B1B', marginBottom: 6 }}>
+        올린 파일 {fileName} — 캠페인 일부만 선택했거나 &lsquo;클릭 발생 키워드만&rsquo; 같은 옵션이 다를 수 있음. 교체하면 되돌릴 수 없음(직전 기록 1개만 보관)
+      </div>
+      <table style={{ borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 8 }}>
+        <thead><tr style={{ color: '#991B1B', fontSize: 11 }}><th /><th style={{ textAlign: 'right', fontWeight: 500, padding: '0 10px' }}>저장된 기록</th><th /><th style={{ textAlign: 'right', fontWeight: 500, padding: '0 10px' }}>올린 파일</th></tr></thead>
+        <tbody>
+          {row('캠페인 수', `${diff.campaigns[0]}개`, `${diff.campaigns[1]}개`, diff.campaigns[0] !== diff.campaigns[1])}
+          {row('광고비(VAT 포함)', num(diff.cost[0]), `${num(diff.cost[1])} (${pctTxt(diff.costPct)})`, over(diff.costPct))}
+          {row('광고 매출', num(diff.rev[0]), `${num(diff.rev[1])} (${pctTxt(diff.revPct)})`, over(diff.revPct))}
+        </tbody>
+      </table>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button
+          className="aa-btn btn-sm"
+          disabled={busy}
+          onClick={async () => { setBusy(true); try { await onReplace() } finally { setBusy(false) } }}
+          style={{ background: '#B91C1C', borderColor: '#B91C1C', color: '#fff' }}
+        >
+          {busy ? '교체 중…' : '교체'}
+        </button>
+        <button className="aa-btn btn-sm" disabled={busy} onClick={onCancel}>취소 (저장된 기록 유지)</button>
+      </div>
+    </div>
+  )
+}
+
 // ── 4) 지난주 대비 + 지난주 조정 결과 (주간 파일 기록 기준) ─────────
 // 주간 기록 모양·만들기는 lib 로 옮김 (맥 자동 업로드 스크립트와 같은 함수) — 화면 import 는 그대로
 export { snapshotFromView, type WeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
-import type { WeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
+import { REPLACE_WARN_RATIO, type SnapshotDiff, type WeeklySnapshot } from '@/lib/coupang/weeklySnapshots'
 export type ReflectNote = {
   id: string
   ts: string
