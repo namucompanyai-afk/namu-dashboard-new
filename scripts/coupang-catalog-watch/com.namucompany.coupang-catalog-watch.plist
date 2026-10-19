@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  쿠팡 결합(노출상품ID) 변동 감지 — ~/Downloads 가 바뀔 때마다 run.ts --send 실행 (처리한 날짜는 다시 안 함).
+  쿠팡 결합(노출상품ID) 변동 감지 — ~/Downloads 가 바뀔 때마다 + 매일 09:30 run.ts --send 실행 (처리한 날짜는 다시 안 함).
+  09:30 실행은 2단계(파트너스 검색)용 — 그날 윙 파일이 없어도 검색 결과만 보냄. 바꾼 뒤엔 launchctl 로 다시 불러와야 반영됨
   등록은 대표 확인 후에만:
     npx tsx scripts/coupang-catalog-watch/run.ts --init     (옛 윙 파일을 처리함으로 기록)
     cp scripts/coupang-catalog-watch/com.namucompany.coupang-catalog-watch.plist ~/Library/LaunchAgents/
@@ -23,6 +24,13 @@
   <array>
     <string>/Users/huguoh/Downloads</string>
   </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>RunAtLoad</key>
