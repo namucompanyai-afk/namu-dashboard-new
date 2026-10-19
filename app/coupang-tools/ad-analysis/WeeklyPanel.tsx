@@ -14,6 +14,7 @@ import {
   type CampaignActions,
   type CampaignStatus,
 } from '@/lib/coupang/weeklyActions'
+import { marginRowTsv, type MarginMissingOption } from '@/lib/coupang/marginMissing'
 
 const won = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`
 const pct = (n: number | null | undefined) => (n == null ? '—' : `${Math.round(n)}%`)
@@ -718,5 +719,133 @@ export function ProductNote({ note, style }: { note: ProductMonthNote | null | u
       <span style={{ color: note.profit < 0 ? '#DC2626' : note.profit > 0 ? '#059669' : '#94A3B8', fontWeight: 600 }}>{profitText(note.profit)}</span>
       {' '}· 광고 비중 {share}
     </span>
+  )
+}
+
+// ── 마진계산에 없는 상품 — 경고 띠 + 붙여넣기 줄 (2026-10-19 대표 지시) ─────────
+/**
+ * 광고 전환으로 팔렸는데 나무_마스터 '마진계산'에 옵션 행이 없는 상품. 넣고 나면 다음 업로드에서 자동으로 사라짐.
+ * 정말 없는 것(빠진 매출 > 0 — 3P 캠페인 행에서 매출·마진이 0 으로 빠짐)만 세고 표를 바로 보여 준다.
+ * 1P 캠페인에서만 팔린 여러 봉 1P 옵션(행은 없지만 상품명으로 1봉 행에 연결돼 계산됨)은 '참고' 접힌 줄로 따로.
+ */
+export function MarginMissingBar({
+  list,
+  periodLabel,
+  firstSeen,
+  today,
+  defaultOpenRef = false,
+}: {
+  list: MarginMissingOption[]
+  periodLabel: string
+  firstSeen: Record<string, string>
+  today: string
+  defaultOpenRef?: boolean
+}) {
+  const [openRef, setOpenRef] = useState(defaultOpenRef)
+  const [copied, setCopied] = useState<'' | 'real' | 'ref'>('')
+  if (!list.length) return null
+  const real = list.filter((x) => x.lostRevenue > 0)
+  const ref = list.filter((x) => !(x.lostRevenue > 0))
+  const lost = real.reduce((s, x) => s + x.lostRevenue, 0)
+  const ageDays = (d?: string) => (d ? Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${d}T00:00:00Z`)) / 86400000) : null)
+  const old = real.filter((x) => (ageDays(firstSeen[x.optionId]) ?? 0) > 14).length
+  const copy = async (which: 'real' | 'ref') => {
+    if (await copyText((which === 'real' ? real : ref).map(marginRowTsv).join('\n'))) {
+      setCopied(which)
+      setTimeout(() => setCopied(''), 2000)
+    }
+  }
+  const tone = !real.length
+    ? { border: '#E2E8F0', bg: '#F8FAFC', fg: '#475569' }
+    : old
+      ? { border: '#FCA5A5', bg: '#FEF2F2', fg: '#B91C1C' }
+      : { border: '#FCD34D', bg: '#FFFBEB', fg: '#92400E' }
+  const th2: React.CSSProperties = { padding: '4px 8px', fontWeight: 600, color: '#64748B', textAlign: 'right', whiteSpace: 'nowrap' }
+  const td2: React.CSSProperties = { padding: '4px 8px', textAlign: 'right', whiteSpace: 'nowrap' }
+  const btn: React.CSSProperties = { padding: '5px 12px', borderRadius: 6, border: '1px solid #CBD5E1', background: '#0F172A', color: '#fff', fontSize: 12, cursor: 'pointer' }
+  const table = (rows: MarginMissingOption[], showLost: boolean) => (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', background: '#fff' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid #E2E8F0' }}>
+            <th style={{ ...th2, textAlign: 'left' }}>상품명 (광고전환매출발생 상품명)</th>
+            <th style={th2}>옵션ID</th>
+            <th style={{ ...th2, textAlign: 'left' }}>넣을 행</th>
+            <th style={th2}>판매수량(14일)</th>
+            <th style={th2}>쿠팡 전환매출(14일)</th>
+            {showLost && <th style={th2}>빠진 매출</th>}
+            <th style={th2}>윙 판매가</th>
+            <th style={th2}>처음 잡힌 날</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((x) => {
+            const d = firstSeen[x.optionId]
+            const late = showLost && (ageDays(d) ?? 0) > 14
+            return (
+              <tr key={x.optionId} style={{ borderTop: '1px solid #F1F5F9', color: late ? '#B91C1C' : undefined }}>
+                <td style={{ ...td2, textAlign: 'left', whiteSpace: 'normal' }}>{x.name}</td>
+                <td style={td2} className="mono">{x.optionId}</td>
+                <td style={{ ...td2, textAlign: 'left' }}>
+                  {x.channel || <span style={{ color: '#B45309' }}>채널 확인</span>} · {x.alias || <span style={{ color: '#B45309' }}>별칭 확인</span>}
+                  {x.bagCount != null && ` · ${x.bagCount}봉`}
+                  {x.exposureId && <span style={{ color: '#94A3B8' }}> · 노출 {x.exposureId}</span>}
+                  {x.sku && <span style={{ color: '#94A3B8' }}> · SKU {x.sku}</span>}
+                </td>
+                <td style={td2}>{x.sold.toLocaleString('ko-KR')}</td>
+                <td style={td2}>{won(x.revenue)}</td>
+                {showLost && <td style={td2}>{won(x.lostRevenue)}</td>}
+                <td style={td2}><span style={{ color: '#94A3B8' }}>—</span></td>
+                <td style={td2}>{d ?? <span style={{ color: '#94A3B8' }}>—</span>}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+  const howTo = (
+    <span style={{ color: '#64748B', fontSize: 12 }}>
+      마진계산 탭 맨 아래 빈 행 A열에 붙여넣기 → 위 행의 수식 칸(F~T·Z~AC)을 아래로 채우기 → D 판매가(실판매가)·H 규격·K 수수료율 입력.
+      채운 칸: 채널·별칭·봉수·노출ID·옵션ID·1P 상품코드·쿠팡 옵션명. 별칭은 같은 노출ID/SKU 기존 행 값 — 비어 있으면 직접 확인
+    </span>
+  )
+  return (
+    <div style={{ ...card, margin: '8px 0', padding: '10px 14px', borderColor: tone.border, background: tone.bg, fontSize: 13 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'baseline' }}>
+        <b style={{ color: tone.fg }}>
+          {real.length ? `⚠ 마진계산에 없는 상품 ${real.length}개 — 빠진 매출 ${won(lost)}` : '마진계산에 없는 상품 0개'}
+        </b>
+        <span style={{ color: '#64748B', fontSize: 12 }}>
+          ({periodLabel}{real.length ? ' · 광고로 팔렸는데 마진계산에 옵션 행이 없어 매출·마진이 0 으로 계산됨' : ''}{old ? ` · 2주 넘은 것 ${old}개` : ''})
+        </span>
+      </div>
+      {real.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          {table(real, true)}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 8 }}>
+            <button onClick={() => copy('real')} style={btn}>{copied === 'real' ? '✅ 복사됨' : `마진계산 붙여넣기 줄 복사 (${real.length}줄)`}</button>
+            {howTo}
+          </div>
+        </div>
+      )}
+      {ref.length > 0 && (
+        <div style={{ marginTop: 8, borderTop: '1px dashed #E2E8F0', paddingTop: 6 }}>
+          <div style={{ cursor: 'pointer', color: '#64748B', fontSize: 12, display: 'flex', gap: 8 }} onClick={() => setOpenRef((v) => !v)}>
+            <span>참고: 마진계산에 행은 없지만 1봉 행으로 계산되는 옵션 {ref.length}개 (1P 캠페인에서 팔린 여러 봉 옵션 — 매출·마진은 빠지지 않음. 넣어 두면 3P 광고로 팔릴 때도 바로 잡힘)</span>
+            <span style={{ marginLeft: 'auto' }}>{openRef ? '접기 ▴' : '펼치기 ▾'}</span>
+          </div>
+          {openRef && (
+            <div style={{ marginTop: 6 }}>
+              {table(ref, false)}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 8 }}>
+                <button onClick={() => copy('ref')} style={{ ...btn, background: '#475569' }}>{copied === 'ref' ? '✅ 복사됨' : `참고 옵션 붙여넣기 줄 복사 (${ref.length}줄)`}</button>
+                {howTo}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }

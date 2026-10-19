@@ -47,6 +47,7 @@ import {
   ProfitLine,
   StatusBoxes,
   WarningLine,
+  MarginMissingBar,
   WeekCompareBox,
   WeeklyActionsSection,
   ProductNote,
@@ -58,6 +59,7 @@ import {
   type ReflectState,
   type WeeklySnapshot,
 } from './WeeklyPanel'
+import { findMarginMissing } from '@/lib/coupang/marginMissing'
 
 type Mode = 'saved' | 'live'
 
@@ -401,6 +403,31 @@ export default function AdAnalysisPage() {
   const [chFilter, setChFilter] = useState<'all' | '3P' | '1P'>('all')
   // 1P 캠페인도 3P 와 같은 표·키워드·입찰가 흐름으로 — 마진 마스터에 1P 옵션 합성 행을 붙여 같은 계산에 태운다
   const masterAug = useMemo(() => augmentMasterWith1P(marginMaster as any, sourceRows), [marginMaster, sourceRows])
+  // 마진계산에 없는 상품 — 윙 노출ID 맵·처음 잡힌 날은 서버에서 (관리자만, 처음 잡힌 날 기록은 기능 스위치 MARGIN_MISSING_SAVE)
+  const [mmInfo, setMmInfo] = useState<{ enabled: boolean; firstSeen: Record<string, string>; pidByOption: Record<string, string> }>({ enabled: false, firstSeen: {}, pidByOption: {} })
+  useEffect(() => {
+    if (!isAdmin) return
+    let cancelled = false
+    fetch('/api/coupang-margin-missing', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (!cancelled && j?.ok) setMmInfo({ enabled: !!j.enabled, firstSeen: j.firstSeen || {}, pidByOption: j.pidByOption || {} }) })
+      .catch(() => { /* 없으면 노출ID·처음 잡힌 날 없이 표시 */ })
+    return () => { cancelled = true }
+  }, [isAdmin])
+  const marginMissing = useMemo(
+    () => findMarginMissing(sourceRows, marginMaster as any, new Map(Object.entries(mmInfo.pidByOption))),
+    [sourceRows, marginMaster, mmInfo.pidByOption],
+  )
+  const mmKey = marginMissing.map((x) => x.optionId).join(',')
+  useEffect(() => {
+    if (!isAdmin || !mmInfo.enabled || !mmKey) return
+    const fresh = mmKey.split(',').filter((id) => !mmInfo.firstSeen[id])
+    if (!fresh.length) return
+    fetch('/api/coupang-margin-missing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ optionIds: fresh }) })
+      .then((r) => r.json())
+      .then((j) => { if (j?.ok && j.firstSeen) setMmInfo((p) => ({ ...p, firstSeen: j.firstSeen })) })
+      .catch(() => { /* 기록 실패는 표시만 '—' */ })
+  }, [isAdmin, mmInfo.enabled, mmInfo.firstSeen, mmKey])
   // 상품 필터 (?alias= — 쿠팡 손익 상품별 판정 "광고 보기") — 그 별칭 옵션을 광고하거나 전환한 캠페인만
   const [aliasFilter, setAliasFilter] = useState<string | null>(null)
   useEffect(() => {
@@ -765,6 +792,15 @@ export default function AdAnalysisPage() {
       )}
       {marginOffBanner}
       {optionBepNode}
+      {/* 1-1) 마진계산에 없는 상품 — 넣으면 다음 업로드에서 자동으로 사라짐 */}
+      {isAdmin && !hideBep && (
+        <MarginMissingBar
+          list={marginMissing}
+          periodLabel={sourcePeriod ? `${fmtMd(sourcePeriod.startDate)}~${fmtMd(sourcePeriod.endDate)} 광고 파일 기준` : '광고 파일 기준'}
+          firstSeen={mmInfo.firstSeen}
+          today={new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)}
+        />
+      )}
       {/* 2) 경고 1줄 — 1P 미연결 · 마스터 미등록 옵션 · BEP ROAS 없는 캠페인 */}
       <WarningLine
         unlinked1P={onePView.unlinked}
