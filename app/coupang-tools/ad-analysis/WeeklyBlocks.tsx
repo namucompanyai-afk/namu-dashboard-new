@@ -10,12 +10,18 @@
 
 import React, { useMemo, useState } from 'react'
 import {
+  NOTE_KIND_LABEL,
   NO_CHANGE_RATIO,
   STATUS_TAG_LABEL,
+  kstDate,
   normName,
+  notesOfCampaign,
   statusTagOf,
   todoCopyText,
   todoLineOf,
+  type JudgeNote,
+  type NoteKind,
+  type SnapCamp,
   type CampaignJudgement,
   type FollowupItem,
   type StatusTag,
@@ -279,6 +285,85 @@ function TodoItem({ i, row, has30, onReflect }: { i: number; row: TodoRow; has30
   )
 }
 
+// ── 캠페인 행 펼침 — 캠페인 단위 요약 (주간 기록 2주 + 판정 이유 + 운영 메모 이력 + 반영 완료). 30일 키워드 상세는 page 가 이 아래에 붙임 ──
+/** 판정 이유 한 줄 */
+export function decisionText(j: CampaignJudgement): string {
+  switch (j.decision) {
+    case 'todo': return `할 일 — 2주 연속 BEP 미달 (지난주 ${j.prev ? pct(j.prev.roasPct) : '—'} · 이번 주 ${j.cur ? pct(j.cur.roasPct) : pct(j.roasPct)} < BEP ${pct(j.bep)}) → ${j.targetAction}`
+    case 'nosale': return `판매 0 — ${todoLineOf(j)}`
+    case 'nomargin': return `마진 미등록 — ${todoLineOf(j)}`
+    case 'watch': return `관찰 — ${j.watchReason} (이번 주 ${j.cur ? pct(j.cur.roasPct) : pct(j.roasPct)} / BEP ${pct(j.bep)}) · 이번 주엔 바꾸지 않음`
+    case 'keep': return `그대로 둠 — 효율 ≥ BEP (이번 주 ${j.cur ? pct(j.cur.roasPct) : pct(j.roasPct)} ≥ ${pct(j.bep)}) · 목표를 올리지도 내리지도 않음`
+    case 'skip': return `할 일 제외 — ${j.skipReason}`
+    default: return 'BEP 없음 — 전환 옵션이 마진계산에 없거나 판매 0 (클릭 모름) · 확인 필요'
+  }
+}
+export function CampaignSummary({ j, prevC, curC, notes, has30, reflected, onReflect }: {
+  j: CampaignJudgement
+  prevC: SnapCamp | null
+  curC: SnapCamp | null
+  notes: JudgeNote[]
+  has30: boolean
+  /** 이 세션에서 반영 완료 누른 시각 */
+  reflected: string | null
+  onReflect?: () => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const mine = useMemo(() => notesOfCampaign(notes, j.campaignName).slice().sort((a, b) => (a.ts < b.ts ? 1 : -1)), [notes, j.campaignName])
+  const tag = statusTagOf(j)
+  const row = (label: string, a: number | null | undefined, b: number | null | undefined, fmt: (v: number | null | undefined) => string = won) => (
+    <tr><th scope="row">{label}</th><td className="r num"><BeforeAfter a={a} b={b} fmt={fmt} /></td></tr>
+  )
+  return (
+    <div className="adw-sum">
+      <div className="adw-sum-grid">
+        <div>
+          <div className="adw-sum-h">지난주 → 이번 주 <span className="muted small">(주간 기록)</span></div>
+          <table className="adw-sum-tab"><tbody>
+            {row('광고비(VAT 포함)', prevC?.adCostVat, curC?.adCostVat ?? j.adCostVat)}
+            {row('광고 매출', prevC?.revenue, curC?.revenue ?? j.revenue)}
+            {row('ROAS', prevC?.roasPct, curC?.roasPct ?? j.roasPct, pct)}
+            {row('BEP ROAS', prevC?.bepPct, curC?.bepPct ?? j.bepPct, pct)}
+            {row('광고 손익', prevC?.adProfit, curC?.adProfit ?? j.adProfit, (v) => (v == null ? '—' : sgn(v)))}
+            {row('클릭', prevC?.clicks, curC?.clicks ?? j.clicks)}
+          </tbody></table>
+        </div>
+        <div>
+          <div className="adw-sum-h">판정 <Tag k={tag} label={STATUS_TAG_LABEL[tag]} /></div>
+          <div className="adw-sum-why">{decisionText(j)}</div>
+          {j.lastReflect && <div className="muted small">마지막 쿠팡 반영 {md(j.lastReflect)}{j.observing ? ' · 반영 후 7일 안 (효과 확인 중)' : ''}</div>}
+          {onReflect && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button type="button" className="adw-btn primary" disabled={busy || !!reflected} onClick={async () => { setBusy(true); try { await onReflect(); setMsg('') } catch (e) { setMsg(`기록 실패: ${e instanceof Error ? e.message : String(e)}`) } finally { setBusy(false) } }}>
+                {reflected ? `반영됨 ${reflected}` : busy ? '기록 중…' : '쿠팡 반영 완료'}
+              </button>
+              {msg && <span className="small" style={{ color: 'var(--adw-danger)' }}>{msg}</span>}
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="adw-sum-h">운영 메모 <span className="muted small">{mine.length}건</span></div>
+          {mine.length === 0 ? <div className="muted small">이 캠페인 메모 없음</div> : (
+            <ul className="adw-notes">
+              {mine.slice(0, 8).map((n) => (
+                <li key={n.id}>
+                  <span className="num muted small">{md(kstDate(n.ts))}</span>
+                  {n.kind && <span className={`adw-kind ${n.kind}`}>{NOTE_KIND_LABEL[n.kind as NoteKind] ?? n.kind}</span>}
+                  <span>{n.text.startsWith(j.campaignName) ? n.text.slice(j.campaignName.length).replace(/^\s*·\s*/, '') || n.text : n.text}</span>
+                  {n.reason && <span className="muted small"> — {n.reason}</span>}
+                </li>
+              ))}
+              {mine.length > 8 && <li className="muted small">… 외 {mine.length - 8}건 (아래 운영 메모 칸)</li>}
+            </ul>
+          )}
+        </div>
+      </div>
+      {!has30 && <div className="adw-note" style={{ marginTop: 8 }}>키워드 상세(AI 키워드 분석 · 수동 입찰가 점검 · 옵션별 성과)는 30일 파일을 올리면 표시</div>}
+    </div>
+  )
+}
+
 // ── ⑤ 전체 캠페인 표 ───────────────────────────────────────────
 type SortKey = 'adCostVat' | 'revenue' | 'roasPct' | 'adProfit' | 'clicks'
 const TAG_ORDER: StatusTag[] = ['todo', 'nosale', 'nomargin', 'wait', 'watch', 'keep', 'low', 'off']
@@ -286,16 +371,18 @@ const TAG_RULE: Record<StatusTag, string> = {
   todo: '2주 연속 BEP 미달', nosale: '클릭 20↑·광고 매출 0 (그 주 바로)', nomargin: '매출 있는데 BEP 없음 (마진계산 미등록)',
   wait: '반영 후 7일 안 (파일 마지막 날 기준)', watch: '1주만 미달·기록 부족', keep: '효율 ≥ BEP', low: '클릭 <20', off: '운영 메모 OFF(종류)', none: '',
 }
-export function CampaignTable({ judged, clicksKnown, lag, weekLabel, openId, onOpen, renderDetail }: {
+export function CampaignTable({ judged, clicksKnown, lag, weekLabel, openIds, onToggle, renderDetail, has30 }: {
   judged: CampaignJudgement[]
   clicksKnown: boolean
   /** 14일 전환 미반영 경고 (있으면 표 위에 고정 표시) */
   lag: { missingDays: number; asof: string } | null
   weekLabel: string
-  openId: string | null
-  onOpen: (id: string) => void
-  /** 30일 파일 키워드 상세 (행 클릭) — 없으면 행 클릭 없음 */
-  renderDetail?: (campaignId: string) => React.ReactNode
+  /** 펼친 행들 (여러 개 동시, 정렬·필터 바꿔도 유지) */
+  openIds: Set<string>
+  onToggle: (id: string) => void
+  /** 행 펼침 내용 — 캠페인 요약 + (30일 파일 있으면) 옛 캠페인 진단 상세 그대로 */
+  renderDetail: (campaignId: string) => React.ReactNode
+  has30: boolean
 }) {
   const [filter, setFilter] = useState<StatusTag | null>(null)
   const [sort, setSort] = useState<{ k: SortKey; dir: 'asc' | 'desc' }>({ k: 'adCostVat', dir: 'desc' })
@@ -320,7 +407,7 @@ export function CampaignTable({ judged, clicksKnown, lag, weekLabel, openId, onO
   )
   return (
     <section className="adw-card adw-table" aria-labelledby="adw-h-all">
-      <h2 id="adw-h-all">전체 캠페인 <span className="sub">{judged.length}개 · {weekLabel} · 기본 정렬 광고비 큰 순 · 열 머리 클릭으로 정렬{renderDetail ? ' · 행 클릭 → 키워드 상세·복사 (30일 파일)' : ' · 30일 파일 올리면 행 클릭으로 키워드 상세'}</span></h2>
+      <h2 id="adw-h-all">전체 캠페인 <span className="sub">{judged.length}개 · {weekLabel} · 기본 정렬 광고비 큰 순 · 열 머리 클릭으로 정렬 · 행 클릭 → 바로 아래 펼침(요약·판정 이유·메모{has30 ? '·키워드 상세·옵션' : ''}){has30 ? '' : ' · 30일 파일 올리면 키워드 상세도'}</span></h2>
       {lag && lag.missingDays > 0 && (
         <div className="adw-warn" role="status">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
@@ -360,14 +447,13 @@ export function CampaignTable({ judged, clicksKnown, lag, weekLabel, openId, onO
             {rows.length === 0 && <tr><td colSpan={10} className="muted">없음</td></tr>}
             {rows.map(({ j, tag }) => {
               const under = !j.lowSample && j.roasPct != null && j.bepPct != null && j.roasPct < j.bepPct
-              const open = openId === j.campaignId
-              const clickable = !!renderDetail
+              const open = openIds.has(j.campaignId)
               return (
                 <React.Fragment key={j.campaignId}>
-                  <tr id={`adw-camp-${j.campaignId}`} className={`${tag}${clickable ? ' clickable' : ''}${open ? ' selected' : ''}`} tabIndex={clickable ? 0 : undefined}
-                    onClick={clickable ? () => onOpen(j.campaignId) : undefined}
-                    onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(j.campaignId) } } : undefined}>
-                    <td className="l"><span className="nm">{j.campaignName}</span>{clickable && <span className="muted small"> {open ? '▾' : '▸'}</span>}</td>
+                  <tr id={`adw-camp-${j.campaignId}`} className={`${tag} clickable${open ? ' selected' : ''}`} tabIndex={0} aria-expanded={open}
+                    onClick={() => onToggle(j.campaignId)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(j.campaignId) } }}>
+                    <td className="l"><span className="adw-caret" aria-hidden="true">{open ? '▾' : '▸'}</span><span className="nm">{j.campaignName}</span></td>
                     <td><span className={`adw-ch c${j.channel}`}>{j.channel}</span></td>
                     <td className="r num">{won(j.adCostVat)}</td>
                     <td className="r num">{won(j.revenue)}</td>
@@ -378,7 +464,7 @@ export function CampaignTable({ judged, clicksKnown, lag, weekLabel, openId, onO
                     <td><Tag k={tag} label={STATUS_TAG_LABEL[tag]} /></td>
                     <td className="muted small num">{j.lastReflect ? md(j.lastReflect) : '—'}{j.offNote ? ' · OFF' : ''}</td>
                   </tr>
-                  {open && renderDetail && (
+                  {open && (
                     <tr className="adw-detail"><td colSpan={10}><div className="adw-detailbox">{renderDetail(j.campaignId)}</div></td></tr>
                   )}
                 </React.Fragment>
@@ -418,13 +504,14 @@ export const WEEKLY_BLOCKS_CSS = `
 .adw-tag.nomargin{color:#9A3412;border-color:#FDBA74;background:#FFF7ED}
 .chipbtn{cursor:pointer;font:inherit;font-size:12px}.chipbtn[aria-pressed=true]{outline:2px solid var(--adw-ring);outline-offset:1px;font-weight:700}.chipbtn:focus-visible{outline:2px solid var(--adw-ring);outline-offset:2px}
 .adw-tw{overflow:auto;border:1px solid var(--adw-border);border-radius:12px;margin-top:8px}
-.adw table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;min-width:980px}
-.adw thead th{position:sticky;top:0;background:var(--adw-muted);color:var(--adw-muted-fg);font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid var(--adw-border);white-space:nowrap}
-.adw thead th.r{text-align:right}.adw th.sortable{cursor:pointer}.adw th .sort{font-size:10px;opacity:.6;margin-left:4px}
-.adw tbody td{padding:7px 12px;border-bottom:1px solid var(--adw-border);vertical-align:middle}
-.adw tbody tr:nth-child(even) td{background:color-mix(in srgb,var(--adw-muted) 45%,var(--adw-card))}.adw tbody tr.clickable{cursor:pointer}.adw tbody tr.clickable:hover td{background:var(--adw-muted)}
-.adw tbody tr.selected td{background:#fff7ed}.adw tbody tr:focus-visible{outline:2px solid var(--adw-ring);outline-offset:-2px}
-.adw td.r{text-align:right}.adw td.l{min-width:260px}.adw .nm{font-weight:500}.adw tr.todo td.l .nm{font-weight:700}
+/* 새 표(바깥) 전용 — 행 안에 펼쳐진 옛 상세 표(.adw-detailbox 안)는 옛 CSS 그대로 */
+.adw-tw > table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;min-width:980px}
+.adw-tw > table > thead th{position:sticky;top:0;background:var(--adw-muted);color:var(--adw-muted-fg);font-weight:600;text-align:left;padding:8px 12px;border-bottom:1px solid var(--adw-border);white-space:nowrap}
+.adw-tw > table > thead th.r{text-align:right}.adw-tw > table > thead th.sortable{cursor:pointer}.adw-tw > table > thead th .sort{font-size:10px;opacity:.6;margin-left:4px}
+.adw-tw > table > tbody > tr > td{padding:7px 12px;border-bottom:1px solid var(--adw-border);vertical-align:middle}
+.adw-tw > table > tbody > tr:nth-child(even) > td{background:color-mix(in srgb,var(--adw-muted) 45%,var(--adw-card))}.adw-tw > table > tbody > tr.clickable{cursor:pointer}.adw-tw > table > tbody > tr.clickable:hover > td{background:var(--adw-muted)}
+.adw-tw > table > tbody > tr.selected > td{background:#fff7ed}.adw-tw > table > tbody > tr:focus-visible{outline:2px solid var(--adw-ring);outline-offset:-2px}
+.adw-tw > table td.r{text-align:right}.adw-tw > table > tbody > tr > td.l{min-width:260px}.adw .nm{font-weight:500}.adw-tw > table > tbody > tr.todo > td.l .nm{font-weight:700}
 .adw-under{color:var(--adw-danger);font-weight:700}
 .adw-ch{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;border:1px solid var(--adw-border);color:var(--adw-muted-fg)}.adw-ch.c1P{color:var(--adw-primary);border-color:color-mix(in srgb,var(--adw-primary) 40%,transparent)}
 .adw-ltab{min-width:0!important}.adw-ltab th{position:static!important}
@@ -433,7 +520,15 @@ export const WEEKLY_BLOCKS_CSS = `
 .adw-fu th{white-space:normal;line-height:1.3}
 .adw-fu td.wrap{white-space:normal;overflow-wrap:anywhere}.adw-fu td.wrap b{display:block}.adw-fu td.wrap .small{line-height:1.35}
 .adw-fu td.r.num{white-space:normal}.adw-fu .nw{white-space:nowrap}
-.adw tr.adw-detail td{padding:0;background:#fff!important;white-space:normal}.adw-detailbox{max-height:900px;overflow:auto;padding:4px 8px 12px;font-family:Pretendard,-apple-system,sans-serif}
+/* 펼침 칸은 바깥 표 폭에 맞춤(max-width:0) — 안의 옛 키워드 표는 자기 상자(.aa-table-wrap) 안에서 가로 스크롤 */
+.adw-tw > table > tbody > tr.adw-detail > td{padding:0;background:#fff!important;white-space:normal;max-width:0}.adw-detailbox{padding:8px 12px 14px;font-family:Pretendard,-apple-system,sans-serif;border-left:3px solid var(--adw-primary);background:#fff}
+.adw-caret{display:inline-block;width:14px;color:var(--adw-muted-fg);font-size:11px}
+.adw-sum{font-size:13px}.adw-sum-grid{display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1.3fr) minmax(260px,1.2fr);gap:16px}
+.adw-sum-h{font-weight:700;margin-bottom:6px;display:flex;gap:6px;align-items:center}.adw-sum-why{line-height:1.5}
+.adw-sum-tab{width:auto;font-size:12.5px;border-collapse:collapse}.adw-sum-tab th{text-align:left;font-weight:500;color:var(--adw-muted-fg);padding:3px 10px 3px 0;border:0}.adw-sum-tab td{padding:3px 0;border:0;white-space:nowrap}
+.adw-notes{list-style:none;margin:0;padding:0;font-size:12.5px;line-height:1.5}.adw-notes li{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;padding:2px 0;border-top:1px dashed var(--adw-border)}.adw-notes li:first-child{border-top:0}
+.adw-kind{display:inline-block;font-size:10px;font-weight:700;border-radius:4px;padding:0 5px;background:#EFF6FF;color:#1D4ED8}.adw-kind.off{background:#F3F4F6;color:#374151}.adw-kind.reflect{background:#ECFDF5;color:#059669}
+@media (max-width:900px){.adw-sum-grid{grid-template-columns:1fr}}
 .adw-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--adw-muted-fg);margin:4px 0 8px}
 .adw-todo-item{display:grid;grid-template-columns:minmax(300px,1.2fr) minmax(130px,.55fr) minmax(260px,1.7fr) auto;gap:12px;align-items:start;padding:12px 0;border-top:1px solid var(--adw-border)}
 .adw-todo-item:first-of-type{border-top:0}.adw-todo-item .t{font-weight:700}.adw-todo-item .m{font-size:12px;color:var(--adw-muted-fg)}

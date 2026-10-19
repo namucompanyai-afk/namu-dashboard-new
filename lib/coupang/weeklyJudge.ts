@@ -64,6 +64,7 @@ export type JudgeNote = {
   ts: string
   text: string
   kind?: string
+  reason?: string
   campaignKey?: string
   campaignName?: string
   period?: string
