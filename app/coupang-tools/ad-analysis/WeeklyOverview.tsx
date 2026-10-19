@@ -344,12 +344,14 @@ function SalesInput({ defaultWeek, onSaved }: { defaultWeek: string; onSaved: (r
 }
 
 export function WeeklyOverview({
-  weeks, comment, isAdmin, onSalesSaved,
+  weeks, comment, isAdmin, onSalesSaved, children,
 }: {
   weeks: WeekPoint[]
   comment: WeeklyComment | null
   isAdmin: boolean
   onSalesSaved: (rows: SalesRow[]) => void
+  /** 이번 주 성과 아래에 붙는 블록 (지난주 성과 칩·할 일·전체 캠페인 표 — 같은 아이보리 판 안) */
+  children?: React.ReactNode
 }) {
   const [tip, setTip] = useState<Tip>(null)
   const [open, setOpen] = useState<Key | 'mix' | null>(null)
@@ -418,8 +420,9 @@ export function WeeklyOverview({
         </div>
         {isAdmin && <SalesInput defaultWeek={cur.s} onSaved={onSalesSaved} />}
       </section>
+      {children}
 
-      {openTile && <TileModal d={openTile} weeks={weeks} setTip={setTip} onClose={() => { setOpen(null); setTip(null) }} />}
+      {openTile &&<TileModal d={openTile} weeks={weeks} setTip={setTip} onClose={() => { setOpen(null); setTip(null) }} />}
       {open === 'mix' && (
         <Modal title="자연 매출 vs 광고 매출 — 주별 흐름" onClose={() => { setOpen(null); setTip(null) }}>
           {weeks.some((w) => w.total != null) ? (
@@ -454,7 +457,7 @@ const CSS = `
 .ado-card h2 .sub{font-weight:400;color:var(--ado-muted-fg);font-size:12px}
 .ado-headline{margin:0 0 12px;padding:12px 16px;border-radius:10px;background:#fff8ea;border:1px solid #f0dcb4;border-left:4px solid var(--ado-accent-soft);font-size:16px;line-height:1.6;color:#1f2937}
 .ado-headline b{font-weight:800}.ado-headline b.up{color:var(--ado-ok)}.ado-headline b.down{color:var(--ado-danger)}.ado-headline .who{font-size:11px;color:var(--ado-muted-fg);margin-left:6px}
-ol.ado-cmt{margin:0;padding:8px 12px 8px 28px;border-left:3px solid var(--ado-primary);background:color-mix(in srgb,var(--ado-primary) 7%,var(--ado-card));border-radius:0 16px 16px 0}
+ol.ado-cmt{list-style:decimal;margin:0;padding:8px 12px 8px 28px;border-left:3px solid var(--ado-primary);background:color-mix(in srgb,var(--ado-primary) 7%,var(--ado-card));border-radius:0 16px 16px 0}
 ol.ado-cmt li{margin:4px 0;font-size:15px}ol.ado-cmt li b{font-weight:800}
 .ado-toggle{margin-left:auto;display:inline-flex;gap:4px}
 .ado-chip{border:1px solid var(--ado-border);border-radius:999px;padding:2px 10px;font-size:12px;background:var(--ado-card);color:var(--ado-fg);cursor:pointer}

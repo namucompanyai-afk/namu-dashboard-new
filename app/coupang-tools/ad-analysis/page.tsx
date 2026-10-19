@@ -62,6 +62,17 @@ import {
 import { findMarginMissing } from '@/lib/coupang/marginMissing'
 import { buildWeeks13, type BackfillRow, type SalesRow, type WeeklyComment } from '@/lib/coupang/adWeekly13'
 import { WeeklyOverview } from './WeeklyOverview'
+import { CampaignTable, LastWeekChips, MobileNote, TodoBlock, WEEKLY_BLOCKS_CSS, type TodoRow } from './WeeklyBlocks'
+import {
+  buildTodoPlans,
+  followupLastWeek,
+  judgeCampaigns,
+  judgeInputFromSnapshot,
+  prevWeekOf,
+  summarizeActions,
+  type JudgeInput,
+  type TodoPlan,
+} from '@/lib/coupang/weeklyJudge'
 
 type Mode = 'saved' | 'live'
 
@@ -507,6 +518,8 @@ export default function AdAnalysisPage() {
   }
   // 주간 기록(지난주 대비) · 운영 메모(지난주 조정 결과) — 30일 판정과 별개
   const [weekly, setWeekly] = useState<WeeklySnapshot[]>([])
+  // 이 화면에서 올린 주간 파일의 분석(클릭 포함) — 하단 캠페인 표·모수 판정용 (새로고침하면 사라져 주간 기록으로 대신)
+  const [sessionWeeklyView, setSessionWeeklyView] = useState<{ view: ReturnType<typeof buildAdAnalysisView>; period: { startDate: string; endDate: string }; fileName: string } | null>(null)
   useEffect(() => {
     if (!isAdmin) return
     let cancelled = false
@@ -559,10 +572,91 @@ export default function AdAnalysisPage() {
     }
     return m
   }, [weeklyActions, notes, reflectPeriod, sourcePeriod])
+
+  // ── 하단 3블록 (지난주 성과 칩 · 이번 주 할 일 · 전체 캠페인 표) — 규칙은 lib/coupang/weeklyJudge.ts (스킬 weekly.ts 와 같은 코드) ──
+  // 이번 주 = 주간 기록 중 시작일이 가장 늦은 주 · 지난주 = 그 7일 전 기록
+  const curWeekSnap = useMemo(() => [...weekly].sort((a, b) => a.startDate.localeCompare(b.startDate)).pop() ?? null, [weekly])
+  const prevWeekSnap = useMemo(() => prevWeekOf(weekly, curWeekSnap), [weekly, curWeekSnap])
+  // 판정 입력: 이 화면에서 올린 주간 파일(클릭 있음) → 없으면 주간 기록(클릭 없음 → 모수 부족 판정 못 함)
+  const clicksKnown = !!sessionWeeklyView && !!curWeekSnap && sessionWeeklyView.period.startDate === curWeekSnap.startDate
+  const weekInputs = useMemo<JudgeInput[]>(() => {
+    if (clicksKnown && sessionWeeklyView) {
+      return sessionWeeklyView.view.campaigns.map((c) => ({
+        campaignId: c.campaignId, campaignName: c.campaignName, type: c.type, channel: c.channel, clicks: c.clicks,
+        adCostVat: c.adCostVat, revenue: c.revenue, roasPct: c.roasPct, bepPct: c.bepPct, adProfit: c.adProfit,
+      }))
+    }
+    return curWeekSnap ? judgeInputFromSnapshot(curWeekSnap) : []
+  }, [clicksKnown, sessionWeeklyView, curWeekSnap])
+  const judged = useMemo(
+    () => (curWeekSnap ? judgeCampaigns(weekInputs, { curWeek: curWeekSnap, prevWeek: prevWeekSnap, notes, targets, periodEnd: curWeekSnap.endDate }) : []),
+    [weekInputs, curWeekSnap, prevWeekSnap, notes, targets],
+  )
+  const followup = useMemo(() => followupLastWeek(prevWeekSnap, curWeekSnap, notes), [prevWeekSnap, curWeekSnap, notes])
+  // 이 화면에서 '쿠팡 반영 완료' 누른 캠페인 (반영 직후 할 일에서 사라지지 않고 '반영됨'으로 남김)
+  const [sessionReflected, setSessionReflected] = useState<Map<string, string>>(new Map())
+  const has30 = mode === 'live' && !!adAnalysisLive && viewAll.loaded && !hideBep
+  const todoJudged = useMemo(
+    () => judged.filter((j) => j.decision === 'todo' || sessionReflected.has(j.campaignId)).sort((a, b) => a.adProfit - b.adProfit),
+    [judged, sessionReflected],
+  )
+  // 키워드·입찰 계획 — 30일 파일이 이 화면에 있을 때만 (대시보드 할 일 함수 buildWeeklyActions 결과를 스킬과 같은 규칙으로 가공)
+  const todoPlans = useMemo(() => {
+    if (!has30) return null
+    const m = new Map<string, TodoPlan>()
+    if (!todoJudged.length) return m
+    const plans = buildTodoPlans(todoJudged.map((j) => ({ campaign: j.campaignName, isAi: j.isAi })), {
+      actions: summarizeActions(weeklyActions),
+      kwView: viewAll,
+      kwRows: rowsAllCh ?? [],
+      bepMap: marginOff ? manualBepMap : buildBepMap(masterAug as any),
+      priceMap: buildActualPriceMapById(masterAug as any),
+      exposureMap: buildExposureMapByOptionId(masterAug as any),
+      notes,
+    })
+    for (const p of plans) m.set(p.campaign, p)
+    return m
+  }, [has30, todoJudged, weeklyActions, viewAll, rowsAllCh, marginOff, manualBepMap, masterAug, notes])
+  const todoRows: TodoRow[] = useMemo(
+    () => todoJudged.map((j) => ({ j, plan: todoPlans?.get(j.campaignName) ?? null, done: sessionReflected.get(j.campaignId) ?? null })),
+    [todoJudged, todoPlans, sessionReflected],
+  )
+  // 쿠팡 반영 완료 — 운영 메모 reflect 기록 (기존 API) + 목표를 BEP 로 올리는 할 일이면 적용값 저장
+  const reflectTodo = async (row: TodoRow) => {
+    const { j, plan } = row
+    const act = weeklyActions.find((a) => a.campaign.campaignId === j.campaignId) ?? null
+    const raise = j.isAi && !!j.targetAction && j.targetAction.startsWith('목표 →') && j.bep != null
+    const nBid = plan ? plan.bidLines.length + plan.extraBidLines.length : 0
+    const parts = [
+      raise ? `BEP ROAS ${j.applied ?? '미입력'}→${j.bep}%` : '',
+      plan?.movePairs.length ? `수동 이동 ${plan.movePairs.length}개` : '',
+      nBid ? `입찰가 ${nBid}개` : '',
+    ].filter(Boolean)
+    const res = await fetch('/api/coupang-ad-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: `${j.campaignName} · ${parts.join(', ') || '2주 연속 BEP 미달 조치'}`,
+        kind: 'reflect',
+        campaignKey: j.key ?? j.campaignName,
+        campaignName: j.campaignName,
+        period: has30 && reflectPeriod ? reflectPeriod : curWeekSnap ? `${curWeekSnap.startDate}~${curWeekSnap.endDate}` : undefined,
+        items: act ? actionItems(act).map((x) => x.key) : raise ? ['bep'] : [],
+      }),
+    })
+    const jj = await res.json().catch(() => null)
+    if (!res.ok || !jj?.item) throw new Error(jj?.error || `HTTP ${res.status}`)
+    setNotes((prev) => [...prev, jj.item as ReflectNote])
+    if (raise && j.key) setTargetForKey(j.key, j.bep!)
+    const now = new Date(Date.now() + 9 * 3600 * 1000).toISOString()
+    setSessionReflected((m) => new Map(m).set(j.campaignId, `${now.slice(5, 7)}/${now.slice(8, 10)} ${now.slice(11, 16)}`))
+    setNotesReload((n) => n + 1)
+  }
   /** 주간 파일 → 캠페인별 요약(기존 광고 분석 계산 그대로) → 주간 기록 저장 */
   async function saveWeeklySnapshot(rows: AdCampaignRow[], period: { startDate: string; endDate: string }, fileName: string) {
     const aug = augmentMasterWith1P(marginMaster as Parameters<typeof augmentMasterWith1P>[0], rows)
     const v = buildAdAnalysisView(rows, aug as Parameters<typeof buildAdAnalysisView>[1], marginOff ? manualBepMap : undefined)
+    setSessionWeeklyView({ view: v, period, fileName })
     const snapshot = snapshotFromView(v, period, fileName)
     const res = await fetch('/api/coupang-ad-weekly', {
       method: 'POST',
@@ -794,8 +888,36 @@ export default function AdAnalysisPage() {
     </>
   )
 
+  // 캠페인 펼침 상세 — 키워드 분석(AI)·입찰가 점검(수동): 옛 캠페인 진단 표와 새 전체 캠페인 표가 같이 씀
+  const detailFor = (c: CampaignDiag) => c.type === 'manual'
+    ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
+    : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={isAdmin ? targets : undefined} onTargetChange={isAdmin ? setTargetForKey : undefined} />
+  // 새 전체 캠페인 표 행 클릭 → 30일 파일의 그 캠페인 키워드 상세 (30일 파일 있을 때만)
+  const renderDetail30 = has30
+    ? (campaignId: string) => { const c = viewAll.campaigns.find((x) => x.campaignId === campaignId); return c ? detailFor(c) : null }
+    : undefined
+  // 하단 3블록 — 관리자만 (회사 기록), 주간 기록이 하나라도 있을 때. 이번 주 성과 블록 바로 아래에 붙임
+  const blocksNode = isAdmin && curWeekSnap ? (
+    <div className="adw">
+      <style>{WEEKLY_BLOCKS_CSS}</style>
+      <LastWeekChips followup={followup} judged={judged} prev={prevWeekSnap} cur={curWeekSnap} clicksKnown={clicksKnown} />
+      <MobileNote />
+      <TodoBlock rows={todoRows} has30={has30} file30={has30 ? sourcePeriod : null} onReflect={reflectTodo} />
+      <CampaignTable
+        judged={judged}
+        clicksKnown={clicksKnown}
+        lag={liveLag}
+        weekLabel={`주간 ${fmtMd(curWeekSnap.startDate)}~${fmtMd(curWeekSnap.endDate)}${clicksKnown ? ' (주간 파일)' : ' (주간 기록)'}`}
+        openId={openCampId}
+        onOpen={toggleCampaign}
+        renderDetail={renderDetail30}
+      />
+    </div>
+  ) : null
+
   // ── 본문 (라이브·저장 공통) — 경고 · 손익 · 지난주 대비 · 상태 3칸 · 채널 필터 · 할 일 · 캠페인 진단 표 · 운영 메모 ──
-  const renderBody = () => (
+  // adminNew = 관리자 라이브 모드: 옛 블록(손익 줄·지난주 대비·상태 3칸·할 일·캠페인 진단 표)은 위 3블록으로 대체돼 경고·운영 메모만
+  const renderBody = (adminNew = false) => (
     <>
       {marginMaster && marginMeta && !String(marginMeta.fileName || '').startsWith('나무_마스터') && (
         <div style={{ margin: '8px 0', padding: '8px 14px', borderRadius: 8, border: '1px solid #FCD34D', background: '#FFFBEB', color: '#92400E', fontSize: 13 }}>
@@ -823,7 +945,7 @@ export default function AdAnalysisPage() {
         noBep={hideBep ? [] : viewAll.campaigns.filter((c) => campaignStatusOf(c) == null)}
         lag={liveLag}
       />
-      {!hideBep && viewAll.loaded && (
+      {!adminNew && !hideBep && viewAll.loaded && (
         <>
           {/* 3) 기간 손익 1줄 */}
           <ProfitLine view={viewAll} days={sourcePeriod?.days ?? null} />
@@ -833,10 +955,14 @@ export default function AdAnalysisPage() {
           <StatusBoxes campaigns={viewAll.campaigns} onPick={pickCampaign} noteOf={productNoteOf} />
         </>
       )}
-      {/* 6) 채널 필터 한 줄 — 아래 할 일·캠페인 진단 표에 같이 적용 */}
-      <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
-      {chFilter === '1P' && !onePView.loaded && <div style={{ ...noticeBoxOrange, padding: 12, fontSize: 13, margin: '12px 0' }}>이 광고 데이터에는 1P(판매방식 Retail) 광고 행이 없습니다.</div>}
-      {!hideBep && viewAll.loaded && (
+      {!adminNew && (
+        <>
+          {/* 6) 채널 필터 한 줄 — 아래 할 일·캠페인 진단 표에 같이 적용 */}
+          <ChannelFilterBar value={chFilter} onChange={setChFilter} has1P={onePView.loaded} />
+          {chFilter === '1P' && !onePView.loaded && <div style={{ ...noticeBoxOrange, padding: 12, fontSize: 13, margin: '12px 0' }}>이 광고 데이터에는 1P(판매방식 Retail) 광고 행이 없습니다.</div>}
+        </>
+      )}
+      {!adminNew && !hideBep && viewAll.loaded && (
         /* 7) 요약 카드 3개 + 이번 주 할 일 — 반영 기록·적용값 저장은 관리자만 */
         <WeeklyActionsSection
           actions={weeklyActionsShown}
@@ -846,22 +972,22 @@ export default function AdAnalysisPage() {
           noteOf={productNoteOf}
         />
       )}
-      {/* 8) 캠페인 진단 표 */}
-      <CampaignSection
-        view={view}
-        master={masterAug as any}
-        marginOff={marginOff}
-        hideBep={hideBep}
-        manualBep={manualBepMap}
-        openCampId={openCampId}
-        onOpen={toggleCampaign}
-        selectedOptionId={selectedOptionId}
-        onSelectOption={openCampaignAndOption}
-        noteOf={productNoteOf}
-        renderDetail={(c) => c.type === 'manual'
-          ? <ManualSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} />
-          : <AiSection campaign={c} master={masterAug as any} marginOff={marginOff} hideBep={hideBep} manualBep={manualBepMap} periodLabel={periodLabel} selectedOptionId={selectedOptionId} onClearOption={() => setSelectedOptionId(null)} onSelectOption={(id) => openCampaignAndOption(c.campaignId, id)} onClose={() => { setOpenCampId(null); setSelectedOptionId(null) }} targets={isAdmin ? targets : undefined} onTargetChange={isAdmin ? setTargetForKey : undefined} />}
-      />
+      {/* 8) 캠페인 진단 표 (관리자 라이브는 위 '전체 캠페인' 표로 대체 — 행 클릭 키워드 상세·다운로드는 같은 상세) */}
+      {!adminNew && (
+        <CampaignSection
+          view={view}
+          master={masterAug as any}
+          marginOff={marginOff}
+          hideBep={hideBep}
+          manualBep={manualBepMap}
+          openCampId={openCampId}
+          onOpen={toggleCampaign}
+          selectedOptionId={selectedOptionId}
+          onSelectOption={openCampaignAndOption}
+          noteOf={productNoteOf}
+          renderDetail={detailFor}
+        />
+      )}
       {/* 9) 운영 메모 (접힌 상태, 관리자만) */}
       {isAdmin && <HistoryNotesSection reloadKey={notesReload} />}
     </>
@@ -886,7 +1012,9 @@ export default function AdAnalysisPage() {
       </>
     )
     const overviewNode = isAdmin && weeks13.length ? (
-      <WeeklyOverview weeks={weeks13} comment={overview.comment} isAdmin={isAdmin} onSalesSaved={(rows) => setOverview((p) => ({ ...p, sales: rows }))} />
+      <WeeklyOverview weeks={weeks13} comment={overview.comment} isAdmin={isAdmin} onSalesSaved={(rows) => setOverview((p) => ({ ...p, sales: rows }))}>
+        {blocksNode}
+      </WeeklyOverview>
     ) : null
     if (!adAnalysisLive) {
       return (
@@ -910,7 +1038,7 @@ export default function AdAnalysisPage() {
         {overviewNode}
         {filesBar}
         {uploadMsgs}
-        {renderBody()}
+        {renderBody(isAdmin)}
       </div>
     )
   }
