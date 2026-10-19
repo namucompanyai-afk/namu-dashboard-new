@@ -10,10 +10,12 @@
 
 import React, { useMemo, useState } from 'react'
 import {
+  NO_CHANGE_RATIO,
   STATUS_TAG_LABEL,
   normName,
   statusTagOf,
   todoCopyText,
+  todoLineOf,
   type CampaignJudgement,
   type FollowupItem,
   type StatusTag,
@@ -47,6 +49,8 @@ const ICON: Record<string, string> = {
   low: 'M4 20h16M6 16v-4M12 16V8M18 16v-6',
   worse: 'M12 21L2 4h20L12 21z',
   off: 'M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10',
+  nosale: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM8 12h8',
+  nomargin: 'M4 4h16v16H4zM9 9h6M9 15h6',
   none: 'M5 12h14',
 }
 const Ico = ({ k }: { k: string }) => (
@@ -68,6 +72,14 @@ async function copyText(text: string): Promise<boolean> {
 const VERDICTS: { v: Verdict | '조치 없음'; k: string }[] = [
   { v: '개선', k: 'keep' }, { v: '악화', k: 'worse' }, { v: '변화 없음', k: 'low' }, { v: '비교 불가', k: 'wait' }, { v: '조치 없음', k: 'none' },
 ]
+/** 판정 기준 말풍선 (칩·목록 표 판정 칸) */
+const VERDICT_RULE: Record<Verdict | '조치 없음', string> = {
+  개선: '이번 주 광고 손익이 지난주보다 좋아짐 (차이가 그 주 광고비의 5% 넘음)',
+  악화: '이번 주 광고 손익이 지난주보다 나빠짐 (차이가 그 주 광고비의 5% 넘음)',
+  '변화 없음': `손익 변동이 그 주 광고비의 ${Math.round(NO_CHANGE_RATIO * 100)}% 이내`,
+  '비교 불가': '두 주 중 하나에 기록이 없거나, 이번 주 클릭 20건 미만(모수 부족)',
+  '조치 없음': '지난주에 쿠팡 반영 완료 기록이 없는 캠페인',
+}
 export function LastWeekChips({ followup, judged, prev, cur, clicksKnown }: {
   followup: FollowupItem[]
   judged: CampaignJudgement[]
@@ -103,12 +115,12 @@ export function LastWeekChips({ followup, judged, prev, cur, clicksKnown }: {
         {VERDICTS.map(({ v, k }) => {
           const n = v === '조치 없음' ? noAct.length : counts[v] || 0
           return (
-            <button key={v} type="button" className={`adw-tag ${k} chipbtn`} aria-pressed={sel === v} onClick={() => setSel((s) => (s === v ? null : v))}>
+            <button key={v} type="button" className={`adw-tag ${k} chipbtn`} aria-pressed={sel === v} title={VERDICT_RULE[v]} onClick={() => setSel((s) => (s === v ? null : v))}>
               <Ico k={k} />{v}{v === '악화' ? '▼' : ''} {n}
             </button>
           )
         })}
-        <span className="muted small">ROAS·손익은 지난주({md(prev.startDate)}~{md(prev.endDate)}) → 이번 주({md(cur.startDate)}~{md(cur.endDate)}) · 반영 7일 안이라 다음 주 재판정{!clicksKnown ? ' · 클릭 20건 미만 판정은 주간 파일 올리면 표시' : ''}</span>
+        <span className="muted small">ROAS·손익은 지난주({md(prev.startDate)}~{md(prev.endDate)}) → 이번 주({md(cur.startDate)}~{md(cur.endDate)}) · 판정은 손익 기준, 변화 없음 = 손익 변동이 그 주 광고비의 {Math.round(NO_CHANGE_RATIO * 100)}% 이내 · 반영 7일 안이라 다음 주 재판정{!clicksKnown ? ' · 클릭 20건 미만 판정은 주간 파일 올리면 표시' : ''}</span>
       </div>
       {sel && sel !== '조치 없음' && (
         <div className="adw-tw"><table className="adw-ltab adw-fu">
@@ -133,7 +145,7 @@ export function LastWeekChips({ followup, judged, prev, cur, clicksKnown }: {
                   <td className="r num"><BeforeAfter a={f.roas[0]} b={f.roas[1]} fmt={pct} /></td>
                   <td className="r num">{pct(f.after?.bepPct)}</td>
                   <td className="r num"><span className={signCls(p0)}>{p0 == null ? '—' : sgn(p0)}</span> → <b className={signCls(p1)}>{p1 == null ? '—' : sgn(p1)}</b></td>
-                  <td><Tag k={k} label={f.verdict} /></td>
+                  <td><span title={VERDICT_RULE[f.verdict]}><Tag k={k} label={f.verdict} /></span></td>
                 </tr>
               )
             })}
@@ -165,22 +177,28 @@ export function LastWeekChips({ followup, judged, prev, cur, clicksKnown }: {
 
 // ── ④ 이번 주 할 일 ────────────────────────────────────────────
 export type TodoRow = { j: CampaignJudgement; plan: TodoPlan | null; done: string | null }
-export function TodoBlock({ rows, has30, file30, onReflect }: {
+export function TodoBlock({ rows, has30, file30, gapNote, onReflect }: {
   rows: TodoRow[]
   /** 30일 파일이 이 화면에 있는지 (없으면 키워드 조치 생략 안내) */
   has30: boolean
   file30: { startDate: string; endDate: string } | null
+  /** 주간·30일 파일 종료일 3일 이상 차이 — 키워드 조치 숨기고 이 문구 */
+  gapNote?: string | null
   /** 관리자만 — 없으면 '쿠팡 반영 완료' 버튼을 그리지 않음 */
   onReflect?: (row: TodoRow) => Promise<void>
 }) {
-  const n = rows.filter((r) => !r.done).length
+  const live = rows.filter((r) => !r.done)
+  const nBep = live.filter((r) => r.j.decision === 'todo').length
+  const nSale = live.filter((r) => r.j.decision === 'nosale').length
+  const nMargin = live.filter((r) => r.j.decision === 'nomargin').length
   return (
     <section className="adw-card adw-todo" aria-labelledby="adw-h-todo">
       <h2 id="adw-h-todo">이번 주 할 일 <span className="sub">
-        2주 연속 BEP 미달 {n}개 · 효율 ≥ BEP 는 건드리지 않음 · 입찰가 VAT 별도 · 인하는 주 30% 상한 · 처리 후 쿠팡 반영 완료
+        2주 연속 BEP 미달 {nBep}개{nSale ? ` · 판매 0 ${nSale}개(클릭 20↑인데 광고 매출 0, 그 주 바로)` : ''}{nMargin ? ` · 마진 미등록 ${nMargin}개` : ''} · 효율 ≥ BEP 는 건드리지 않음 · 입찰가 VAT 별도 · 인하는 주 30% 상한 · 처리 후 쿠팡 반영 완료
         {has30 && file30 ? ` · 키워드·입찰은 30일 파일 ${md(file30.startDate)}~${md(file30.endDate)} 기준` : ''}
       </span></h2>
-      {!has30 && <div className="adw-note">30일 파일 올리면 키워드 조치 표시 (지금은 목표 ROAS 판정만)</div>}
+      {gapNote ? <div className="adw-warn" role="status"><span aria-hidden="true">⚠</span><div>{gapNote}</div></div>
+        : !has30 && <div className="adw-note">30일 파일 올리면 키워드 조치 표시 (지금은 목표 ROAS 판정만)</div>}
       {rows.length === 0 ? (
         <div className="muted" style={{ padding: '8px 0' }}>이번 주 할 일 없음 — 2주 연속 BEP 미달 캠페인 없음</div>
       ) : rows.map((row, i) => <TodoItem key={row.j.campaignId} i={i} row={row} has30={has30} onReflect={onReflect} />)}
@@ -204,19 +222,23 @@ function TodoItem({ i, row, has30, onReflect }: { i: number; row: TodoRow; has30
   }
   const goal = !j.isAi ? '—' : `${j.applied == null ? '미입력' : `${j.applied}%`}`
   const hasKw = !!plan && (plan.movePairs.length + plan.bidLines.length + plan.extraBidLines.length > 0)
+  const special = todoLineOf(j) // 판매 0 · 마진 미등록 줄
+  const tagK = j.decision === 'nosale' ? 'nosale' : j.decision === 'nomargin' ? 'nomargin' : null
   return (
     <div className={`adw-todo-item${done ? ' done' : ''}`}>
       <div>
-        <div className="t">{i + 1}. {j.campaignName}</div>
+        <div className="t">{i + 1}. {j.campaignName} {tagK && <Tag k={tagK} label={STATUS_TAG_LABEL[tagK]} />}</div>
         <div className="m">ID {j.campaignId} · {j.channel === '3P' ? '윙 광고센터' : '서플라이어 허브 광고센터'}</div>
         <div className="m num">지난주 {j.prev ? pct(j.prev.roasPct) : '—'} → 이번 주 <b>{j.cur ? pct(j.cur.roasPct) : pct(j.roasPct)}</b> / BEP {pct(j.bep)}</div>
       </div>
       <div>
         <div className="m">목표 ROAS</div>
         <div className="num">{goal}{j.isAi && j.targetAction ? <> → <b>{j.targetAction}</b></> : null}</div>
-        {!j.isAi && <div className="m">{j.targetAction}</div>}
+        {!j.isAi && j.targetAction && <div className="m">{j.targetAction}</div>}
+        {!j.targetAction && tagK && <div className="m">목표 조정 없음 — 아래 조치 먼저</div>}
       </div>
       <div>
+        {special && <div className="acthead" style={{ color: 'var(--adw-danger)' }}>{special}</div>}
         {!has30 && <div className="m">30일 파일 올리면 키워드 조치 표시</div>}
         {has30 && plan && !plan.inFile && <div className="m">30일 파일에 이 캠페인 없음 — 키워드 조치 생략</div>}
         {plan && plan.movePairs.length > 0 && (
@@ -259,9 +281,10 @@ function TodoItem({ i, row, has30, onReflect }: { i: number; row: TodoRow; has30
 
 // ── ⑤ 전체 캠페인 표 ───────────────────────────────────────────
 type SortKey = 'adCostVat' | 'revenue' | 'roasPct' | 'adProfit' | 'clicks'
-const TAG_ORDER: StatusTag[] = ['todo', 'wait', 'watch', 'keep', 'low', 'off']
+const TAG_ORDER: StatusTag[] = ['todo', 'nosale', 'nomargin', 'wait', 'watch', 'keep', 'low', 'off']
 const TAG_RULE: Record<StatusTag, string> = {
-  todo: '2주 연속 BEP 미달', wait: '반영 7일 안', watch: '1주만 미달·기록 부족', keep: '효율 ≥ BEP', low: '클릭 <20', off: '운영 메모 OFF', none: '',
+  todo: '2주 연속 BEP 미달', nosale: '클릭 20↑·광고 매출 0 (그 주 바로)', nomargin: '매출 있는데 BEP 없음 (마진계산 미등록)',
+  wait: '반영 후 7일 안 (파일 마지막 날 기준)', watch: '1주만 미달·기록 부족', keep: '효율 ≥ BEP', low: '클릭 <20', off: '운영 메모 OFF(종류)', none: '',
 }
 export function CampaignTable({ judged, clicksKnown, lag, weekLabel, openId, onOpen, renderDetail }: {
   judged: CampaignJudgement[]
@@ -391,6 +414,8 @@ export const WEEKLY_BLOCKS_CSS = `
 .adw-tag.keep{color:var(--adw-ok);border-color:color-mix(in srgb,var(--adw-ok) 45%,transparent);background:color-mix(in srgb,var(--adw-ok) 10%,var(--adw-card))}
 .adw-tag.low{color:var(--adw-muted-fg)}.adw-tag.none{color:var(--adw-muted-fg);background:var(--adw-muted)}
 .adw-tag.off{color:#374151;border-color:#9ca3af;background:#f3f4f6}
+.adw-tag.nosale{color:#B91C1C;border-color:#FCA5A5;background:#FEF2F2;font-weight:700}
+.adw-tag.nomargin{color:#9A3412;border-color:#FDBA74;background:#FFF7ED}
 .chipbtn{cursor:pointer;font:inherit;font-size:12px}.chipbtn[aria-pressed=true]{outline:2px solid var(--adw-ring);outline-offset:1px;font-weight:700}.chipbtn:focus-visible{outline:2px solid var(--adw-ring);outline-offset:2px}
 .adw-tw{overflow:auto;border:1px solid var(--adw-border);border-radius:12px;margin-top:8px}
 .adw table{width:100%;border-collapse:separate;border-spacing:0;font-size:13px;min-width:980px}

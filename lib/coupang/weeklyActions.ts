@@ -189,7 +189,8 @@ export function buildWeeklyActions(view: AdAnalysisView, o: WeeklyOptions): Camp
     if (ai && c.bepPct != null) {
       const key = parseCampaignTargetKey(c.campaignName)?.key
       const next = Math.round(c.bepPct)
-      const applied = key ? (o.targets[key] ?? null) : null
+      // 같은 prefix AI 캠페인이 둘이면 'key#campaignId' 로 분리 저장한 값 우선 (weeklyJudge.targetOf 와 같은 규칙)
+      const applied = key ? (o.targets[`${key}#${c.campaignId}`] ?? o.targets[key] ?? null) : null
       if (applied == null || next - applied >= BEP_CHANGE_PP) slot(c).bepChange = { applied, next }
       else if (applied - next >= BEP_CHANGE_PP) {
         // 내리기 — 30일 실제 ROAS 가 지금 목표를 맞출 때만. 못 맞추면 목표 유지 (키워드 정리 먼저)

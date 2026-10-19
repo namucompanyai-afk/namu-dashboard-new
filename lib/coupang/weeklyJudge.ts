@@ -27,7 +27,15 @@ import { campaignStatusOf, parseCampaignTargetKey, type CampaignActions, type Ca
 import type { WeeklySnapshot } from './weeklySnapshots'
 
 // ── 상수 ──
-export const OFF_RE = /\bOFF\b|끔|중지|꺼짐/i // 운영 메모에 이 말이 있으면 OFF 기록 — 자유 메모에 쓰면 할 일에서 빠지니 주의
+/** OFF 판정 폴백 — kind='off' 메모가 하나도 없는 캠페인만 자유 메모 글자로. '중지 검토'·'중지하지 말 것' 같은 부정형은 제외 (2026-10-19 보수) */
+export const OFF_RE = /\bOFF\b|끔|꺼짐|중지(?!\s*(검토|하지|말))/i
+/** 운영 메모 종류 — reflect 쿠팡 반영 완료 / off 캠페인 OFF / move1p 1P 이동 / note 그냥 메모 */
+export const NOTE_KINDS = ['reflect', 'off', 'move1p', 'note'] as const
+export type NoteKind = (typeof NOTE_KINDS)[number]
+export const NOTE_KIND_LABEL: Record<NoteKind, string> = { reflect: '반영 완료', off: 'OFF', move1p: '1P 이동', note: '메모' }
+/** 목표 ROAS 적용값 읽기 — 같은 prefix AI 캠페인이 둘이면 'key#campaignId' 로 분리 저장한 값을 먼저, 없으면 공용 key (2026-10-19 보수 ⑤) */
+export const targetOf = (targets: Record<string, number>, key: string | null, campaignId: string): number | null =>
+  key ? targets[`${key}#${campaignId}`] ?? targets[key] ?? null : null
 export const MIN_CLICKS = MIN_CLICKS_FOR_BID // 클릭 20건 미만 = 모수 부족 (키워드 기준을 캠페인 판정에도 씀)
 export const BEP_RAISE_PP = 10 // 목표를 올리는 기준 — BEP 와 10%p 이상 차이 (대시보드 BEP_CHANGE_PP 와 같은 값)
 export const OBSERVE_DAYS = 7 // 반영 뒤 7일 안 = 효과 확인 중
@@ -82,7 +90,8 @@ export function noteInfoOf(notes: JudgeNote[], campaignName: string, periodEnd: 
   return {
     lastReflect,
     observing: lastReflect != null && lastReflect >= observeFrom,
-    offNote: ns.find((n) => OFF_RE.test(n.text || ''))?.text ?? null,
+    // kind='off' 메모가 있으면 그것. 없으면(옛 메모) 종류 없는 자유 메모 글자로 폴백 — reflect·note 등 종류가 있는 메모는 글자로 안 봄
+    offNote: ns.find((n) => n.kind === 'off')?.text ?? ns.find((n) => !n.kind && OFF_RE.test(n.text || ''))?.text ?? null,
   }
 }
 
@@ -136,7 +145,8 @@ export type JudgeInput = {
   bepPct: number | null
   adProfit: number
 }
-export type Decision = 'todo' | 'keep' | 'watch' | 'skip' | 'nobep'
+/** nosale = 클릭 ≥20 인데 광고 매출 0 → 그 주 바로 '키워드 점검' (2주 조건 없음) · nomargin = 매출 있는데 BEP 없음(마진계산 미등록) · nobep = 그 밖에 BEP 없음(클릭 모름 등) */
+export type Decision = 'todo' | 'keep' | 'watch' | 'skip' | 'nobep' | 'nosale' | 'nomargin'
 export type CampaignJudgement = JudgeInput & NoteInfo & {
   isAi: boolean
   key: string | null
@@ -167,9 +177,10 @@ export type JudgeContext = {
   /** 판정 기간 끝 (파일 종료일) — 최근 반영 7일 계산 기준 */
   periodEnd: string
 }
-export function skipReasonOf(x: { lowSample: boolean; clicks: number | null; offNote: string | null; observing: boolean; lastReflect: string | null }): string | null {
+export function skipReasonOf(x: { lowSample: boolean; clicks: number | null; offNote: string | null; observing: boolean; lastReflect: string | null; noSale?: boolean }): string | null {
   if (x.lowSample) return `모수 부족 (클릭 ${x.clicks})`
   if (x.offNote) return 'OFF 기록'
+  if (x.noSale) return null // 판매 0 은 최근 반영이어도 바로 봄 (2026-10-19 보수 ①)
   if (x.observing) return `최근 반영 (${x.lastReflect}, 효과 확인 전 — 7일 안 됨)`
   return null
 }
@@ -179,9 +190,11 @@ export function judgeCampaign(c: JudgeInput, ctx: JudgeContext): CampaignJudgeme
   const lowSample = clicksKnown && (c.clicks ?? 0) < MIN_CLICKS
   const isAi = isAiCampaignName(c.type, c.campaignName)
   const key = parseCampaignTargetKey(c.campaignName)?.key ?? null
-  const applied = isAi && key ? ctx.targets[key] ?? null : null
+  const applied = isAi ? targetOf(ctx.targets, key, c.campaignId) : null
   const w = weeksOf(ctx.prevWeek, ctx.curWeek, c.campaignName)
-  const skipReason = skipReasonOf({ lowSample, clicks: c.clicks, offNote: info.offNote, observing: info.observing, lastReflect: info.lastReflect })
+  // 판매 0 = 클릭 ≥20(클릭을 알 때만) 인데 광고 매출 0 — 광고비만 나가는 캠페인, 그 주 바로 키워드 점검
+  const noSale = clicksKnown && !lowSample && !(c.revenue > 0)
+  const skipReason = skipReasonOf({ lowSample, clicks: c.clicks, offNote: info.offNote, observing: info.observing, lastReflect: info.lastReflect, noSale })
   const base: CampaignJudgement = {
     ...c, ...info, isAi, key, lowSample, clicksKnown, skipReason, ...w, applied,
     bep: c.bepPct == null ? null : Math.round(c.bepPct),
@@ -189,7 +202,8 @@ export function judgeCampaign(c: JudgeInput, ctx: JudgeContext): CampaignJudgeme
     dashStatus: campaignStatusOf({ bepPct: c.bepPct, adCostVat: c.adCostVat, adProfit: c.adProfit } as Parameters<typeof campaignStatusOf>[0]),
   }
   if (skipReason) return { ...base, decision: 'skip' }
-  if (c.bepPct == null) return base // BEP 없음 → 확인 필요
+  if (noSale) return { ...base, decision: 'nosale' }
+  if (c.bepPct == null) return c.revenue > 0 ? { ...base, decision: 'nomargin' } : base // 매출 있는데 BEP 없음 = 마진계산 미등록 / 그 밖은 확인 필요
   const bep = Math.round(c.bepPct)
   const eff = w.cur ?? { roasPct: rnd(c.roasPct), bepPct: rnd(c.bepPct) }
   const effOk = eff.roasPct != null && eff.bepPct != null && eff.roasPct >= eff.bepPct
@@ -228,14 +242,16 @@ export function judgeInputFromSnapshot(s: WeeklySnapshot): JudgeInput[] {
   })
 }
 
-/** 캠페인 표 상태 태그 — 표시 순서: 할 일 → OFF → 모수 부족 → 효과 확인 중 → 관찰 → 그대로 둠 → — */
-export type StatusTag = 'todo' | 'off' | 'low' | 'wait' | 'watch' | 'keep' | 'none'
+/** 캠페인 표 상태 태그 — 표시 순서: 할 일 → OFF → 판매 0 → 마진 미등록 → 모수 부족 → 효과 확인 중 → 관찰 → 그대로 둠 → — */
+export type StatusTag = 'todo' | 'off' | 'nosale' | 'nomargin' | 'low' | 'wait' | 'watch' | 'keep' | 'none'
 export const STATUS_TAG_LABEL: Record<StatusTag, string> = {
-  todo: '할 일', off: 'OFF', low: '모수 부족', wait: '효과 확인 중', watch: '관찰', keep: '그대로 둠', none: '—',
+  todo: '할 일', off: 'OFF', nosale: '판매 0', nomargin: '마진 미등록', low: '모수 부족', wait: '효과 확인 중', watch: '관찰', keep: '그대로 둠', none: '—',
 }
 export function statusTagOf(j: CampaignJudgement): StatusTag {
   if (j.decision === 'todo') return 'todo'
   if (j.offNote) return 'off'
+  if (j.decision === 'nosale') return 'nosale'
+  if (j.decision === 'nomargin') return 'nomargin'
   if (j.lowSample) return 'low'
   if (j.observing) return 'wait'
   if (j.decision === 'watch') return 'watch'
@@ -417,9 +433,17 @@ export function buildTodoPlans(todos: { campaign: string; isAi: boolean }[], ctx
   return out
 }
 
+/** 판매 0·마진 미등록 할 일 줄 (화면·리포트 공통) */
+export function todoLineOf(j: CampaignJudgement): string | null {
+  if (j.decision === 'nosale') return `키워드 점검 (판매 0, 광고비 ${Math.round(j.adCostVat).toLocaleString('ko-KR')}원, 클릭 ${j.clicks ?? '—'})`
+  if (j.decision === 'nomargin') return `마진계산 등록 (매출 ${Math.round(j.revenue).toLocaleString('ko-KR')}원인데 BEP 없음 — 전환 옵션이 나무_마스터 마진계산에 없음)`
+  return null
+}
 /** 할 일 한 건 복사용 문장 (광고센터 입력용 — 리포트·화면 공통) */
 export function todoCopyText(j: CampaignJudgement, plan: TodoPlan | null): string {
   const L: string[] = [j.campaignName]
+  const line = todoLineOf(j)
+  if (line) L.push(line)
   if (j.targetAction) L.push(`목표 ROAS: ${j.applied == null ? (j.isAi ? '미입력' : '—') : `${j.applied}%`} → ${j.targetAction}`)
   if (plan) {
     for (const m of plan.movePairs) L.push(`- ${m.keyword}: ① ${m.manual} ② ${m.ai}`)

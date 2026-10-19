@@ -112,7 +112,12 @@ export function headlineAuto(cur: WeekPoint | undefined, prev: WeekPoint | undef
   const pct = (v: number) => `${v < 0 ? '−' : '+'}${Math.abs(Math.round(v))}%`
   const prof: Seg[] = [{ t: '손익 ' }, dp >= 0 ? { t: `${man(dp)} 개선`, tone: 'up' } : { t: `${man(dp)} 악화`, tone: 'down' }]
   let body: string
-  if (dc < 0 && dr < 0)
+  const flatCost = Math.abs(pc) <= 0.5 // 광고비 변동 ±0.5% 이내 = '거의 같고' (2026-10-19 보수 ⑥)
+  const flatRev = Math.abs(pr) <= 0.5
+  if (flatCost && flatRev) body = '광고비·매출 거의 같아 '
+  else if (flatCost) body = `광고비 거의 같고 매출(${pct(pr)}) ${dr < 0 ? '줄어 ' : '늘어 '}`
+  else if (flatRev) body = `광고비(${pct(pc)}) ${dc < 0 ? '줄였는데' : '늘렸는데'} 매출은 거의 같아 `
+  else if (dc < 0 && dr < 0)
     body = Math.abs(pc) >= Math.abs(pr)
       ? `광고비·매출 둘 다 줄었으나 광고비(${pct(pc)})가 매출(${pct(pr)})보다 더 줄어 `
       : `광고비(${pct(pc)})보다 매출(${pct(pr)})이 더 크게 줄어 `

@@ -16,7 +16,6 @@ import { build1PView, isRetailRow, augmentMasterWith1P, type OnePView } from '@/
 import { downloadFormattedXlsx, type XlsxCol } from '@/lib/xlsxExport'
 import { packAdRows, unpackAdRows } from '@/lib/coupang/adRowsPack'
 import { extractPeriodFromFileName } from '@/lib/coupang/parsers/adCampaign'
-import { useConfirm } from '@/components/ui/useConfirm'
 import { useMarginStore } from '@/lib/coupang/store'
 import { useServerRole } from '@/lib/useCLevel'
 import { parseAdCampaign } from '@/lib/coupang/parsers/adCampaign'
@@ -62,6 +61,7 @@ import {
 import { findMarginMissing } from '@/lib/coupang/marginMissing'
 import { buildWeeks13, type BackfillRow, type SalesRow, type WeeklyComment } from '@/lib/coupang/adWeekly13'
 import { WeeklyOverview } from './WeeklyOverview'
+import { HistoryNotesSection } from './HistoryNotes'
 import { CampaignTable, LastWeekChips, MobileNote, TodoBlock, WEEKLY_BLOCKS_CSS, type TodoRow } from './WeeklyBlocks'
 import {
   buildTodoPlans,
@@ -520,6 +520,8 @@ export default function AdAnalysisPage() {
   const [weekly, setWeekly] = useState<WeeklySnapshot[]>([])
   // 이 화면에서 올린 주간 파일의 분석(클릭 포함) — 하단 캠페인 표·모수 판정용 (새로고침하면 사라져 주간 기록으로 대신)
   const [sessionWeeklyView, setSessionWeeklyView] = useState<{ view: ReturnType<typeof buildAdAnalysisView>; period: { startDate: string; endDate: string }; fileName: string } | null>(null)
+  // 이 화면에서 올린 주간 파일 (기간 끝이 가장 늦은 것) — 상태 바·종료일 차이 경고·14일 미반영(주간 기준)용
+  const [sessionWeekly, setSessionWeekly] = useState<{ startDate: string; endDate: string; days: number; fileName: string; saved: boolean; downloadedAt?: string } | null>(null)
   useEffect(() => {
     if (!isAdmin) return
     let cancelled = false
@@ -596,9 +598,16 @@ export default function AdAnalysisPage() {
   const followup = useMemo(() => followupLastWeek(prevWeekSnap, curWeekSnap, notes), [prevWeekSnap, curWeekSnap, notes])
   // 이 화면에서 '쿠팡 반영 완료' 누른 캠페인 (반영 직후 할 일에서 사라지지 않고 '반영됨'으로 남김)
   const [sessionReflected, setSessionReflected] = useState<Map<string, string>>(new Map())
-  const has30 = mode === 'live' && !!adAnalysisLive && viewAll.loaded && !hideBep
+  // 주간·30일 파일 종료일이 3일 이상 차이 나면 키워드 계획·행 클릭 상세를 숨김 (스킬 period_mismatch 와 같은 기준, 2026-10-19 보수 ③)
+  const weeklyEndForGap = sessionWeekly?.endDate ?? curWeekSnap?.endDate ?? null
+  const gap30 = weeklyEndForGap && adAnalysisLive?.period ? Math.abs(dayDiff(weeklyEndForGap, adAnalysisLive.period.endDate)) : null
+  const gapBlock = gap30 != null && gap30 >= END_GAP_MAX
+  const has30 = mode === 'live' && !!adAnalysisLive && viewAll.loaded && !hideBep && !gapBlock
+  const gapNote = mode === 'live' && adAnalysisLive?.period && gapBlock && weeklyEndForGap
+    ? `30일 파일 다시 받아 올리세요 (종료일 주간 ${fmtMd(weeklyEndForGap)} vs 30일 ${fmtMd(adAnalysisLive.period.endDate)}, ${gap30}일 차이) — 그동안 키워드 조치 숨김`
+    : null
   const todoJudged = useMemo(
-    () => judged.filter((j) => j.decision === 'todo' || sessionReflected.has(j.campaignId)).sort((a, b) => a.adProfit - b.adProfit),
+    () => judged.filter((j) => j.decision === 'todo' || j.decision === 'nosale' || j.decision === 'nomargin' || sessionReflected.has(j.campaignId)).sort((a, b) => a.adProfit - b.adProfit),
     [judged, sessionReflected],
   )
   // 키워드·입찰 계획 — 30일 파일이 이 화면에 있을 때만 (대시보드 할 일 함수 buildWeeklyActions 결과를 스킬과 같은 규칙으로 가공)
@@ -648,7 +657,8 @@ export default function AdAnalysisPage() {
     const jj = await res.json().catch(() => null)
     if (!res.ok || !jj?.item) throw new Error(jj?.error || `HTTP ${res.status}`)
     setNotes((prev) => [...prev, jj.item as ReflectNote])
-    if (raise && j.key) setTargetForKey(j.key, j.bep!)
+    // 같은 prefix AI 캠페인이 둘이면 'key#campaignId' 로 따로 저장 (weeklyJudge.targetOf 가 먼저 읽음)
+    if (raise && j.key) setTargetForKey(judged.some((x) => x.campaignId !== j.campaignId && x.key === j.key) ? `${j.key}#${j.campaignId}` : j.key, j.bep!)
     const now = new Date(Date.now() + 9 * 3600 * 1000).toISOString()
     setSessionReflected((m) => new Map(m).set(j.campaignId, `${now.slice(5, 7)}/${now.slice(8, 10)} ${now.slice(11, 16)}`))
     setNotesReload((n) => n + 1)
@@ -769,15 +779,13 @@ export default function AdAnalysisPage() {
   // 라이브 광고 엑셀 업로드 — 여러 파일, store 의 rawAdCampaign 안 건드림. 파일명 기간으로 구분:
   // 10일 이하 = 주간 기록 저장(관리자만) · 25일 이상 = 30일 분석 화면(+ 스위치 켜졌으면 서버 저장) · 11~24일 = 건너뜀
   const [uploadNote, setUploadNote] = useState<string | null>(null)
-  // 이 화면에서 올린 주간 파일 (기간 끝이 가장 늦은 것) — 상태 바·종료일 차이 경고용
-  const [sessionWeekly, setSessionWeekly] = useState<{ startDate: string; endDate: string; days: number; fileName: string; saved: boolean } | null>(null)
   async function handleLiveFiles(files: File[]) {
     setUploadError(null)
     setUploadNote(null)
     const notes: string[] = []
     const warns: string[] = []
     let monthly: { rows: AdCampaignRow[]; meta: { fileName: string; uploadedAt: string; rowCount: number; downloadedAt: string }; period: { startDate: string; endDate: string; days: number } | null; end: string } | null = null
-    let weeklyFile: { startDate: string; endDate: string; days: number; fileName: string; saved: boolean } | null = null
+    let weeklyFile: { startDate: string; endDate: string; days: number; fileName: string; saved: boolean; downloadedAt?: string } | null = null
     for (const file of files) {
       try {
         const r = parseAdCampaign(await file.arrayBuffer(), file.name)
@@ -792,6 +800,12 @@ export default function AdAnalysisPage() {
         const period = startDate && endDate && days ? { startDate, endDate, days } : null
         const label = period ? `${fmtMd(period.startDate)}~${fmtMd(period.endDate)}(${period.days}일)` : file.name
         if (period && period.days <= WEEKLY_MAX_DAYS) {
+          // 주간 기록은 월~일 7일 파일만 (자동 업로드 스크립트와 같은 검사) — 아니면 13주 꺾은선·지난주 비교가 깨져 저장 안 함 (2026-10-19 보수 ④)
+          const monday = new Date(`${period.startDate}T00:00:00Z`).getUTCDay() === 1
+          if (period.days !== 7 || !monday) {
+            warns.push(`${label}: 주간 기록은 월~일 7일 파일만 저장 — ${period.days !== 7 ? `${period.days}일 파일` : '시작일이 월요일 아님'}이라 저장 안 함 (6일 파일은 백필 전용)`)
+            continue
+          }
           // 주간 기록은 회사 기록 — 관리자만 저장 (게스트는 마진마스터가 없어 손익이 틀리게 남음)
           if (isAdmin) {
             const overlaps = await saveWeeklySnapshot(r.rows, period, file.name)
@@ -802,7 +816,8 @@ export default function AdAnalysisPage() {
           } else {
             warns.push(`${label}: 주간 파일은 이 계정에서 쓰지 않음 — 30일 파일(25일 이상)을 올리세요`)
           }
-          if (!weeklyFile || period.endDate > weeklyFile.endDate) weeklyFile = { ...period, fileName: file.name, saved: isAdmin }
+          const downloadedAt = new Date(file.lastModified + 9 * 3600 * 1000).toISOString().slice(0, 10)
+          if (!weeklyFile || period.endDate > weeklyFile.endDate) weeklyFile = { ...period, fileName: file.name, saved: isAdmin, downloadedAt }
         } else if (period && period.days >= MONTHLY_MIN_DAYS) {
           // 30일 파일이 여러 개면 기간 끝이 가장 늦은 것. 받은 날 = 파일 수정 시각(KST 날짜) — 14일 전환 미반영 경고용
           if (!monthly || period.endDate > monthly.end) {
@@ -850,6 +865,8 @@ export default function AdAnalysisPage() {
   const endGap = weeklySlot && livePeriod ? Math.abs(dayDiff(weeklySlot.endDate, livePeriod.endDate)) : null
   const liveDownloadedAt = adAnalysisLive?.meta?.downloadedAt
   const liveLag = mode === 'live' && livePeriod && liveDownloadedAt ? attributionLag(livePeriod.endDate, livePeriod.days, liveDownloadedAt) : null
+  // 전체 캠페인 표 위 14일 미반영 띠는 주간 파일 기준(7일) — 주간 파일이 이 화면에 없으면 30일 파일 기준(13일) (2026-10-19 보수 ⑥)
+  const weeklyLag = mode === 'live' && sessionWeekly?.downloadedAt ? attributionLag(sessionWeekly.endDate, sessionWeekly.days, sessionWeekly.downloadedAt) : null
 
   // 셀렉터/공통 헤더 — 어떤 분기든 항상 노출
   const headerNode = (
@@ -903,11 +920,11 @@ export default function AdAnalysisPage() {
       <style>{WEEKLY_BLOCKS_CSS}</style>
       <LastWeekChips followup={followup} judged={judged} prev={prevWeekSnap} cur={curWeekSnap} clicksKnown={clicksKnown} />
       <MobileNote />
-      <TodoBlock rows={todoRows} has30={has30} file30={has30 ? sourcePeriod : null} onReflect={reflectTodo} />
+      <TodoBlock rows={todoRows} has30={has30} file30={has30 ? sourcePeriod : null} gapNote={gapNote} onReflect={reflectTodo} />
       <CampaignTable
         judged={judged}
         clicksKnown={clicksKnown}
-        lag={liveLag}
+        lag={weeklyLag ?? liveLag}
         weekLabel={`주간 ${fmtMd(curWeekSnap.startDate)}~${fmtMd(curWeekSnap.endDate)}${sessionMatches ? ' (주간 파일)' : ' (주간 기록)'}`}
         openId={openCampId}
         onOpen={toggleCampaign}
@@ -1318,161 +1335,6 @@ function OptionBepInputCard({ options, manualBep, onChange }: {
           </tbody>
         </table>
       </div>
-    </div>
-  )
-}
-
-// ── 운영 메모 (영구 저장) ─────────────────────────────────────
-type HistoryNote = { id: string; ts: string; text: string }
-
-function fmtNoteTs(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-function HistoryNotesSection({ reloadKey = 0 }: { reloadKey?: number }) {
-  const { confirm, confirmModal } = useConfirm()
-  const [items, setItems] = useState<HistoryNote[]>([])
-  const [open, setOpen] = useState(false)
-  const [text, setText] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    fetch('/api/coupang-ad-history')
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return
-        const list = Array.isArray(j?.items) ? (j.items as HistoryNote[]) : []
-        setItems(list)
-      })
-      .catch(() => { if (!cancelled) setItems([]) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [reloadKey])
-
-  const sorted = useMemo(
-    () => [...items].sort((a, b) => (a.ts < b.ts ? 1 : -1)),
-    [items],
-  )
-
-  async function add() {
-    const t = text.trim()
-    if (!t || busy) return
-    setBusy(true)
-    try {
-      const res = await fetch('/api/coupang-ad-history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: t }),
-      })
-      const j = await res.json()
-      if (j?.item) {
-        setItems((prev) => [...prev, j.item as HistoryNote])
-        setText('')
-      } else {
-        alert(`저장 실패: ${j?.error ?? '알 수 없는 오류'}`)
-      }
-    } catch (e) {
-      alert(`저장 실패: ${String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function remove(id: string) {
-    if (!(await confirm({ message: '이 메모를 삭제할까요?' }))) return
-    setBusy(true)
-    try {
-      const res = await fetch(`/api/coupang-ad-history?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
-      const j = await res.json()
-      if (j?.ok) {
-        setItems((prev) => prev.filter((it) => it.id !== id))
-      } else {
-        alert(`삭제 실패: ${j?.error ?? '알 수 없는 오류'}`)
-      }
-    } catch (e) {
-      alert(`삭제 실패: ${String(e)}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="aa-sub-section" style={{ marginTop: 16 }}>
-      {confirmModal}
-      <div className="aa-sub-section-title" style={{ cursor: 'pointer' }} onClick={() => setOpen((v) => !v)}>
-        <span>📝 운영 메모 ({loading ? '…' : `${sorted.length}건`})</span>
-        <span style={{ fontSize: 12, color: '#64748B' }}>{open ? '▾ 접기' : '▸ 펼치기'}</span>
-      </div>
-      {open && (
-        <div style={{ padding: 12 }}>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-            <input
-              type="text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) add() }}
-              placeholder="예: 5.5일 제외 키워드 셋팅"
-              disabled={busy}
-              style={{ flex: 1, padding: '8px 10px', border: '1px solid #E2E8F0', borderRadius: 6, fontSize: 13, fontFamily: 'inherit' }}
-            />
-            <button
-              className="aa-btn btn-sm"
-              onClick={add}
-              disabled={busy || !text.trim()}
-              style={{ opacity: busy || !text.trim() ? 0.5 : 1 }}
-            >
-              추가
-            </button>
-          </div>
-          {sorted.length === 0 ? (
-            <div style={{ fontSize: 12, color: '#94A3B8', padding: '8px 4px' }}>
-              {loading ? '불러오는 중…' : '등록된 메모가 없습니다.'}
-            </div>
-          ) : (
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {sorted.map((it) => (
-                <li
-                  key={it.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 10,
-                    padding: '6px 8px',
-                    borderBottom: '1px solid #F1F5F9',
-                    fontSize: 13,
-                  }}
-                >
-                  <span className="mono" style={{ color: '#64748B', fontSize: 11, minWidth: 110, paddingTop: 2 }}>
-                    {fmtNoteTs(it.ts)}
-                  </span>
-                  <span style={{ flex: 1, whiteSpace: 'pre-wrap', color: '#1F2937' }}>{it.text}</span>
-                  <button
-                    onClick={() => remove(it.id)}
-                    disabled={busy}
-                    title="삭제"
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#94A3B8',
-                      cursor: 'pointer',
-                      fontSize: 14,
-                      padding: '0 4px',
-                    }}
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
     </div>
   )
 }

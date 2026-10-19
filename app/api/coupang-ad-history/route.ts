@@ -17,11 +17,16 @@ import { getData, saveData } from "@/lib/supabase";
 
 const KEY = 'coupang_ad_history_notes';
 
+// kind: reflect = 쿠팡 반영 완료(할 일 버튼) · off = 캠페인 OFF(판정에서 제외, 종류로만 판정) · move1p = 1P 이동 · 없음 = 그냥 메모
+// reason: 이유 한 줄 (선택). OFF·1P 이동 메모는 글 앞에 캠페인 이름을 그대로 써서 그 캠페인에 붙인다 (weeklyJudge notesOfCampaign)
+type NoteKind = 'reflect' | 'off' | 'move1p'
+const NOTE_KINDS: NoteKind[] = ['reflect', 'off', 'move1p']
 interface NoteItem {
   id: string;
   ts: string;
   text: string;
-  kind?: 'reflect';
+  kind?: NoteKind;
+  reason?: string;
   campaignKey?: string;
   campaignName?: string;
   period?: string;
@@ -68,12 +73,16 @@ export async function POST(request: Request) {
 
     const items = await loadItems();
     const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 300) : undefined);
+    const kind = NOTE_KINDS.includes(body?.kind) ? (body.kind as NoteKind) : undefined
     const newItem: NoteItem = {
       id: makeId(),
       ts: new Date().toISOString(),
       text,
+      // 종류(OFF·1P 이동)·이유 — 'note'/없음은 종류 없이 저장 (옛 메모와 같은 모양)
+      ...(kind && kind !== 'reflect' ? { kind, campaignName: str(body?.campaignName) } : {}),
+      ...(str(body?.reason) ? { reason: str(body?.reason) } : {}),
       // 쿠팡 반영 완료 기록이면 캠페인 식별값을 별도 필드로 (메모 문구 형식은 그대로)
-      ...(body?.kind === 'reflect'
+      ...(kind === 'reflect'
         ? {
             kind: 'reflect' as const,
             campaignKey: str(body?.campaignKey),
