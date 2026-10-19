@@ -8,7 +8,8 @@ import { parseCampaignTargetKey } from './weeklyActions'
 
 export const WEEKLY_SNAPSHOTS_KEY = 'coupang_ad_weekly_snapshots'
 
-type SnapTotals = { adCostVat: number; revenue: number; roasPct: number | null; bepPct: number | null; adProfit: number }
+// onePConvRevenue: revenue 중 3P 광고 → 같은 상품 1P 구매 매출 (2026-10-19 부터 기록. 그 전 기록엔 없음 = 미포함 기준)
+type SnapTotals = { adCostVat: number; revenue: number; roasPct: number | null; bepPct: number | null; adProfit: number; onePConvRevenue?: number }
 export type WeeklySnapshot = {
   startDate: string
   endDate: string
@@ -36,6 +37,7 @@ export function snapshotFromView(
       roasPct: v.avgRoasPct,
       bepPct: v.avgBepPct,
       adProfit: v.campaigns.reduce((s, c) => s + c.adProfit, 0),
+      onePConvRevenue: v.totalOnePConvRevenue,
     },
     campaigns: v.campaigns.map((c) => ({
       campaignId: c.campaignId,
@@ -46,6 +48,7 @@ export function snapshotFromView(
       roasPct: c.roasPct,
       bepPct: c.bepPct,
       adProfit: c.adProfit,
+      onePConvRevenue: c.onePConvRevenue,
     })),
   }
 }

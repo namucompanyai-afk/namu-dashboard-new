@@ -1424,7 +1424,10 @@ function CampaignRowGroup({ c, marginOff = false, hideBep = false, isOpen, onTog
         </td>
         <td>{typeBadge}</td>
         <td className="num">{fmtMan(c.adCostVat)}</td>
-        <td className="num">{fmtMan(c.revenue)}</td>
+        <td className="num">
+          {fmtMan(c.revenue)}
+          {c.onePConvRevenue > 0 && <div style={{ fontSize: 10, color: '#64748B' }}>1P 전환 포함 {fmtMan(c.onePConvRevenue)}</div>}
+        </td>
         <td className={`num ${roasClass}`}>{fmtRoas(c.roasPct)}</td>
         {!hideBep && (
           <td className="num" style={{ fontWeight: 700 }}>

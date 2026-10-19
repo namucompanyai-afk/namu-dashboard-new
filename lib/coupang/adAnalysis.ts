@@ -9,6 +9,10 @@
  *   추천 입찰가·BEP CPC 공식은 BEP 가 이미 ×1.1 이므로 VAT 환산(×1.1)을 빼서 결과는 전과 동일.
  * 1P(판매방식 Retail) 행: 매출 = 광고센터 전환매출(revenue14d), 1봉 마진·필수 ROAS 는 augmentMasterWith1P 가
  *   마진 마스터에 넣은 1P 옵션 행으로 들어온다 (onePAnalysis).
+ * 3P 광고 → 같은 상품 1P 옵션 구매 (2026-10-19 대표 결정): 3P 행의 전환 옵션이 마진계산 '쿠팡 1P' 행 옵션ID 이고
+ *   그 1P 별칭이 광고집행 3P 옵션의 별칭과 같으면 1P 행과 같은 방식으로 셈 — 매출 = 전환매출, 마진 = 판매 봉수 × 1봉 마진,
+ *   BEP = 그 1P 옵션의 필수 ROAS. 캠페인·합계에 onePConvRevenue 로 따로 남김. 별칭이 다르면(다른 상품) 지금처럼 제외.
+ *   캠페인 단위만 — 키워드 표 매출은 그대로.
  *
  * BEP 가중평균 (캠페인/키워드):
  *   BEP = Σ(rev_i × bep_i) / Σ(rev_i)
@@ -29,7 +33,7 @@
 
 import type { AdCampaignRow } from './parsers/adCampaign'
 import type { CostMaster, MarginCalcRow } from './parsers/marginMaster'
-import { isRetailRow } from './onePAnalysis'
+import { isRetailRow, make1PLinker } from './onePAnalysis'
 
 export type CampaignType = 'ai' | 'manual' | 'unknown'
 /** 추천 액션 4단:
@@ -138,10 +142,19 @@ function weightedBep(
   priceMap: Map<string, number>,
   exposureByOptionId: Map<string, string>,
   marginOff = false, // true면 가중치를 광고 엑셀 revenue14d 로 (마진 없이 수기 BEP)
+  cross?: (r: AdCampaignRow) => { rev: number; bepPct: number | null } | null, // 3P 광고 → 같은 상품 1P 구매 행
 ): number | null {
   let num = 0
   let den = 0
   for (const r of rows) {
+    const x = cross?.(r)
+    if (x) {
+      if (x.bepPct != null && x.bepPct > 0 && x.rev > 0) {
+        num += x.rev * x.bepPct
+        den += x.rev
+      }
+      continue
+    }
     const bep = bepByOptionId.get(r.adOptionId)
     if (bep == null || !Number.isFinite(bep) || bep <= 0) continue
     const rev = marginOff ? (r.revenue14d || 0) : rowRevenue(r, priceMap, exposureByOptionId)
@@ -228,6 +241,8 @@ export interface CampaignDiag {
   revenue: number
   /** 타상품 매출 — 다른 노출ID 로 전환된 분량 (참고용, ROAS 산출 제외) */
   otherProductRevenue: number
+  /** 3P 광고 → 같은 상품 1P 옵션 구매 매출 (revenue 에 포함된 금액, 2026-10-19~) */
+  onePConvRevenue: number
   /** ROAS (광고센터 기준) = revenue / adCostRaw × 100 (%) */
   roasPct: number | null
   /** 채널 — 3P / 1P(판매방식 Retail) */
@@ -341,6 +356,8 @@ export interface AdAnalysisView {
   loaded: boolean
   totalAdCostVat: number
   totalRevenue: number
+  /** totalRevenue 중 3P 광고 → 같은 상품 1P 구매 매출 */
+  totalOnePConvRevenue: number
   totalOrders: number
   avgRoasPct: number | null
   avgBepPct: number | null
@@ -419,6 +436,7 @@ export function buildAdAnalysisView(
       loaded: false,
       totalAdCostVat: 0,
       totalRevenue: 0,
+      totalOnePConvRevenue: 0,
       totalOrders: 0,
       avgRoasPct: null,
       avgBepPct: null,
@@ -439,8 +457,31 @@ export function buildAdAnalysisView(
   const marginOff = master == null
   const rowSplit = (r: AdCampaignRow) =>
     marginOff ? { self: r.revenue14d || 0, other: 0 } : splitRowRevenue(r, priceMap, exposureMap)
+  // 3P 광고 → 같은 상품 1P 옵션 구매 — 전환 옵션이 마진계산 1P 행(옵션ID)에 있고 1P 별칭 = 광고집행 3P 옵션 별칭일 때만
+  const oneLinker = !marginOff && master?.onePRows?.length ? make1PLinker(adRows.filter(isRetailRow), master.onePRows, master.marginRows) : null
+  const crossMemo = new Map<AdCampaignRow, { rev: number; margin: number; bepPct: number | null } | null>()
+  const cross1P = (r: AdCampaignRow) => {
+    if (!oneLinker || isRetailRow(r)) return null
+    if (crossMemo.has(r)) return crossMemo.get(r)!
+    let out: { rev: number; margin: number; bepPct: number | null } | null = null
+    const conv = String(r.convOptionId || '').trim()
+    const sold = r.sold14d || 0
+    const ad3P = rowMapAll.get(String(r.adOptionId || '').trim())
+    if (conv && sold > 0 && !priceMap.has(conv) && oneLinker.byOpt.has(conv) && ad3P && ad3P.saleChannel !== '1P') {
+      const link = oneLinker.skuLink(oneLinker.byOpt.get(conv))
+      if (link.kind === '1P' && link.alias && link.alias === ad3P.alias) {
+        const rev = r.revenue14d || 0
+        const f = link.taxable ? 1 : 1.1
+        // 1P 필수 ROAS (광고센터 기준) = 1봉 소비자가 ÷ (1봉 마진 ÷ f) — augmentMasterWith1P 와 같은 식
+        const bepPct = link.unitMargin > 0 && sold > 0 ? ((rev / sold) / (link.unitMargin / f)) * 100 : null
+        out = { rev, margin: sold * link.unitMargin, bepPct }
+      }
+    }
+    crossMemo.set(r, out)
+    return out
+  }
   const rowRev = (r: AdCampaignRow) =>
-    marginOff ? (r.revenue14d || 0) : rowRevenue(r, priceMap, exposureMap)
+    marginOff ? (r.revenue14d || 0) : (cross1P(r)?.rev ?? rowRevenue(r, priceMap, exposureMap))
 
   // 미매칭 집계 — convOptionId(매출 기준) priceMap 에 없는 row 의 광고비/판매수 합.
   // 마진 없으면 매칭 개념이 없으므로 빈 집계.
@@ -455,6 +496,7 @@ export function buildAdAnalysisView(
       const key = convId || adId
       if (!key) continue
       if (convId && priceMap.has(convId)) continue
+      if (cross1P(r)) continue // 3P 광고 → 같은 상품 1P 구매 — 1P 마진으로 셈
       // 1P 행: 전환·광고 옵션이 1P 합성 행으로 연결돼 있으면 매칭된 것
       if (isRetailRow(r) && (rowMapAll.has(convId) || rowMapAll.has(adId))) continue
       unmatchedAdCostRaw += r.adCost || 0
@@ -489,7 +531,14 @@ export function buildAdAnalysisView(
     // 매출 = Σ (sold14d × 마진M 실판매가) — self 만. 타상품 전환(다른 노출ID)은 other 로 별도.
     let revenue = 0
     let otherProductRevenue = 0
+    let onePConvRevenue = 0
     for (const r of rows) {
+      const x = cross1P(r)
+      if (x) {
+        revenue += x.rev
+        onePConvRevenue += x.rev
+        continue
+      }
       const split = rowSplit(r)
       revenue += split.self
       otherProductRevenue += split.other
@@ -524,7 +573,9 @@ export function buildAdAnalysisView(
       const mrRaw = conv ? rowMapAll.get(conv) : undefined
       // 3P 행은 3P 옵션 마진만 (1P 합성 행 제외) · 1P 행은 3P 전환이면 3P 마진, 1P 면 1봉 마진
       const mr = mrRaw && (isRetailRow(r) || mrRaw.saleChannel !== '1P') ? mrRaw : undefined
-      if (mr && mr.netProfit != null) marginSum += (r.sold14d || 0) * mr.netProfit
+      const x = cross1P(r)
+      if (x) marginSum += x.margin // 3P 광고 → 같은 상품 1P 구매: 판매 봉수 × 1봉 마진
+      else if (mr && mr.netProfit != null) marginSum += (r.sold14d || 0) * mr.netProfit
       // 과세 여부: 광고집행 옵션 기준 (3P 행은 3P 옵션 행만, 1P 행은 1P 합성 행 포함)
       const adRowRaw = rowMapAll.get(String(r.adOptionId || '').trim())
       const adRow = adRowRaw && (isRetailRow(r) || adRowRaw.saleChannel !== '1P') ? adRowRaw : undefined
@@ -534,7 +585,7 @@ export function buildAdAnalysisView(
 
     // ROAS 광고센터 기준 (VAT 별도 광고비)
     const roasPct = safeDiv(revenue, adCostRaw)
-    const bepPct = weightedBep(rows, bepMap, priceMap, exposureMap, marginOff)
+    const bepPct = weightedBep(rows, bepMap, priceMap, exposureMap, marginOff, cross1P)
     const gapPct = roasPct != null && bepPct != null ? roasPct * 100 - bepPct : null
 
     const searchRoas = safeDiv(searchRev, searchRaw)
@@ -548,6 +599,7 @@ export function buildAdAnalysisView(
       adCostVat,
       revenue,
       otherProductRevenue,
+      onePConvRevenue,
       roasPct: roasPct != null ? roasPct * 100 : null,
       channel,
       marginSum,
@@ -572,6 +624,7 @@ export function buildAdAnalysisView(
 
   const totalAdCostVat = campaigns.reduce((s, c) => s + c.adCostVat, 0)
   const totalRevenue = campaigns.reduce((s, c) => s + c.revenue, 0)
+  const totalOnePConvRevenue = campaigns.reduce((s, c) => s + c.onePConvRevenue, 0)
   const totalOrders = campaigns.reduce((s, c) => s + c.orders, 0)
   const totalAdCostRaw = campaigns.reduce((s, c) => s + c.adCostRaw, 0)
   const avgRoasPct = totalAdCostRaw > 0 ? (totalRevenue / totalAdCostRaw) * 100 : null // 광고센터 기준
@@ -589,6 +642,7 @@ export function buildAdAnalysisView(
     loaded: true,
     totalAdCostVat,
     totalRevenue,
+    totalOnePConvRevenue,
     totalOrders,
     avgRoasPct,
     avgBepPct,

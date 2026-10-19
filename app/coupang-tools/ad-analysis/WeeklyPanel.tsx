@@ -107,7 +107,10 @@ export function ProfitLine({ view, days }: { view: AdAnalysisView; days: number 
     <div style={{ ...card, margin: '8px 0', padding: '10px 14px', display: 'flex', flexWrap: 'wrap', gap: '6px 18px', alignItems: 'baseline', fontSize: 13 }}>
       <b style={{ color: '#475569' }}>{days ? `${days}일` : '기간'} 손익</b>
       <span>광고비(VAT 포함) <b>{won(view.totalAdCostVat)}</b></span>
-      <span>광고 매출 <b>{won(view.totalRevenue)}</b></span>
+      <span>
+        광고 매출 <b>{won(view.totalRevenue)}</b>
+        {view.totalOnePConvRevenue > 0 && <span style={{ color: '#64748B', fontSize: 12 }}> (1P 전환 포함 {won(view.totalOnePConvRevenue)})</span>}
+      </span>
       <span>
         ROAS <b style={{ color: under ? '#DC2626' : '#059669' }}>{pct(view.avgRoasPct)}</b> / BEP ROAS <b>{pct(view.avgBepPct)}</b>
       </span>
@@ -644,6 +647,16 @@ export function WeekCompareBox({ snapshots, notes }: { snapshots: WeeklySnapshot
           ))}
         </tbody>
       </table>
+      {cur.total.onePConvRevenue != null && prev.total.onePConvRevenue == null && (
+        <div style={{ fontSize: 12, color: '#B45309', marginTop: 6 }}>
+          ※ 이번 주부터 3P 광고로 팔린 같은 상품 1P(로켓) 매출 포함 (1P 전환 {Math.round(cur.total.onePConvRevenue).toLocaleString('ko-KR')}원) — 지난주 기록은 미포함 기준이라 매출·ROAS·손익 차이에 이 금액이 섞여 있음
+        </div>
+      )}
+      {cur.total.onePConvRevenue != null && prev.total.onePConvRevenue != null && cur.total.onePConvRevenue + prev.total.onePConvRevenue > 0 && (
+        <div style={{ fontSize: 12, color: '#64748B', marginTop: 6 }}>
+          광고 매출 중 1P 전환: 지난주 {Math.round(prev.total.onePConvRevenue).toLocaleString('ko-KR')}원 / 이번 주 {Math.round(cur.total.onePConvRevenue).toLocaleString('ko-KR')}원
+        </div>
+      )}
       {adjusted.length > 0 && (
         <>
           <div style={{ fontSize: 13, fontWeight: 700, margin: '12px 0 6px' }}>지난주 조정한 캠페인 결과</div>
