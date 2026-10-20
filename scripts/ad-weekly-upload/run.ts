@@ -13,6 +13,7 @@
  *
  * 키: 저장소 루트 .env.local — SUPABASE_SERVICE_ROLE_KEY(서버 키) · GOOGLE_SERVICE_ACCOUNT(나무_마스터 읽기, 화면과 같은 마진마스터)
  *     둘 중 하나라도 없으면 아무것도 쓰지 않고 멈춘 뒤 알림 (처리 기록도 안 남겨서 키를 넣으면 다음 실행에 처리된다).
+ * 환경변수(없으면 위 기본값 그대로): AD_UPLOAD_DIR = 감시 폴더 · AD_UPLOAD_ENV = 키 파일 경로 (16GB 크롤링 맥용, scripts/crawler-16gb/SETUP.md)
  * 기록: ~/.namu-ad-upload/processed.json (처리한 파일명 — 같은 파일 두 번 안 올림) · ~/.namu-ad-upload/upload.log (한 줄씩)
  * 알림: 맥 알림 센터(osascript). 손익 숫자는 넣지 않는다 (파일명·기간·결과만).
  *
@@ -46,7 +47,10 @@ import {
 import { MASTER_SHEET_ID } from '../../lib/sheet-ids'
 
 const REPO = path.resolve(__dirname, '..', '..')
-const DOWNLOADS = path.join(os.homedir(), 'Downloads')
+const expandHome = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p)
+// 감시 폴더·키 파일 — 기본은 24GB 그대로(~/Downloads · 저장소 .env.local). 16GB 크롤링 맥은 환경변수로 바꿔 쓴다 (scripts/crawler-16gb)
+const DOWNLOADS = process.env.AD_UPLOAD_DIR ? path.resolve(expandHome(process.env.AD_UPLOAD_DIR)) : path.join(os.homedir(), 'Downloads')
+const ENV_FILE = process.env.AD_UPLOAD_ENV ? path.resolve(expandHome(process.env.AD_UPLOAD_ENV)) : path.join(REPO, '.env.local')
 const STATE_DIR = path.join(os.homedir(), '.namu-ad-upload')
 const PROCESSED = path.join(STATE_DIR, 'processed.json')
 const LOG = path.join(STATE_DIR, 'upload.log')
@@ -67,7 +71,7 @@ const DRY = flag('--dry-run')
 
 // ── 환경 (.env.local) ────────────────────────────────────────────
 function loadEnvLocal() {
-  const p = path.join(REPO, '.env.local')
+  const p = ENV_FILE
   if (!fs.existsSync(p)) return
   for (const line of fs.readFileSync(p, 'utf-8').split('\n')) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())

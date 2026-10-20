@@ -1,0 +1,115 @@
+# 16GB 크롤링 맥 — 월요일 쿠팡 광고 보고서 자동 받기 세팅 (형이 손으로 할 순서)
+
+- 작성 2026-10-20 (대클). 대상: 16GB 맥북(계정 namucompany.ai, ~/crawler).
+- 하는 일: 매주 월요일 09:00 에 16GB 맥이 스스로 ① 크롬을 켜고 ② 클로드가 크롬 확장으로 광고센터에서 보고서 2개(지난주 월~일 · 최근 30일)를 받아 ③ ~/crawler/out/오늘날짜/ 에 두고 ④ 24GB 와 똑같은 업로드 규칙으로 대시보드 저장소(Supabase)에 올린다.
+- 24GB 의 기존 자동 업로드(~/Downloads 감시)는 그대로 둔다. 바뀌는 건 없다.
+
+## 준비물
+1. 16GB 맥 + 24GB 맥이 같은 와이파이에 있을 것 (키 보내기·파일 가져오기에 씀)
+2. 쿠팡 윙 비밀번호 (계정 namucompanyai, 추가계정)
+3. 구글 비밀번호 (namucompany.ai@gmail.com)
+4. 16GB 맥 로그인 비밀번호 (키 보낼 때 한 번 침)
+
+---
+
+## 1. 크롬 로그인 3곳 (16GB 에서)
+1. 크롬을 연다. 구글 계정 namucompany.ai@gmail.com 로 로그인한다.
+2. 새 탭에서 wing.coupang.com → namucompanyai 로 로그인. "로그인 상태 유지" 가 있으면 체크.
+3. 새 탭에서 advertising.coupang.com → '마켓플레이스 판매자 로그인하기' 누름 → 광고센터가 열리면 됨.
+   - 왼쪽 메뉴 '보고서' → 광고 보고서 화면까지 한 번 들어가 본다. (주소가 …/marketing-reporting/billboard/reports/pa 로 끝남)
+4. 크롬 설정 → 다운로드 → "다운로드 전에 각 파일의 저장 위치 확인" 이 **꺼져** 있는지 본다 (보통 꺼져 있음). 저장 위치는 기본 '다운로드' 폴더 그대로.
+
+> 윙 로그인은 며칠~몇 주 지나면 풀린다. 풀리면 월요일 기록에 "형, 윙 로그인 필요" 가 남고 그 주는 못 받는다. 16GB 에서 2·3번만 다시 하면 된다.
+
+## 2. 클로드 크롬 확장 (16GB 에서)
+1. 크롬 웹스토어에서 "Claude in Chrome" 확장을 추가한다.
+2. 확장 아이콘을 눌러 Claude 계정(Max, 16GB 터미널 클로드와 같은 계정)으로 로그인한다.
+3. 터미널을 열고 아래를 친다. 연결됐다는 표시가 나오면 `/exit` 로 나온다.
+
+        cd ~/crawler && claude --chrome
+        /chrome
+
+> 10/20 인수인계에는 "16GB 에 크롬 확장 설치 안 함" 이라고 적혀 있었음. 이 작업이 그걸 뒤집는 결정이라 형 확인 필요. (쿠팡이 다른 자동화를 다 막아서 크롬 확장이 유일한 통로)
+
+## 3. 원격 로그인 켜기 (16GB 에서)
+1. 시스템 설정 → 일반 → 공유 → **원격 로그인** 켬.
+2. 터미널에서 `hostname` 을 쳐서 이름을 적어 둔다. (예: namucompanyaiui-MacBookAir → 아래에서 `<16GB이름>` 자리에 넣음)
+3. 24GB 터미널에서 확인: `ssh namucompany.ai@<16GB이름>.local echo ok` → 비밀번호 치고 `ok` 가 나오면 됨.
+
+## 4. 저장소 받기 (16GB 터미널에서, 한 번만)
+업로드 스크립트가 대시보드 코드(엑셀 읽기·마진 계산)를 같이 써서, 필요한 폴더만 부분으로 받는다. 몇 분 걸린다.
+
+    git clone --filter=blob:none --no-checkout https://github.com/namucompanyai-afk/namu-dashboard-new.git ~/crawler/dashboard
+    cd ~/crawler/dashboard
+    git sparse-checkout init --cone
+    git sparse-checkout set scripts/ad-weekly-upload scripts/crawler-16gb lib
+    git checkout main
+    npm ci
+    chmod +x scripts/crawler-16gb/run-weekly.sh
+
+확인: `ls ~/crawler/dashboard/scripts/crawler-16gb` 에 SETUP.md · run-weekly.sh 가 보이면 됨.
+
+> 16GB CLAUDE.md 규칙 "대시보드 저장소 두지 않음" 과 **충돌**. 코드 일부만 ~/crawler 안에 두는 걸로 했음 (손익 자료 없음, 공개 저장소). 형이 싫으면 대안은 24GB 가 파일만 가져와 올리는 방식 — 그건 16GB 가 24GB 를 깨워야 해서 더 복잡함.
+> 나중에 코드가 바뀌면 16GB 에서 `cd ~/crawler/dashboard && git pull && npm ci` 한 번.
+
+## 5. 키 넣기 (24GB 터미널에서 한 줄 — 값은 화면에 안 보임)
+24GB 에 이미 있는 키 4개를 16GB ~/crawler/.env 로 그대로 보낸다. 16GB 비밀번호를 한 번 친다.
+
+    grep -E '^(SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY|GOOGLE_SERVICE_ACCOUNT|AD_LIVE_30D_SAVE)=' ~/Documents/GitHub/namu-dashboard-new/.env.local | ssh namucompany.ai@<16GB이름>.local 'umask 077; cat > ~/crawler/.env'
+
+확인 (16GB 또는 24GB 아무 데서나): `ssh namucompany.ai@<16GB이름>.local 'grep -c = ~/crawler/.env'` → **4** 가 나오면 됨.
+
+쓰는 키 (업로드 스크립트가 실제로 읽는 것만):
+| 이름 | 용도 |
+|---|---|
+| SUPABASE_URL | 대시보드 저장소 주소 |
+| SUPABASE_SERVICE_ROLE_KEY | 저장소에 쓰는 서버 키 |
+| GOOGLE_SERVICE_ACCOUNT | 나무_마스터 시트 읽기 (마진 계산) |
+| AD_LIVE_30D_SAVE | on 이면 30일 파일도 저장 |
+
+## 6. 첫 시험 — 10/12~10/18 주간 파일 받아서 24GB 것과 대조 (10/26 일요일까지 해야 "지난주" 가 10/12~18 임)
+1. 16GB 터미널 (보고서만 받고 저장소에는 안 올림):
+
+        ~/crawler/dashboard/scripts/crawler-16gb/run-weekly.sh --no-upload
+
+   끝나면 `cat ~/crawler/logs/run-weekly.log` 에 ✅ 파일명 2개와 행 수가 보여야 함. "형, 윙 로그인 필요" 가 보이면 1번 다시.
+2. 24GB 터미널 (16GB 파일을 가져와 24GB 에 받아 둔 파일과 대조 — 일치/불일치만 나옴, 금액 안 나옴):
+
+        mkdir -p ~/namu-brain/raw/inbox/ad_report_16gb && cd ~/Documents/GitHub/namu-dashboard-new && scp 'namucompany.ai@<16GB이름>.local:crawler/out/*/A00993784_pa_total_campaign_20261012_20261018.xlsx' ~/namu-brain/raw/inbox/ad_report_16gb/ && node scripts/crawler-16gb/ad-report-check.mjs ~/namu-brain/raw/inbox/ad_report_16gb/A00993784_pa_total_campaign_20261012_20261018.xlsx ~/Downloads/A00993784_pa_total_campaign_20261012_20261018.xlsx
+
+   기대: 행 수 · 캠페인 수 · 광고비 합계 · 열 이름 **4개 다 일치**. (14일 전환매출은 받은 날에 따라 바뀌어서 비교 안 함)
+   - 하나라도 불일치면 대클에 로그(~/crawler/logs/ad-report-날짜.log)를 보여주고 멈춤. 파일명이 A00993784 로 시작 안 하면 추가계정 업체코드 문제 — 그때는 업로드 규칙을 고쳐야 함.
+
+## 7. 월요일 자동 실행 등록 (16GB 에서, 6번 통과하고 형 OK 뒤)
+
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-ad-report.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-ad-report.plist
+    launchctl list | grep crawler-ad-report
+
+마지막 줄에 이름이 보이면 등록 끝. 끄려면 `launchctl bootout gui/$(id -u)/com.namucompany.crawler-ad-report`.
+업로드 처리 기록은 16GB 의 ~/.namu-ad-upload/processed.json (24GB 와 따로). 같은 주를 24GB 에서도 받으면 두 번 올라가지만 같은 내용이면 그냥 교체돼서 해 없음.
+
+## 8. 매주 확인하는 법 (24GB 에서 한 줄)
+
+    ssh namucompany.ai@<16GB이름>.local 'tail -n 12 crawler/logs/run-weekly.log'
+
+✅ 파일 2개 + "✅ 업로드 종료 코드 0" 이면 정상. ❌ 가 있으면 그 줄 이유대로.
+
+---
+
+## 이 자동화가 틀리는 경우 (확률·대응)
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 윙 로그인 풀림 | **있음** (몇 주에 한 번) | "형, 윙 로그인 필요" 기록, 그 주 파일 없음 | 16GB 크롬에서 윙 재로그인 → `run-weekly.sh` 손으로 한 번 |
+| 광고센터 화면이 바뀜 (버튼 이름·위치) | 낮음 | 클로드가 폼을 못 찾아 ❌ | 지시문(jobs/ad-report-download.md) 손질 |
+| 보고서 생성이 5분 넘음 | 낮음 | ❌ 후 종료 | 손으로 다시 실행 |
+| 맥이 꺼져 있음 (정전 뒤 전원 안 들어옴) | 낮음 | 그 주 건너뜀. 잠자기였으면 깨면서 실행 | 켜고 손으로 실행 |
+| 받은 파일명이 규칙과 다름 (추가계정 업체코드) | 첫 시험에서 판명 | ❌, 업로드 안 함 | 업로드 규칙 수정 (대클) |
+| Claude 로그인 만료 | 낮음 | 클로드 종료 코드 0 아님, 파일 없음 | 16GB 에서 `claude` 한 번 띄워 재로그인 |
+| 크롬이 안 떠 있거나 확장이 끊김 | 낮음 | 도구 없음으로 ❌ | 크롬 열고 확장 아이콘 확인 |
+| 하루 10회 접근 제한 | 지시문으로만 막음 (강제 아님) | 클로드가 세다가 멈춤 | 로그 확인 |
+
+손익 숫자는 어디에도 안 찍힌다 (행 수·열 이름·파일명만). 받은 결과를 24GB namu-brain inbox 로 자동으로 보내는 건 아직 미정 — 지금은 8번처럼 ssh 로 본다.
+
+## 숙제 (다음에)
+- **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매주 월요일 09:00 run-weekly.sh (광고센터 보고서 받기 → 업로드).
+  24GB 의 com.namucompany.ad-weekly-upload 와는 별개 (이름이 다르고 24GB 에는 등록하지 않는다).
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-ad-report.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-ad-report.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-ad-report
+  지금 당장 한 번 돌려 보기: launchctl kickstart -k gui/$(id -u)/com.namucompany.crawler-ad-report
+  로그: ~/crawler/logs/run-weekly.log (요약) · ~/crawler/logs/ad-report-YYYY-MM-DD.log (클로드 출력) · ~/crawler/logs/launchd.err
+  09:00 에 맥이 잠들어 있었으면 깨어난 직후 실행된다. 꺼져 있었으면 그 주는 건너뛴다.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-ad-report</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-weekly.sh" &gt;&gt; "$HOME/crawler/logs/launchd.out" 2&gt;&gt; "$HOME/crawler/logs/launchd.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <!-- 크롬 확장은 로그인된 GUI 세션에서만 붙는다 (자동 로그인 켜 둔 상태 전제) -->
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>
