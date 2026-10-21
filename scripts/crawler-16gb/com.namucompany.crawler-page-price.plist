@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매일 08:00 run-daily-page.sh (쿠팡 상품 페이지 순회 → 시트 기준가 대조 → 슬랙 #쿠팡-결합).
+  08:00 인 이유: 60~80페이지 × (로드 4초 + 읽기) 로 30~40분 걸릴 수 있어, 08:45 윙 엑셀 작업 전에 끝내고 09:00 전에 슬랙이 가게. (크롬 잠금으로 겹쳐도 순서대로 돈다)
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-page-price.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-page-price.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-page-price
+  로그: ~/crawler/logs/run-page.log (요약) · ~/crawler/logs/page-price-YYYY-MM-DD.log · ~/crawler/logs/launchd-page.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-page-price</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-daily-page.sh" &gt;&gt; "$HOME/crawler/logs/launchd-page.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-page.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>

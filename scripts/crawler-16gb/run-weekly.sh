@@ -34,6 +34,18 @@ say() { echo "$(date '+%Y-%m-%d %H:%M:%S')	$*" | tee -a "$SUMMARY"; }
 if [[ ! -f "$JOB" || ! -f "$CHECK" ]]; then say "❌ 저장소 없음 ($DASH) — SETUP.md 4번"; exit 1; fi
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 5번"; exit 1; fi
 
+# 크롬 확장은 클로드 세션 하나씩만 — 매일 아침 크롤링(페이지 순회·윙 엑셀)과 겹치면 끝날 때까지 기다림 (최대 50분, 90분 지난 잠금은 버림)
+CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
+chrome_lock() {
+  for i in {1..100}; do
+    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
+    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
+    sleep 30
+  done
+  say "❌ 크롬 잠금을 50분 기다려도 안 풀림 ($CHROME_LOCK)"; return 1
+}
+chrome_lock || exit 1
+
 # 1) 크롬 — 확장이 붙으려면 크롬이 떠 있어야 한다
 open -ga "Google Chrome"
 sleep 10
@@ -58,6 +70,7 @@ printf '%s' "$PROMPT" | claude -p --chrome \
   --disallowedTools "WebFetch" "WebSearch" "Agent" \
   >> "$LOG" 2>&1
 CLAUDE_EXIT=$?
+rmdir "$CHROME_LOCK" 2>/dev/null
 say "클로드 종료 코드 $CLAUDE_EXIT (자세한 건 $LOG)"
 
 # 3) 클로드 자기 보고와 별개로 파일이 실제로 있는지 확인

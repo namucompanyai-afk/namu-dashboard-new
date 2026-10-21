@@ -147,5 +147,47 @@
 | 윙이 어제 파일 그대로를 줌 (반영 지연) | 낮음 | 변동 0으로 보고 | 정상 (다음 날 잡힘) |
 | 맥 꺼짐·크롬 안 뜸·Claude 로그인 만료 | 낮음 | 파일 없음 → 슬랙 1줄 | 켜고 손으로 실행 |
 
+---
+
+# 3번째 작업 — 매일 08:00 쿠팡 상품 페이지 순회 → 시트 기준가 대조 → 슬랙 (2026-10-21)
+
+- 하는 일: 16GB 가 매일 08:00 나무_마스터 마진계산에서 쿠팡 1P·3P 노출상품ID를 뽑아(약 53~80페이지) 크롬 확장으로 한 페이지씩(3~5초 간격) 읽고, 페이지 **일반 판매가**를 시트 **AE열 '쿠팡 소비자가(기준)'** 과 대조 → Supabase `coupang_page_YYYY-MM-DD` 저장 → 슬랙 #쿠팡-결합 1장(시트와 다른 옵션·어제와 달라진 가격·품절·후기 급감·미등록·못 읽은 페이지). 마진·손익 숫자는 슬랙에 안 넣음.
+- 08:00 인 이유: 페이지 수 × (로드 4초 + 읽기)로 30~40분 걸릴 수 있어 08:45 윙 엑셀 작업과 09:00 전에 끝내려고. 크롬 확장은 한 번에 클로드 세션 하나만 쓰도록 세 작업이 잠금을 공유함(겹치면 순서대로).
+- 클로드 세션은 6페이지씩 묶음으로 나눠 돌림(한 세션이 페이지를 많이 읽으면 기억이 넘침). 묶음 하나에서 '차단' 화면이 보이면 그날 나머지는 안 돌리고 "못 읽음 N/N" 으로 보고.
+
+## 형이 할 것
+1. 나무_마스터 마진계산 **AE열**에 쿠팡 소비자가(숫자만) — 3P 는 채워짐(10/21). **1P 행은 W열 노출ID와 AE 둘 다 비어 있어 아직 대상 0** → 1P 를 보려면 1P 행에 W(노출상품ID)·AE 를 채워야 함.
+2. 그 외 없음 (브레인이 SSH 로 설치·시험).
+
+## 브레인이 SSH 로 할 것 (16GB)
+1. `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/coupang-page-watch` (lib 는 이미 있음)
+2. 시험 — 앞 10페이지만, Supabase·슬랙 없이: `~/crawler/dashboard/scripts/crawler-16gb/run-daily-page.sh --no-send --limit 10` → `tail -6 ~/crawler/logs/run-page.log` 에 "묶음 1 ✅·묶음 2 ✅" 와 "대조 검증 실행". 슬랙 문안은 `~/crawler/logs/page-price-날짜.log` 끝에. 결과 JSON 은 `~/crawler/out/날짜/page_prices_batch_01.json`.
+   - 볼 것: 읽은 페이지 수(10/10 이면 차단 없음), 옵션에 oid(vendorItemId)가 잡히는지, 옵션명이 시트 AD 와 맞아 "못 찾음" 이 0인지, 와우가가 로그인 없이 보이는지
+3. 전체 시험 1회: `run-daily-page.sh --no-send` (전체 페이지, 30~40분) → 차단 0 확인
+4. 등록 (대표 OK 뒤):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-page-price.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-page-price.plist
+
+5. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 6 crawler/logs/run-page.log'`
+
+## 조정값 (lib/coupang/pageWatch.ts 상수)
+- PRICE_DIFF_MIN_PCT = 0 (1원이라도 다르면 전부. 나중에 % 로 올릴 수 있음)
+- REVIEW_DROP_PCT = 20 · REVIEW_DROP_MIN = 20 (후기 급감)
+- 묶음 크기: run-daily-page.sh 의 BATCH=6
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 쿠팡이 차단 (매일 60~80페이지 연속은 미검증) | 낮음 (10/19 10페이지 0건) | 그날 "못 읽음 N/N", 남은 묶음 중단 | 첫 2주 관찰, 묶음 간격·페이지 간격 늘림 |
+| 옵션 표기가 상품마다 달라 시트와 못 맞춤 | **있음** (향진주 사례) | "못 찾은 옵션 N건" 줄에 나옴, 가격 비교 빠짐 | 시트 AD 쿠팡옵션명을 페이지 표기와 맞추거나 매칭 규칙 보정 |
+| 클로드가 가격을 잘못 읽음 (와우가·정가를 일반가로) | 있음 (상품별) | 가짜 "시트와 다름" | 해당 상품 결과 JSON 보고 지시문 보정 |
+| 페이지에 안 보이는 할인 (카드·장바구니 쿠폰) | — | 못 잡음 | 한계로 표기 |
+| 하루 1회 이후 가격 변동 | — | 다음 날 잡힘 | 낮에 손으로 1회 더 실행 가능 |
+| 1P 행 W·AE 비어 있음 | 지금 상태 | 1P 페이지 대상 0 | 시트에 채우면 자동 포함 |
+| 시트 AE 빈 칸 | 가끔 | 그 옵션은 "기준가 없음" 줄, 비교 안 함 | AE 채움 |
+| 어제 기록 없음 (첫날·전날 실패) | 가끔 | "어제와 달라짐·언제부터" 없이 시트 대조만 | 정상 |
+| 크롬 확장 끊김·Claude 로그인 만료 | 낮음 | 묶음 ❌, "못 읽음 N/N" | 16GB 에서 확인 |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

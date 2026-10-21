@@ -41,8 +41,20 @@ slack_once() {  # $1 = 문장. 연속 실패 중 첫날만 보냄
 if [[ ! -f "$JOB" || ! -f "$CHECK" || ! -f "$WATCH" ]]; then say "❌ 저장소 파일 없음 ($DASH) — SETUP.md 2번째 작업 1번 (sparse-checkout add)"; exit 1; fi
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 5번"; exit 1; fi
 
+# 크롬 확장은 클로드 세션 하나씩만 — 08:00 페이지 순회(run-daily-page.sh)와 겹치면 끝날 때까지 기다림 (최대 50분, 90분 지난 잠금은 버림)
+CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
+chrome_lock() {
+  for i in {1..100}; do
+    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
+    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
+    sleep 30
+  done
+  say "❌ 크롬 잠금을 50분 기다려도 안 풀림 ($CHROME_LOCK)"; return 1
+}
+
 # 이미 오늘 파일을 받아 뒀으면 다운로드는 건너뛴다 (손으로 다시 돌릴 때)
 if [[ ! -f "$OUT/$FILE" ]]; then
+  chrome_lock || exit 1
   open -ga "Google Chrome"
   sleep 10
   say "▶ 윙 쿠팡상품정보 받기 시작 ($FILE)"
@@ -63,6 +75,7 @@ if [[ ! -f "$OUT/$FILE" ]]; then
     --disallowedTools "WebFetch" "WebSearch" "Agent" \
     >> "$LOG" 2>&1
   say "클로드 종료 코드 $? (자세한 건 $LOG)"
+  rmdir "$CHROME_LOCK" 2>/dev/null
 fi
 
 # 클로드 자기 보고와 별개로 파일 존재 확인
