@@ -16,6 +16,8 @@
  * 2단계 저장: dashboard_data 'coupang_catalog_search_YYYY-MM-DD' (우리 상품 결과만). 슬랙은 같은 날 1단계 메시지에 '2단계(검색)' 블록으로 합침
  * 실패(파싱 0행·저장 실패·웹훅 없음)는 숫자 없이 "수집 실패: 사유" + 맥 알림. 처리 기록을 안 남겨 다음 실행에 다시 시도.
  * 기록: ~/.namu-catalog-watch/processed.json (처리한 날짜) · run.log
+ * 환경변수(없으면 기본값): CATALOG_WATCH_DIR = 감시 폴더 · CATALOG_WATCH_ENV = 키 파일 (16GB 크롤링 맥용)
+ * 같은 날짜 스냅샷이 Supabase 에 이미 있으면 건너뜀 (16GB 08:45 자동 + 24GB 수동 중복 방지). 다시 올리려면 --force
  *
  * 실행:
  *   npx tsx scripts/coupang-catalog-watch/run.ts --init                 # 처음 한 번: 지금 Downloads 의 옛 파일을 '처리함'으로만 기록
@@ -53,7 +55,10 @@ import { MASTER_SHEET_ID } from '../../lib/sheet-ids'
 import { partnersKeys, searchProducts, type PartnersProduct } from './partners'
 
 const REPO = path.resolve(__dirname, '..', '..')
-const DOWNLOADS = path.join(os.homedir(), 'Downloads')
+const expandHome = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p)
+// 감시 폴더·키 파일 — 기본은 24GB 그대로(~/Downloads · 저장소 .env.local). 16GB 크롤링 맥은 환경변수로 (scripts/crawler-16gb/run-daily-catalog.sh)
+const DOWNLOADS = process.env.CATALOG_WATCH_DIR ? path.resolve(expandHome(process.env.CATALOG_WATCH_DIR)) : path.join(os.homedir(), 'Downloads')
+const ENV_FILE = process.env.CATALOG_WATCH_ENV ? path.resolve(expandHome(process.env.CATALOG_WATCH_ENV)) : path.join(REPO, '.env.local')
 const STATE_DIR = path.join(os.homedir(), '.namu-catalog-watch')
 const PROCESSED = path.join(STATE_DIR, 'processed.json')
 const LOG = path.join(STATE_DIR, 'run.log')
@@ -72,7 +77,7 @@ const LOCAL = opt('--local-store')
 const TEST = !!opt('--file') // 검증 실행 — 처리 기록·잠금 없음
 
 function loadEnvLocal() {
-  const p = path.join(REPO, '.env.local')
+  const p = ENV_FILE
   if (!fs.existsSync(p)) return
   for (const line of fs.readFileSync(p, 'utf-8').split('\n')) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
@@ -149,6 +154,13 @@ async function loadPrev(date: string): Promise<CatalogSnapshot | null> {
   const r = await sb().from('dashboard_data').select('data').eq('id', id).single()
   if (r.error) throw new Error(`직전 스냅샷 읽기 실패 (${id}): ${r.error.message}`)
   return (r.data?.data as CatalogSnapshot) ?? null
+}
+/** 같은 날짜 스냅샷이 이미 저장돼 있나 — 16GB(08:45 자동)·24GB(대표 수동) 두 맥이 같은 날 파일을 두 번 올리고 슬랙을 두 번 보내지 않게 */
+async function snapshotExists(date: string): Promise<boolean> {
+  if (LOCAL) return false
+  const { data, error } = await sb().from('dashboard_data').select('id').eq('id', catalogSnapshotId(date)).maybeSingle()
+  if (error) throw new Error(`스냅샷 확인 실패 (${date}): ${error.message}`)
+  return !!data
 }
 async function saveSnapshot(s: CatalogSnapshot) {
   const id = catalogSnapshotId(s.date)
@@ -391,6 +403,12 @@ async function main() {
   for (const c of todo) {
     let rows
     try {
+      // 다른 맥이 먼저 올린 날짜는 건너뜀 (저장·슬랙 없음). 다시 올리려면 --force
+      if (!TEST && !flag('--force') && (await snapshotExists(c.date))) {
+        log(c.name, c.date, '건너뜀', '같은 날짜 스냅샷 이미 저장됨 (다른 맥에서 처리)')
+        markProcessed(processed, c.date, c.name, 'skip-exists')
+        continue
+      }
       rows = readCatalog(c.file)
     } catch (e) {
       await fail(c.name, c.date, `파싱 실패 — ${e instanceof Error ? e.message : String(e)}`)

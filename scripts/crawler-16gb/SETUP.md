@@ -111,5 +111,41 @@
 
 손익 숫자는 어디에도 안 찍힌다 (행 수·열 이름·파일명만). 받은 결과를 24GB namu-brain inbox 로 자동으로 보내는 건 아직 미정 — 지금은 8번처럼 ssh 로 본다.
 
+---
+
+# 2번째 작업 — 매일 08:45 윙 '쿠팡상품정보' 엑셀 받기 → 결합 감시 매일 슬랙 (2026-10-21)
+
+- 하는 일: 16GB 가 매일 08:45 윙(상품 조회/수정 > 엑셀 다운로드 > 쿠팡상품정보)에서 Coupang_detailinfo_YYMMDD.xlsx 를 받아 ~/crawler/out/오늘/ 에 두고, 24GB 와 같은 결합 감시 코드(scripts/coupang-catalog-watch)로 어제와 비교 → Supabase 저장 → 슬랙 #쿠팡-결합 (Watchman).
+- 24GB 결합 감시(09:30·Downloads 감시)는 그대로 둔다. 같은 날짜가 Supabase 에 이미 있으면 어느 쪽이든 건너뛰어 두 번 안 올라간다.
+- 파일을 못 받은 날(윙 로그인 풀림 등)은 #쿠팡-결합 에 "오늘 윙 파일 없음 — 16GB 윙 로그인 필요" 1줄. 연속으로 못 받아도 첫날만 보내고, 다시 받으면 초기화.
+
+## 형이 할 것: 없음 (윙 로그인이 풀렸을 때 16GB 크롬에서 다시 로그인하는 것만)
+
+## 브레인이 SSH 로 할 것 (16GB)
+1. 저장소에 결합 감시 코드 추가: `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/coupang-catalog-watch`
+2. 16GB ~/crawler/.env 에 키 1개 추가: `SLACK_REVIEW_WEBHOOK_URL` (24GB .env.local 에서 그 줄만 — 5번과 같은 방식으로 `>>` 덧붙이기)
+3. 시험 (Supabase·슬랙 없이 받기 + 로컬 검증만): `~/crawler/dashboard/scripts/crawler-16gb/run-daily-catalog.sh --no-send` → `tail -8 ~/crawler/logs/run-daily.log` 에 ✅ 파일명·옵션 행·노출상품 수
+4. 24GB 와 대조 (24GB 터미널, 같은 날짜 파일이 24GB ~/Downloads 에 있을 때. 없으면 가장 최근 파일과 비교 — 그 사이 변동만큼 불일치가 정상):
+
+        mkdir -p ~/namu-brain/raw/inbox/wing_catalog_16gb && cd ~/Documents/GitHub/namu-dashboard-new && scp 'namucompany.ai@<16GB이름>.local:crawler/out/*/Coupang_detailinfo_*.xlsx' ~/namu-brain/raw/inbox/wing_catalog_16gb/ && npx tsx scripts/crawler-16gb/catalog-check.ts ~/namu-brain/raw/inbox/wing_catalog_16gb/Coupang_detailinfo_<YYMMDD>.xlsx ~/Downloads/Coupang_detailinfo_<YYMMDD>.xlsx
+
+   기대: 옵션 행 수·노출상품 수·옵션ID 집합·노출상품ID 집합 4개 일치 (가격·손익 숫자 안 나옴)
+5. 등록 (대표 OK 뒤):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-wing-catalog.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-wing-catalog.plist
+
+6. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 8 crawler/logs/run-daily.log'`
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 윙 로그인 풀림 | **있음** | 파일 없음 → 슬랙 1줄(첫날만), 그날 비교 없음 | 16GB 크롬 재로그인 → 스크립트 손으로 1번 |
+| 윙 엑셀 다운로드 화면이 바뀜 (버튼 이름·요청 목록 방식) | 낮음 | 클로드가 못 찾아 ❌ → 슬랙 "다운로드 실패" | 지시문(jobs/wing-catalog-download.md) 손질 |
+| 파일명이 Coupang_detailinfo_YYMMDD 가 아님 (추가계정 차이) | 첫 시험에서 판명 | ❌, 감시 안 돌아감 | FILE_RE 수정 |
+| 24GB 가 같은 날 먼저 올림 (대표 수동) | 가끔 | 16GB 쪽 "건너뜀" 기록, 슬랙은 24GB 것 1번만 | 정상 |
+| 윙이 어제 파일 그대로를 줌 (반영 지연) | 낮음 | 변동 0으로 보고 | 정상 (다음 날 잡힘) |
+| 맥 꺼짐·크롬 안 뜸·Claude 로그인 만료 | 낮음 | 파일 없음 → 슬랙 1줄 | 켜고 손으로 실행 |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).
