@@ -298,8 +298,8 @@ async function runSearch(processed: Processed, today: string): Promise<{ lines: 
   const keys = partnersKeys()
   if (!keys && !mock) {
     if (!processed[`search-nokey:${today}`]) {
+      // 키 없는 게 정상 상태(2단계는 판매 분석 export diff 로 대체, 2026-10-21 대표 확정) — 맥 알림 없이 로그만
       log('-', today, '2단계 건너뜀', '파트너스 키 없음 (COUPANG_PARTNERS_ACCESS_KEY·SECRET_KEY)')
-      notify('쿠팡 결합 점검 2단계 대기', '.env.local 에 쿠팡 파트너스 키 없음 — 1단계만 실행')
       markProcessed(processed, `search-nokey:${today}`, '-', 'no-key')
     }
     return null
