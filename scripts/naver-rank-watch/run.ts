@@ -19,7 +19,7 @@ import path from 'path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { google } from 'googleapis'
 import { MASTER_SHEET_ID } from '../../lib/sheet-ids'
-import { RANK_ID_PREFIX, buildRankMessage, buildRankSnapshot, extractIds, rankSnapshotId, type RankItem, type RankResult, type RankSnapshot, type RankTarget } from '../../lib/naver/rankWatch'
+import { RANK_ID_PREFIX, buildRankDeltaMessage, buildRankMessage, buildRankSnapshot, extractIds, rankSnapshotId, type RankItem, type RankResult, type RankSnapshot, type RankTarget } from '../../lib/naver/rankWatch'
 
 const REPO = path.resolve(__dirname, '..', '..')
 const TAB = '네이버 순위 키워드'
@@ -95,6 +95,17 @@ async function loadPrev(date: string): Promise<RankSnapshot | null> {
   const r = await sb().from('dashboard_data').select('data').eq('id', id).single()
   if (r.error) throw new Error(`직전 스냅샷 읽기 실패 (${id}): ${r.error.message}`)
   return (r.data?.data as RankSnapshot) ?? null
+}
+/** 오늘 이미 저장된(아침) 스냅샷을 그대로 — 12:30 변동만 보는 용도 (어제가 아니라 '오늘 오전') */
+async function loadToday(date: string): Promise<RankSnapshot | null> {
+  const id = rankSnapshotId(date)
+  if (LOCAL) {
+    const f = path.join(LOCAL, `${id}.json`)
+    return fs.existsSync(f) ? (JSON.parse(fs.readFileSync(f, 'utf-8')) as RankSnapshot) : null
+  }
+  const { data, error } = await sb().from('dashboard_data').select('data').eq('id', id).maybeSingle()
+  if (error) throw new Error(`오늘 스냅샷 읽기 실패: ${error.message}`)
+  return (data?.data as RankSnapshot) ?? null
 }
 async function save(s: RankSnapshot) {
   const id = rankSnapshotId(s.date)
@@ -243,18 +254,35 @@ async function main() {
     const date = opt('--date') ?? kstToday()
     const targets = JSON.parse(fs.readFileSync(tfile, 'utf-8')) as RankTarget[]
     const results = readResults(rdir)
-    const prev = await loadPrev(date)
+    const sinceToday = flag('--since-today') // 12:30 — 어제가 아니라 오늘 아침 스냅샷과 비교, 바뀐 것만
+    const prev = sinceToday ? await loadToday(date) : await loadPrev(date)
     const { snapshot, report } = buildRankSnapshot({ date, targets, results, prev })
-    const text = buildRankMessage(date, report, prev?.date ?? null)
     const out = opt('--out')
     if (out) fs.writeFileSync(out, JSON.stringify({ snapshot, report }, null, 2))
     const id = await save(snapshot)
+    if (sinceToday) {
+      if (!prev) {
+        console.log(`${date}\t${id}\t오늘 아침 스냅샷 없음 — 비교 없이 저장만 (슬랙 생략)`)
+        return
+      }
+      const changed = report.moved.length > 0 || report.lost.length > 0
+      console.log(`${date}\t${id}\t오늘 아침 대비 변동 ${report.moved.length} · 이탈 ${report.lost.length}`)
+      if (!changed) {
+        console.log('변동 없음 — 슬랙 생략')
+        return
+      }
+      const deltaText = buildRankDeltaMessage(date, report)
+      console.log('----- 슬랙 메시지(변동분만) -----\n' + deltaText + '\n-----------------------')
+      if (SEND) console.log(`${date}\t슬랙 보냄 (${await postSlack(deltaText)})`)
+      return
+    }
+    const text = buildRankMessage(date, report, prev?.date ?? null)
     console.log(`${date}\t${id}\t키워드 ${report.ranks.length}/${targets.length} 읽음 · 변동 ${report.moved.length} · 이탈 ${report.lost.length} · 못 읽음 ${report.unread.length}`)
     console.log('----- 슬랙 메시지 -----\n' + text + '\n-----------------------')
     if (SEND) console.log(`${date}\t슬랙 보냄 (${await postSlack(text)})`)
     return
   }
-  console.error('사용법: --targets <out.json> [--batch N] [--limit N] | --fetch --targets <json> --results <dir> [--dump] | --compare --targets <json> --results <dir> [--date] [--send] [--local-store <dir>] [--out <json>]')
+  console.error('사용법: --targets <out.json> [--batch N] [--limit N] | --fetch --targets <json> --results <dir> [--dump] | --compare --targets <json> --results <dir> [--date] [--send] [--since-today] [--local-store <dir>] [--out <json>]')
   process.exitCode = 2
 }
 main().catch((e) => {

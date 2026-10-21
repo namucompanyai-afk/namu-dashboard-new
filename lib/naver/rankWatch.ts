@@ -112,6 +112,14 @@ export function buildRankSnapshot(o: { date: string; targets: RankTarget[]; resu
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`
 const rk = (n: number | null) => (n == null ? `${MAX_RANK}위 밖` : `${n}위`)
 
+/** 12:30 용 — 변동·이탈만 1줄 요약(전체 순위 안 나열). 호출측이 변동 없으면 아예 안 부른다 */
+export function buildRankDeltaMessage(date: string, r: RankReport): string {
+  const parts: string[] = []
+  for (const m of r.moved) parts.push(`${m.s.keyword} ${rk(m.from)}→${rk(m.s.rank)}`)
+  for (const x of r.lost) parts.push(`${x.s.keyword} ${rk(x.from)}→${MAX_RANK}위밖`)
+  return `*[네이버 순위 변동 ${md(date)} 낮]* ${parts.join(' · ')}`
+}
+
 export function buildRankMessage(date: string, r: RankReport, prevDate: string | null): string {
   const L: string[] = []
   const big = r.moved.filter((m) => Math.abs(m.delta) >= RANK_MOVE_ALERT)

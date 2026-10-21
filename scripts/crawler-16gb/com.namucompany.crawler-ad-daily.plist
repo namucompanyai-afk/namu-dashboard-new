@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매일 08:40 run-daily-ad.sh (광고센터 "어제 1일" 보고서 → coupang_ad_daily_YYYY-MM-DD). 아침 보고서(09:05)의 입력.
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-ad-daily.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-ad-daily.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-ad-daily
+  로그: ~/crawler/logs/run-daily-ad.log · ~/crawler/logs/ad-report-daily-YYYY-MM-DD.log · ~/crawler/logs/launchd-ad-daily.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-ad-daily</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-daily-ad.sh" &gt;&gt; "$HOME/crawler/logs/launchd-ad-daily.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-ad-daily.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>40</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>

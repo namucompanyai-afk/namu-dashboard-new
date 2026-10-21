@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매일 12:30 run-daily-rank.sh --noon (08:55 대비 바뀐 키워드만 슬랙, 없으면 조용히 끝남). 2026-10-22 추가.
+  08:55 용 com.namucompany.crawler-naver-rank 와는 별개 Label — 둘 다 등록해야 하루 2회가 된다.
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank-noon.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank-noon.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-rank-noon
+  로그: ~/crawler/logs/run-rank.log (08:55 과 공용 요약) · ~/crawler/logs/naver-rank-noon-YYYY-MM-DD.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-naver-rank-noon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-daily-rank.sh" --noon &gt;&gt; "$HOME/crawler/logs/launchd-rank-noon.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-rank-noon.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>12</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>

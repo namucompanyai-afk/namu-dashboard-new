@@ -56,6 +56,7 @@ const PROCESSED = path.join(STATE_DIR, 'processed.json')
 const LOG = path.join(STATE_DIR, 'upload.log')
 const LOCK = path.join(STATE_DIR, 'lock')
 const LIVE_30D_KEY = 'coupang_ad_live_30d'
+const DAILY_KEY_PREFIX = 'coupang_ad_daily_' // 2026-10-22 추가 — 어제 1일 보고서(16GB 8번째 작업). dashboard_data 'coupang_ad_daily_YYYY-MM-DD'
 const WEEKLY_MAX_DAYS = 10 // 화면과 같은 구간 (ad-analysis page.tsx)
 const MONTHLY_MIN_DAYS = 25
 const FILE_RE = /^A00993784_pa_total_campaign_(\d{8})_(\d{8})\.xlsx$/ // 업체코드 고정 · '(1)'·'~$' 는 여기서 걸러짐
@@ -249,6 +250,26 @@ async function main() {
         log(c.name, label, '', '건너뜀', '종료일이 오늘보다 뒤')
         notify('쿠팡 광고 자동 업로드', `${c.name} — 종료일이 오늘보다 뒤라 건너뜀`)
         markProcessed(processed, c.name, 'skip-future')
+        continue
+      }
+      if (c.days === 1) {
+        const key = `${DAILY_KEY_PREFIX}${c.startDate}`
+        const rows = readRows(c.file, c.name)
+        const item = {
+          fileName: c.name,
+          period: { startDate: c.startDate, endDate: c.endDate, days: c.days },
+          downloadedAt: new Date(c.mtime + 9 * 3600 * 1000).toISOString().slice(0, 10),
+          savedAt: new Date().toISOString(),
+          rows: packAdRows(rows),
+        }
+        if (DRY) {
+          log(c.name, label, key, '저장 안 함(dry-run)', `캠페인 ${new Set(rows.map((r) => r.campaignName)).size}개`)
+          continue
+        }
+        await saveData(key, item)
+        log(c.name, label, key, '저장', `캠페인 ${new Set(rows.map((r) => r.campaignName)).size}개`)
+        notify('쿠팡 광고 일별 파일 저장', `${label} 저장`)
+        markProcessed(processed, c.name, 'daily-save')
         continue
       }
       if (c.days <= WEEKLY_MAX_DAYS) {

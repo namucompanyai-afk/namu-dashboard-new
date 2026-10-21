@@ -9,12 +9,13 @@
 # 로그: ~/crawler/logs/naver-rank-YYYY-MM-DD.log · ~/crawler/logs/run-rank.log (요약)
 set -u
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-NO_SEND=0; LIMIT=0; DUMP=()
+NO_SEND=0; LIMIT=0; DUMP=(); NOON=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-send) NO_SEND=1 ;;
     --limit) LIMIT="$2"; shift ;;
     --dump) DUMP=(--dump) ;;
+    --noon) NOON=1 ;;   # 12:30 — 오늘 아침(08:55) 대비 바뀐 키워드만, 없으면 슬랙 생략
   esac
   shift
 done
@@ -23,7 +24,7 @@ DASH="$CRAWLER/dashboard"
 RUN="$DASH/scripts/naver-rank-watch/run.ts"
 TODAY=$(date +%Y-%m-%d)
 OUT="$CRAWLER/out/$TODAY"
-LOG="$CRAWLER/logs/naver-rank-$TODAY.log"
+LOG="$CRAWLER/logs/naver-rank-$([[ $NOON -eq 1 ]] && echo noon- || echo "")$TODAY.log"
 SUMMARY="$CRAWLER/logs/run-rank.log"
 TARGETS="$OUT/naver_rank_targets.json"
 mkdir -p "$OUT" "$CRAWLER/logs"
@@ -66,11 +67,13 @@ if grep -q '"status": *"captcha"' "$OUT"/naver_rank_batch_*.json 2>/dev/null; th
   fi
 fi
 if [[ $NO_SEND -eq 1 ]]; then
-  RANK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --compare --targets "$TARGETS" --results "$OUT" --date "$TODAY" --local-store "$CRAWLER/out/rank-store-test" --out "$OUT/naver_rank_report.json" >> "$LOG" 2>&1
+  SINCE=(); [[ $NOON -eq 1 ]] && SINCE=(--since-today)
+  RANK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --compare --targets "$TARGETS" --results "$OUT" --date "$TODAY" --local-store "$CRAWLER/out/rank-store-test" --out "$OUT/naver_rank_report.json" "${SINCE[@]}" >> "$LOG" 2>&1
   say "$([[ $? -eq 0 ]] && echo '✅' || echo '❌') 대조 검증 실행 (--no-send: Supabase·슬랙 없음, 메시지는 $LOG 에)"
   exit 0
 fi
-RANK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --compare --targets "$TARGETS" --results "$OUT" --date "$TODAY" --out "$OUT/naver_rank_report.json" --send >> "$LOG" 2>&1
+SINCE=(); [[ $NOON -eq 1 ]] && SINCE=(--since-today)
+RANK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --compare --targets "$TARGETS" --results "$OUT" --date "$TODAY" --out "$OUT/naver_rank_report$([[ $NOON -eq 1 ]] && echo _noon).json" "${SINCE[@]}" --send >> "$LOG" 2>&1
 C_EXIT=$?
 say "$([[ $C_EXIT -eq 0 ]] && echo '✅' || echo '❌') 대조·슬랙 종료 코드 $C_EXIT"
 exit $C_EXIT

@@ -367,5 +367,45 @@
 | 허브 로그인 풀려 4주 파일을 못 받음 | 있음 (7번째 작업이 줄이려 함) | "1P 광고 점검 생략" 로그만, 알림 없음 | 7번째(로그인 유지)·2번째(허브 로그인) 대응과 동일 |
 | 토큰이 너무 짧아 오매칭(예: 두 글자 상품명) | 낮음 (2글자 미만은 걸러둠) | 상관없는 상품이 묶일 수 있음 | ad_gap.json 으로 사람이 확인 |
 
+---
+
+# 9번째 작업 — 매일 09:05 아침 보고서(전원 공유, 손익 없음) + 8번째(어제 1일 광고) + 시각 조정 (2026-10-22, 대표 확정)
+
+- 하는 일: **매일 09:05에 전 직원이 같이 보는 보고서 1장**을 #쿠팡-결합(새 채널 안 만듦)에 보낸다. 그날 이미 저장된 결과(재고·1P 가격·결합/남의 옵션·네이버 순위·어제 광고)를 다시 모을 뿐 새 크롤링은 안 한다 — node 만 쓰고 **크롬이 필요 없다**.
+- **손익·마진 숫자는 절대 안 넣는다** — 건별·기간 마진·순이익은 여전히 C레벨 #손익 전용(나무컴퍼니 공통 규칙). 이 보고서는 매출·광고비 같은 공개해도 되는 숫자만.
+- 8칸: ① 어제 매출(**미구현, "준비 중"**) ② 어제 광고(8번째 작업 — 광고비·클릭·캠페인 수, 품절인데 광고 ON 경고) ③ 재고·품절(6번째) ④ 1P 가격 변동(6번째) ⑤ 결합·점유(2번째 결합 감시 + 3번째 페이지 순회의 남의 판매자 + 6번째 아이템위너) ⑥ 후기(**미구현, "준비 중"**) ⑦ 네이버 순위(5번째, ±3 이상만 따로 보여줌) ⑧ 오늘 할 일(화/목 발주 알림 · 로그인 풀림 · 못 받은 소스)
+- 소스가 그날 없으면(아직 등록 안 됐거나 실패) 그 칸만 "미수신"으로 비고, ⑧ 에도 모아서 보여준다 — 막지 않는다.
+- **8번째(새 작업)**: 매일 08:40 광고센터 "어제 1일" 보고서 1개(합계·클릭 키워드만) → 기존 `scripts/ad-weekly-upload/run.ts` 를 그대로 재사용(1일짜리 파일이면 자동으로 `coupang_ad_daily_YYYY-MM-DD` 에 저장하는 분기를 run.ts 에 추가함, 월요일 작업과 같은 스크립트).
+- **시각 조정**: 6번째(재고) 10:00→08:50, 5번째(네이버) **08:55 + 12:30 하루 2회**로. 11:00 설정은 폐기. 12:30 은 08:55 대비 **바뀐 키워드만** 슬랙(변동 없으면 조용히 끝남 — 매번 전체를 또 보내지 않음).
+
+## 형이 할 것: 없음
+
+## 브레인이 할 것
+1. 16GB: `git pull && git sparse-checkout add scripts/coupang-morning-report scripts/coupang-ad-gap lib/coupang/morningReport.ts` (lib 전체가 있으면 뒤 항목 생략)
+2. 8번째 시험: `~/crawler/dashboard/scripts/crawler-16gb/run-daily-ad.sh --no-upload` → `tail -4 ~/crawler/logs/run-daily-ad.log`
+3. 아침 보고서 시험(크롬 불필요, 바로 가능): `~/crawler/dashboard/scripts/crawler-16gb/run-morning-report.sh --no-send` → `tail -4 ~/crawler/logs/run-morning.log`, 전체 문안은 `~/crawler/logs/morning-report-날짜.log`. 그날 저장된 소스가 적으면 "미수신"이 많이 뜨는 게 정상(6·2·5번째가 먼저 돌고 쌓여야 꽉 참)
+4. 네이버 12:30 시험: `run-daily-rank.sh --noon --no-send` (아침 걸 먼저 한 번 돌려 둬야 비교 대상이 생김)
+5. 등록 (대표 OK 뒤, 전부):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-ad-daily.plist ~/Library/LaunchAgents/
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-morning-report.plist ~/Library/LaunchAgents/
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank-noon.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-ad-daily.plist
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-morning-report.plist
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank-noon.plist
+
+   기존 6번째(재고)·5번째(네이버 아침) plist 는 시각만 바뀌었으니 **재등록**(bootout 후 다시 bootstrap)해야 새 시각이 적용됨.
+6. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 4 crawler/logs/run-morning.log'`
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 09:05 전에 재고·네이버·어제광고가 아직 안 끝남(크롬 작업들이 밀림) | 있음 (크롬 잠금을 서로 기다리느라) | 그 칸 "미수신" | 몇 주 지켜보고 안 맞으면 09:05 를 09:10~15 로 늦춤 |
+| 페이지 순회(3번째)가 등록 안 돼 있거나 실패(현재 미해결) | **있음** (옵션ID 추출 아직 안 됨) | ⑤ 칸 "페이지 순회(남의 옵션): 미수신" | 3번째 작업 완성되면 자동으로 채워짐, 그전까진 정상 |
+| coupang_ad_daily 가 비어 있거나 옛날 것 | 낮음 | ② 칸 "미수신" | 8번째 로그 확인 |
+| 결합 감시(2번째)가 그날 윙 파일을 못 받음 | 가끔(대표가 윙 파일 안 받은 날) | ⑤ 칸에 catalog 쪽만 "기준선" 또는 미수신 | 정상 — 한계로 이미 알려진 것 |
+| 화/목 발주 알림이 실제 발주 여부와 무관하게 뜸(날짜만 봄) | 항상 | 발주 없는 화/목에도 리마인드가 뜸 | 참고용 — 실제 발주 시스템과 연동 아님, 오탐 아님(그냥 "확인해라") |
+| 12:30 이 08:55 데이터를 못 찾음(아침이 실패했던 날) | 가끔 | "오늘 아침 스냅샷 없음 — 비교 없이 저장만" 로그, 슬랙 안 감 | 정상 (비교 기준이 없어서) |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

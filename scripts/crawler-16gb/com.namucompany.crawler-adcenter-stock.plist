@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  16GB 크롤링 맥 전용 — 매일 10:00 run-daily-stock.sh (광고센터 "광고 만들기" 상품 목록 읽기 → 1P 재고·현재가 → 슬랙). 등록 안 함, 읽기만.
+  16GB 크롤링 맥 전용 — 매일 08:50 run-daily-stock.sh (아침 보고서 09:05 전에 끝내려고 10:00→08:50 당김, 2026-10-22) (광고센터 "광고 만들기" 상품 목록 읽기 → 1P 재고·현재가 → 슬랙). 등록 안 함, 읽기만.
   다른 크롤링 작업(07:30 페이지 순회·08:15 네이버·08:45 윙 엑셀)과 크롬 잠금을 공유해 겹치면 순서대로.
   등록 (16GB 에서, 대표 확인 후):
     cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-adcenter-stock.plist ~/Library/LaunchAgents/
@@ -22,9 +22,9 @@
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>10</integer>
+    <integer>8</integer>
     <key>Minute</key>
-    <integer>0</integer>
+    <integer>50</integer>
   </dict>
   <key>RunAtLoad</key>
   <false/>
