@@ -64,13 +64,18 @@ function safeProductOrder(po: Record<string, unknown>): Record<string, unknown> 
   return rest
 }
 
-/** data.contents[] 의 한 원소(content: {order, productOrder, delivery}) → 저장용 행. */
-export function normalizeProductOrder(content: unknown): NaverOrderRow {
-  const c = (content ?? {}) as Record<string, unknown>
+/**
+ * data.contents[] 의 한 원소 → 저장용 행.
+ * 실제 응답은 바깥 봉투가 한 겹 더 있다: { productOrderId, content: { order, productOrder, delivery } } (2026-10-22 16GB 실데이터로 확인).
+ * item.content 가 있으면 그걸 벗기고, 없으면(이미 벗겨진 content를 바로 주는 경우) item 자체를 쓴다 — 양쪽 다 받게 방어.
+ */
+export function normalizeProductOrder(item: unknown): NaverOrderRow {
+  const outer = (item ?? {}) as Record<string, unknown>
+  const c = (outer.content ?? outer) as Record<string, unknown>
   const order = (c.order ?? {}) as Record<string, unknown>
   const po = (c.productOrder ?? {}) as Record<string, unknown>
   return {
-    productOrderId: str(pick(po, ['productOrderId'])) ?? str(pick(c, ['productOrderId'])) ?? '',
+    productOrderId: str(pick(po, ['productOrderId'])) ?? str(pick(outer, ['productOrderId'])) ?? str(pick(c, ['productOrderId'])) ?? '',
     orderId: str(pick(order, ['orderId'])),
     productId: str(pick(po, ['productId'])),
     productName: str(pick(po, ['productName'])),
