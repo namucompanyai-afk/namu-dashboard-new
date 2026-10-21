@@ -225,5 +225,41 @@
 | 파일명 패턴이 다름 (부계정 차이) | 첫 시험에서 판명 | ❌ | 패턴 수정 |
 | 24GB 전달이 수동 | 지금 구조 | NamuData 에 자동 반영 안 됨 | 수집기(namu-ingest) 만들 때 흡수 |
 
+---
+
+# 5번째 작업 — 매일 08:15 네이버 쇼핑 키워드 순위(광고 제외) → 슬랙 (2026-10-21)
+
+- 하는 일: 16GB 가 나무_마스터 **'네이버 순위 키워드'** 탭(키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)을 읽어, 키워드마다 네이버 쇼핑 검색을 로그인 없이 1번 열고(없으면 2페이지까지) **'광고' 항목을 뺀 순서**로 우리 상품이 몇 번째인지 센다 → Supabase `naver_rank_YYYY-MM-DD` 저장 → 슬랙 1장(오늘 순위 · 어제 대비 ↑↓ · 순위권 이탈 · 못 읽음). 손익 숫자 없음.
+- 상품 식별은 URL 속 ID 로만(products/ID · catalog/ID · nvMid) — 이름 매칭 안 함. 2페이지(80개) 밖이면 "80위 밖".
+- Multi Plus(슬롯 서비스, 11/07 종료) 대체. 그쪽은 '통검' 기준이라 우리 기본(쇼핑검색)과 1~2위 차이 날 수 있음. 통검으로 보고 싶은 키워드는 탭의 '검색 종류'에 '통합검색'.
+
+## 형이 할 것
+1. 슬랙 채널 정하기: 1차는 #쿠팡-결합(Watchman 웹훅) 으로 같이 보냄. 따로 보려면 새 채널(예: #네이버-순위)에 Watchman 앱 웹훅 1개 더 만들어 16GB .env 에 `SLACK_NAVER_WEBHOOK_URL` 로 넣으면 그쪽으로 감 (키 전달은 브레인 SSH).
+2. 키워드 추가·끄기는 시트 탭에서 (ON/OFF 열). 그 외 없음.
+
+## 브레인이 할 것
+1. 나무_마스터에 탭 '네이버 순위 키워드' 만들고 9개 채움 (A 키워드 · B URL · C 별칭 · D 검색 종류(비우면 쇼핑검색) · E ON/OFF(비우면 ON))
+2. 16GB: `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-rank-watch lib/naver` (lib 전체가 이미 있으면 뒤 항목 생략)
+3. 시험: `~/crawler/dashboard/scripts/crawler-16gb/run-daily-rank.sh --no-send --limit 3` → `tail -5 ~/crawler/logs/run-rank.log`, 슬랙 문안은 `~/crawler/logs/naver-rank-날짜.log` 끝. Multi Plus 표(귀리 2·파로 2·호라산밀 1)와 ±1위 이내면 통과. 결과 JSON `~/crawler/out/날짜/naver_rank_batch_01.json` 에서 광고 항목이 ad:true 로 잡혔는지 확인.
+4. 등록 (대표 OK 뒤):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank.plist
+
+5. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 5 crawler/logs/run-rank.log'`
+
+## 조정값 (lib/naver/rankWatch.ts)
+- MAX_RANK = 80 (2페이지) · RANK_MOVE_ALERT = 3 (±3 이상이면 🟢/🟠 강조) · 묶음 3키워드(run-daily-rank.sh BATCH)
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 캡차·"비정상 접근" 차단 | 낮음~있음 (하루 9~18회 접근, 미검증) | 그 묶음부터 중단, "못 읽음 N" | 첫 2주 관찰, 키워드 간격 늘림. 캡차는 16GB 크롬에서 사람이 1번 풀면 됨 |
+| 개인화 차이 (로그인 없는 16GB 크롬 vs 대표 폰) | 있음 | 1~3위 차이 | 추세로 봄. Multi Plus 와 ±1 이내면 정상 |
+| 광고 표시를 못 가려냄 (결과 구조 바뀜) | 있음 (네이버 자주 바꿈) | 순위가 광고 포함으로 밀림 | 결과 JSON 의 ad 값 확인 → 지시문·JS 손질 |
+| 우리 상품이 원부(catalog)로 묶여 다른 ID 로 노출 | 있음 | "80위 밖" 오판 | 시트 URL 에 catalog 주소도 같이(한 셀에 두 URL 넣어도 ID 둘 다 뽑음) |
+| 2페이지 밖 | — | "80위 밖" | 정상 |
+| 어제 기록 없음 | 첫날 | ↑↓ 없음 | 정상 |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).
