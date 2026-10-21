@@ -1,7 +1,8 @@
 /**
  * 네이버 커머스 API — 어제(KST) 결제완료 상품주문 수집 → Supabase naver_product_orders upsert (16GB 크롤링 맥, 매일 08:42)
- *   아침 보고서(09:05) ① 칸의 입력. 보고서 쪽 집계(건수·합계·취소·상품 Top3)는 scripts/coupang-morning-report/run.ts 가
- *   이 테이블을 날짜로 직접 읽어 lib/naver/salesWatch.ts 의 summarizeNaverOrders 로 만든다(여기서는 안 만듦).
+ *   아침 보고서(09:05) ① 칸의 입력. 수집 직후 이 스크립트도 같은 summarizeNaverOrders·buildNaverSalesLines(lib/naver/salesWatch.ts)
+ *   로 집계 줄을 로그에 찍는다 — --dry-run 때도 101건 전체 합계·취소·Top3 를 눈으로 확인할 수 있게(2026-10-22, 브레인 요청).
+ *   실제 보고서는 그 다음 날 아침 scripts/coupang-morning-report/run.ts 가 이 테이블을 다시 날짜로 읽어 독립적으로 집계한다(이 로그를 그대로 베끼지 않음).
  *   정규화·요약 순수 로직은 lib/naver/salesWatch.ts, 토큰·조회는 lib/naver/commerceApi.ts.
  *
  *   npx tsx scripts/naver-sales-collect/run.ts                   # 어제 하루, Supabase 업로드
@@ -18,7 +19,7 @@ import os from 'os'
 import path from 'path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fetchNaverToken, fetchProductOrders } from '../../lib/naver/commerceApi'
-import { kstDayRange, normalizeProductOrder, type NaverOrderRow } from '../../lib/naver/salesWatch'
+import { buildNaverSalesLines, kstDayRange, normalizeProductOrder, summarizeNaverOrders, type NaverOrderRow } from '../../lib/naver/salesWatch'
 
 const REPO = path.resolve(__dirname, '..', '..')
 const expandHome = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p)
@@ -133,6 +134,10 @@ async function main() {
   const rows = contents.map(normalizeProductOrder).filter((r) => r.productOrderId)
   const skipped = contents.length - rows.length
   console.log(`${date}\t주문 ${rows.length}건 수신${skipped ? ` (productOrderId 없어 건너뜀 ${skipped}건)` : ''}`)
+
+  // 아침 보고서 ① 칸과 같은 함수로 같은 문장을 찍는다 — --dry-run 때도 101건 전체 집계(합계·취소·Top3)를 로그로 바로 확인할 수 있게.
+  const summary = summarizeNaverOrders(rows)
+  console.log(buildNaverSalesLines(summary).join('\n'))
 
   if (DRY) {
     console.log(`${date}\t--dry-run: Supabase 저장 안 함`)

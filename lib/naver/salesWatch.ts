@@ -134,6 +134,17 @@ export function summarizeNaverOrders(rows: NaverOrderLite[]): NaverSalesSummary 
   return { orderCount, paidAmountSum, cancelCount, top3 }
 }
 
+/**
+ * 아침 보고서 ① 칸에 들어갈 네이버 줄 — 로그(수집기 --dry-run 포함)와 보고서가 항상 같은 문장을 쓰도록
+ * 여기 한 곳에서만 만든다(2026-10-22, 브레인 요청: dry-run 때도 집계 결과를 눈으로 확인할 수 있어야 함).
+ */
+export function buildNaverSalesLines(s: NaverSalesSummary): string[] {
+  const won = (n: number) => Math.round(n).toLocaleString('ko-KR')
+  const lines = [`네이버(결제 기준): 주문 ${s.orderCount}건 · 결제금액 ${won(s.paidAmountSum)}원 · 취소/반품 ${s.cancelCount}건`]
+  if (s.top3.length) lines.push(...s.top3.map((t, i) => `  ${i + 1}. ${t.productName} ${won(t.amount)}원`))
+  return lines
+}
+
 /** 수집 대상일(KST, YYYY-MM-DD) → 네이버 API from/to (그날 00:00 ~ 다음날 00:00, +09:00 고정) */
 export function kstDayRange(ymd: string): { from: string; to: string } {
   const [y, m, d] = ymd.split('-').map(Number)

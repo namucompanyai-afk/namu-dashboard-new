@@ -15,9 +15,9 @@ import os from 'os'
 import path from 'path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { unpackAdRows, type PackedAdRows } from '../../lib/coupang/adRowsPack'
-import { buildMorningReport, type MorningSources, type NaverSalesLite, type PageOptionLite, type RankLite, type StockStateLite } from '../../lib/coupang/morningReport'
+import { buildMorningReport, type MorningSources, type PageOptionLite, type RankLite, type StockStateLite } from '../../lib/coupang/morningReport'
 import type { CatalogRow } from '../../lib/coupang/catalogWatch'
-import { summarizeNaverOrders, type NaverOrderLite } from '../../lib/naver/salesWatch'
+import { summarizeNaverOrders, type NaverOrderLite, type NaverSalesSummary } from '../../lib/naver/salesWatch'
 
 const REPO = path.resolve(__dirname, '..', '..')
 const expandHome = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p)
@@ -67,7 +67,7 @@ async function readRaw(id: string): Promise<unknown | null> {
 
 /** naver_sales_{date} 마커가 있어야(그날 수집 작업이 실제로 돌았다는 뜻) naver_product_orders 를 읽는다 —
  *  마커가 없는데 표가 비어 있을 수 있는 경우(수집 안 됨)와 실제로 0건이었던 경우를 구분하기 위해. */
-async function readNaverSales(date: string): Promise<NaverSalesLite | null> {
+async function readNaverSales(date: string): Promise<NaverSalesSummary | null> {
   const ran = await readRaw(`naver_sales_${date}`)
   if (!ran) return null
   const dayStart = `${date}T00:00:00.000+09:00`
