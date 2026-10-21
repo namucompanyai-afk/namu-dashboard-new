@@ -4,8 +4,8 @@
  *
  * 1) 대상: 나무_마스터 '네이버 순위 키워드' 탭 A2:E (키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)
  *      npx tsx scripts/naver-rank-watch/run.ts --targets <out.json> [--batch 3] [--limit 3]
- * 2) 수집: 16GB 실제 크롬을 AppleScript 로 조종(chrome-tab.applescript) — 키워드마다 탭 열기 → 6초 → extract-naver.js 실행 → JSON → 탭 닫기.
- *      1페이지에 우리 ID 없으면 &pagingIndex=2 한 번 더. 키워드 간 5초. 결과는 naver_rank_batch_01.json. 첫 시험은 --dump 로 목록 innerHTML 도 저장(광고 규칙 확인용)
+ * 2) 수집: 16GB 실제 크롬을 AppleScript 로 조종(chrome-tab.applescript) — 키워드마다 탭 열기 → 8초 → 스크롤 4번(지연 로딩) → extract-naver.js 실행 → JSON → 탭 닫기.
+ *      1페이지만 본다(2페이지는 캡차 유발, 2026-10-21) — 없으면 '40위 밖'. 키워드 간 30초. 결과는 naver_rank_batch_01.json. 광고 판별은 data-nlog-params 의 is_ad(네이버 로그용 속성, 추측 아님). --dump 는 상품을 거의 못 찾았을 때만 본문 저장(디버그용)
  *      npx tsx scripts/naver-rank-watch/run.ts --fetch --targets <json> --results <dir> [--dump]
  *      (클로드 크롬 확장은 네이버 쇼핑을 "safety restrictions" 로 거부, Playwright 는 캡차, 네이버 쇼핑 검색 API 는 2026-07-31 종료 → 남은 길이 이것. 10/21)
  * 3) 대조: 결과 폴더의 naver_rank_batch_*.json → 직전 스냅샷과 비교 → dashboard_data 'naver_rank_YYYY-MM-DD' → 슬랙(--send)
@@ -119,18 +119,22 @@ async function postSlack(text: string) {
 import { execFileSync } from 'child_process'
 const APPLESCRIPT = path.join(__dirname, 'chrome-tab.applescript')
 const EXTRACT_JS = path.join(__dirname, 'extract-naver.js')
-type Extracted = { url?: string; captcha?: boolean; count?: number; items?: { ad: boolean; title: string; mall: string; link: string; ids: string[]; cls?: string }[]; dump?: string }
-function chromeExtract(url: string, waitSec = 6): Extracted {
-  const raw = execFileSync('osascript', [APPLESCRIPT, url, EXTRACT_JS, String(waitSec)], { encoding: 'utf-8', timeout: 90_000 }).trim()
+type ExtractedItem = { id: string; ad: boolean; title: string; mall: string; price: number | string | null; link: string }
+type Extracted = { url?: string; captcha?: boolean; count?: number; items?: ExtractedItem[]; dump?: string }
+const WAIT_SEC = 8
+const SCROLL_TIMES = 4 // 지연 로딩 — 스크롤 안 하면 9개쯤에서 멈춤 (10/21 확인)
+const KEYWORD_INTERVAL_MS = 30_000 // 짧은 간격 연속 이동이 캡차 원인으로 보임(10/21) → 5초 → 30초
+function chromeExtract(url: string): Extracted {
+  const raw = execFileSync('osascript', [APPLESCRIPT, url, EXTRACT_JS, String(WAIT_SEC), String(SCROLL_TIMES)], { encoding: 'utf-8', timeout: 90_000 }).trim()
   if (raw.startsWith('__ERROR__')) throw new Error(raw.slice(0, 200))
   if (!raw) throw new Error('execute javascript 결과 없음 — Chrome 보기>개발자>"Apple Events 의 JavaScript 허용" 확인')
   return JSON.parse(raw) as Extracted
 }
-const searchUrl = (t: RankTarget, page: number) =>
+const searchUrl = (t: RankTarget) =>
   t.searchType === 'total'
     ? `https://search.naver.com/search.naver?query=${encodeURIComponent(t.keyword)}`
-    : `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(t.keyword)}${page > 1 ? `&pagingIndex=${page}` : ''}`
-/** 키워드마다 1페이지 → 우리 ID 없으면 2페이지. 결과는 크롬 확장 방식과 같은 파일 형식으로 저장 */
+    : `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(t.keyword)}`
+/** 키워드마다 1페이지만(스크롤로 지연 로딩 채움) — 2페이지는 안 간다(캡차 유발, 10/21). 못 찾으면 '40위 밖'. 결과는 크롬 확장 방식과 같은 파일 형식으로 저장 */
 async function fetchAll(targets: RankTarget[], dir: string, dump: boolean) {
   fs.mkdirSync(dir, { recursive: true })
   const out: RankResult[] = []
@@ -138,36 +142,25 @@ async function fetchAll(targets: RankTarget[], dir: string, dump: boolean) {
   for (const t of targets) {
     const readAt = new Date().toISOString()
     try {
-      const items: RankItem[] = []
-      let pages = 0
-      let n = 0
-      for (const page of [1, 2]) {
-        const ex = chromeExtract(searchUrl(t, page))
-        loads += 1
-        pages += 1
-        if (dump && ex.dump) fs.writeFileSync(path.join(dir, `naver_dump_${t.keyword}_p${page}.html`), ex.dump)
-        if (ex.captcha) {
-          out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'captcha', pagesRead: pages, items, note: '캡차·보안확인 화면' })
-          throw new Error('__CAPTCHA__')
-        }
-        for (const it of ex.items ?? []) {
-          if (!it.ad) n += 1
-          items.push({ rank: it.ad ? null : n, ad: !!it.ad, title: it.title, mall: it.mall, link: it.link, ids: it.ids ?? [] })
-        }
-        if (items.some((x) => !x.ad && x.ids.some((id) => t.ids.includes(id)))) break
-        if (t.searchType === 'total' || !(ex.items ?? []).length) break
-        await new Promise((r) => setTimeout(r, 5000))
-      }
-      out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'ok', pagesRead: pages, items })
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      if (msg === '__CAPTCHA__') {
-        console.log(`캡차 — ${t.keyword} 에서 중단`)
+      const ex = chromeExtract(searchUrl(t))
+      loads += 1
+      if (dump && ex.dump) fs.writeFileSync(path.join(dir, `naver_dump_${t.keyword}.html`), ex.dump)
+      if (ex.captcha) {
+        out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'captcha', pagesRead: 1, items: [], note: '캡차·보안확인 화면' })
+        console.log(`캡차 — ${t.keyword} 에서 중단, 오늘 남은 키워드는 건너뜀`)
         break
       }
+      let n = 0
+      const items: RankItem[] = (ex.items ?? []).map((it) => {
+        if (!it.ad) n += 1
+        return { rank: it.ad ? null : n, ad: !!it.ad, title: it.title, mall: it.mall, link: it.link, ids: it.id ? [it.id] : [] }
+      })
+      out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'ok', pagesRead: 1, items })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
       out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'error', items: [], note: msg.slice(0, 200) })
     }
-    await new Promise((r) => setTimeout(r, 5000))
+    await new Promise((r) => setTimeout(r, KEYWORD_INTERVAL_MS))
   }
   const file = path.join(dir, 'naver_rank_batch_01.json')
   fs.writeFileSync(file, JSON.stringify(out, null, 1))

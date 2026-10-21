@@ -227,24 +227,28 @@
 
 ---
 
-# 5번째 작업 — 매일 08:15 네이버 쇼핑 키워드 순위(광고 제외) → 슬랙 (2026-10-21, 크롬 AppleScript 방식)
+# 5번째 작업 — 매일 11:00 네이버 쇼핑 키워드 순위(광고 제외) → 슬랙 (2026-10-21, 크롬 AppleScript 방식 · 10/21 저녁 재수정)
 
-- 하는 일: 16GB 가 나무_마스터 **'네이버 순위 키워드'** 탭(키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)을 읽어, 키워드마다 **16GB 의 진짜 크롬을 AppleScript 로 조종**해 네이버 쇼핑 검색 1페이지를 열고(없으면 2페이지까지) 결과 목록에서 **'광고' 항목을 뺀 순서**로 우리 상품이 몇 번째인지 센다 → Supabase `naver_rank_YYYY-MM-DD` 저장 → 슬랙 1장(오늘 순위 · 어제 대비 ↑↓ · 순위권 이탈 · 못 읽음). 손익 숫자 없음.
-- 왜 이 방식인가(10/21): 클로드 크롬 확장은 네이버 쇼핑·통합검색을 "safety restrictions" 로 거부(24GB 도 동일), Playwright 는 캡차, 네이버 쇼핑 검색 API 는 2026-07-31 종료(대체 없음). 남은 길 = 확장을 거치지 않고 보통 크롬에 Apple Events 로 "탭 열어 → JS 실행 → 결과 받기". 자동화 표시가 없는 진짜 크롬이라 캡차 가능성이 가장 낮음.
-- 상품 식별은 URL 속 ID 로만(products/ID · catalog/ID · nvMid) — 이름 매칭 안 함. 2페이지(80개) 밖이면 "80위 밖". 키워드 간 5초, 하루 9~18회 접근.
-- Multi Plus(슬롯 서비스, 11/07 종료) 대체. 그쪽은 '통검' 기준이라 우리 기본(쇼핑검색)과 1~2위 차이 가능. 통검으로 볼 키워드는 탭 '검색 종류'에 '통합검색'.
+- 하는 일: 16GB 가 나무_마스터 **'네이버 순위 키워드'** 탭(키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)을 읽어, 키워드마다 **16GB 의 진짜 크롬을 AppleScript 로 조종**해 네이버 쇼핑 검색 1페이지를 열고(스크롤로 지연 로딩을 채움) **'광고' 항목을 뺀 순서**로 우리 상품이 몇 번째인지 센다 → Supabase `naver_rank_YYYY-MM-DD` 저장 → 슬랙 1장(오늘 순위 · 어제 대비 ↑↓ · 순위권 이탈 · 못 읽음). 손익 숫자 없음. **입력은 그 시트 탭 하나뿐** — 형은 키워드를 거기서만 고치면 된다.
+- 왜 이 방식인가: 클로드 크롬 확장은 네이버 쇼핑·통합검색을 거부, Playwright 는 캡차, 네이버 쇼핑 검색 API 는 2026-07-31 종료. 남은 길 = 확장을 거치지 않고 보통 크롬에 Apple Events 로 "탭 열어 → JS 실행 → 결과 받기".
+- **광고 판별(10/21 저녁 확정)**: 클래스 추측이 아니라 네이버가 직접 붙이는 `data-nlog-params` 속성의 `is_ad`(true/false) 값을 쓴다. 같은 속성 안에 상품ID(`slot_dtl_nv_mid`)·상품명·판매처·가격도 그대로 들어 있어 이름 매칭 없이 ID 로 바로 식별된다(naver_dump_귀리_p1.html 로 확인). 상품 식별은 이 ID 로만 — 우리 상품 URL(products/ID·catalog/ID)과 겹치는지만 본다.
+- **1페이지만, 2페이지는 안 간다**(10/21 낮 시험에서 `&pagingIndex=2` 로 이동하자 캡차 발생). 없으면 **"40위 밖"**.
+- **지연 로딩**: 스크롤 없이는 9개쯤에서 멈춘다 → 탭을 연 뒤 8초 기다리고 아래로 스크롤을 4번(1초 간격) 해서 40개를 채운 뒤 읽는다(chrome-tab.applescript 의 스크롤 횟수 인자).
+- **속도**: 키워드 간 30초(5초→30초, 짧은 간격이 캡차 원인으로 보임). 하루 1회, 11:00(대표 지정 — 08:15 아님).
+- **캡차 감지**: 뜨면 그 키워드부터 그날 전체를 중단하고, 슬랙 "🔒 네이버 보안확인 — 16GB 크롬에서 한 번 풀어줘야 함" 1줄(마커로 하루 1회만). **형이 16GB 크롬에서 네이버 쇼핑을 한 번 열어 직접 풀어줘야** 다음 실행부터 정상화된다(10/21 낮 캡차가 저녁까지 남아 있었을 수 있어, 다음 시험 전에 먼저 풀어 두는 게 안전).
+- Multi Plus(슬롯 서비스, 11/07 종료) 대체.
 
-## 형이 할 것 (16GB 에서 1번)
-1. **크롬 설정**: 크롬 메뉴 막대 **보기 → 개발자 → "Apple Events 의 JavaScript 허용"** 체크. (이게 없으면 결과를 못 받아 옴)
-2. **자동화 권한**: 첫 실행 때 "'터미널'(또는 'osascript')이(가) 'Google Chrome'을 제어하려고 합니다" 창이 뜨면 **허용**. 안 떴거나 거부했으면 시스템 설정 → 개인정보 보호 및 보안 → **자동화** 에서 터미널·osascript 항목의 Google Chrome 을 켬.
-   - 10/21 브레인 첫 시험의 "AppleEvent 시간 초과(-1712)" 가 바로 이 허용 창이 떠서 기다린 것. 화면 앞에서 1번 허용하면 다음부터 안 뜸.
-3. 슬랙 채널: 1차는 #쿠팡-결합(Watchman)으로 같이. 따로 보려면 새 채널 웹훅을 `SLACK_NAVER_WEBHOOK_URL` 로.
-4. 키워드 추가·끄기는 시트 탭에서.
+## 형이 할 것 (16GB 에서)
+1. **크롬 설정**: 크롬 메뉴 막대 **보기 → 개발자 → "Apple Events 의 JavaScript 허용"** 체크.
+2. **자동화 권한**: 첫 실행 때 뜨는 "터미널이 Google Chrome 을 제어하려고 합니다" 창을 **허용**.
+3. **시험 전에 캡차부터 풀기**: 16GB 크롬으로 `search.shopping.naver.com` 을 직접 열어 보안확인 화면이 뜨면 풀어 둔다(낮 시험의 캡차가 남아 있을 수 있음).
+4. 슬랙 채널: 1차는 #쿠팡-결합(Watchman)으로 같이. 따로 보려면 새 채널 웹훅을 `SLACK_NAVER_WEBHOOK_URL` 로.
+5. **키워드 추가·끄기는 나무_마스터 '네이버 순위 키워드' 탭에서만** — 코드·파일은 안 건드려도 된다.
 
 ## 브레인이 할 것
-1. 16GB: `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-rank-watch`
-2. 시험 1 (터미널에서, 형이 16GB 앞에 있을 때 — 허용 창): `~/crawler/dashboard/scripts/crawler-16gb/run-daily-rank.sh --no-send --limit 3 --dump` → `tail -4 ~/crawler/logs/run-rank.log`, 결과 `~/crawler/out/날짜/naver_rank_batch_01.json` 에서 ad 값·ids 확인, `naver_dump_귀리_p1.html` 을 inbox 로 가져와 대클에 전달 → 광고 식별 규칙 확정(extract-naver.js 손질)
-3. 시험 2 (launchd 로): `launchctl kickstart -k gui/$(id -u)/com.namucompany.crawler-naver-rank` → 같은 결과가 나오면 통과. **-1743(허용 안 됨)·-1712(시간 초과) 가 나오면 TCC 주체가 다른 것** → 아래 '권한 주체' 참고
+1. 16GB: `cd ~/crawler/dashboard && git pull`
+2. 시험 1 (터미널에서): `~/crawler/dashboard/scripts/crawler-16gb/run-daily-rank.sh --no-send --limit 3 --dump` → `tail -4 ~/crawler/logs/run-rank.log`, 결과 `~/crawler/out/날짜/naver_rank_batch_01.json` 에서 `ad`·`id`·`price` 값 확인(이제 `ids` 대신 `id` 1개, `mall`·가격도 있음). 상품을 3개 못 찾았으면(`count<3`) 자동으로 `naver_dump_<키워드>.html` 이 생긴다 — 그걸로 구조가 바뀌었는지 확인
+3. 시험 2 (launchd 로): `launchctl kickstart -k gui/$(id -u)/com.namucompany.crawler-naver-rank`
 4. Multi Plus 표(귀리 2·파로 2·호라산밀 1)와 ±1위 이내면 통과 → 등록:
 
         cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank.plist ~/Library/LaunchAgents/
@@ -253,23 +257,25 @@
 5. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 4 crawler/logs/run-rank.log'`
 
 ## 권한 주체 (launchd 에서 osascript 가 크롬을 제어할 때) — 미검증, 첫 시험으로 확인
-- 터미널에서 돌리면 권한은 **터미널 앱** 에 붙고, launchd 에이전트에서 돌리면 책임 앱이 없어 보통 **osascript** 자체(또는 /bin/zsh)에 붙는다. 그래서 터미널 시험이 되도 launchd 시험에서 -1743 이 날 수 있음 → launchd 로 1번 더 돌려 그때 뜨는 허용 창을 누르면 됨(Aqua 세션이라 창이 뜸).
-- 그래도 안 되면 **앱 번들로 감싸기**: 16GB 에서 `osacompile -o ~/crawler/NaverRank.app ~/crawler/dashboard/scripts/naver-rank-watch/chrome-tab.applescript` 처럼 AppleScript 앱을 만들고(또는 Automator '셸 스크립트 실행' 앱) 시스템 설정 자동화에서 그 앱에 Google Chrome 제어를 허용, launchd 는 `open -a ~/crawler/NaverRank.app` 로 띄우는 식. 그때 run.ts 의 osascript 호출을 앱 호출로 바꿔야 함(대클).
+- 터미널에서 돌리면 권한은 **터미널 앱** 에 붙고, launchd 에이전트에서 돌리면 책임 앱이 없어 보통 **osascript** 자체(또는 /bin/zsh)에 붙는다. 터미널 시험이 되도 launchd 시험(3번)에서 -1743 이 날 수 있음 → 그때 뜨는 허용 창을 누르면 됨(Aqua 세션이라 창이 뜸).
+- 그래도 안 되면 **앱 번들로 감싸기**: `osacompile -o ~/crawler/NaverRank.app ~/crawler/dashboard/scripts/naver-rank-watch/chrome-tab.applescript` 로 앱을 만들고 자동화 권한을 그 앱에 허용, launchd 는 `open -a` 로 띄움(그땐 run.ts 의 osascript 호출을 앱 호출로 바꿔야 함 — 대클).
 
-## 조정값 (lib/naver/rankWatch.ts)
-- MAX_RANK = 80 · RANK_MOVE_ALERT = 3 (±3 이상이면 🟢/🟠 강조)
-- 광고 식별 규칙: scripts/naver-rank-watch/extract-naver.js (클래스 adProduct · 광고 링크 adcr · '광고' 라벨). **실제 DOM 보고 확정 필요**
+## 조정값
+- lib/naver/rankWatch.ts: MAX_RANK = 40 · RANK_MOVE_ALERT = 3
+- scripts/naver-rank-watch/run.ts: WAIT_SEC = 8 · SCROLL_TIMES = 4 · KEYWORD_INTERVAL_MS = 30000
+- 광고 판별: extract-naver.js 가 `data-nlog-params` 의 `is_ad` 를 그대로 읽음(추측 규칙 아님 — 구조가 바뀌면 `count<3` 자동 dump 로 확인)
 
 ## 이 자동화가 틀리는 경우
 | 경우 | 확률 | 어떻게 되나 | 대응 |
 |---|---|---|---|
-| 네이버 결과 DOM 변경 → 항목·광고 못 가려냄 | **있음** (자주 바뀜) | 순위 0개 읽힘 또는 광고 포함 순위 | --dump 로 innerHTML 저장해 extract-naver.js 손질 |
-| 캡차·보안확인 | 낮음 (자동화 표시 없는 보통 크롬) | 그 키워드부터 중단, "못 읽음 N" | 16GB 크롬에서 사람이 1번 풀기, 간격 늘림 |
-| 크롬 앞 창 없음(launchd 에서 창 없이 떠 있음) | 있음 | AppleScript 가 창을 새로 만듦(코드에 있음). 그래도 안 되면 -1712 | 스크립트가 `open -ga` 로 먼저 띄움. 실패 시 로그 확인 |
+| 캡차·보안확인 | **있음** (10/21 낮 1회 확인) | 그날 전체 중단, 슬랙 1회 | 형이 16GB 크롬에서 직접 풀어야 함. 간격(30초)을 늘려도 안 되면 키워드 수를 줄임 |
+| `data-nlog-params` 속성 자체가 바뀜(네이버 로그 스키마 변경) | 낮음~있음 | 상품 0~2개 읽힘 → 자동 dump | dump 로 새 구조 확인해 extract-naver.js 손질 |
+| 스크롤해도 40개가 다 안 뜸(느린 렌더링) | 있음 | 상품 일부만 읽힘, 순위 밀림 | SCROLL_TIMES·대기 늘림 |
+| 크롬 앞 창 없음(launchd 에서 창 없이 떠 있음) | 있음 | AppleScript 가 창을 새로 만듦. 그래도 안 되면 -1712 | 스크립트가 `open -ga` 로 먼저 띄움. 실패 시 로그 확인 |
 | 자동화 권한 주체 불일치 (터미널 OK·launchd 실패) | 있음 | -1743 | 위 '권한 주체' |
 | 개인화 차이 (로그인 없는 16GB 크롬 vs 대표 폰) | 있음 | 1~3위 차이 | 추세로 봄. Multi Plus ±1 이내면 정상 |
-| 우리 상품이 원부(catalog)로 묶여 다른 ID 로 노출 | 있음 | "80위 밖" 오판 | 시트 URL 셀에 catalog 주소도 같이 |
-| 2페이지 밖 · 첫날 어제 없음 | — | 정상 | — |
+| 우리 상품이 원부(catalog)로 묶여 다른 ID 로 노출 | 있음 | "40위 밖" 오판 | 시트 URL 셀에 catalog 주소도 같이 |
+| 40위 밖 · 첫날 어제 없음 | — | 정상 | — |
 
 ---
 
