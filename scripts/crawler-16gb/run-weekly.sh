@@ -51,10 +51,11 @@ PROMPT="$(cat "$JOB")
 - 30일 보고서 기간: ${M_START} ~ ${M_END} → 기대 파일명 $MONTH_FILE
 - 확인 명령: node $CHECK <파일>
 "
-claude -p --chrome \
+# 지시문은 stdin 으로 — --allowedTools/--disallowedTools 는 뒤따르는 인자를 전부 도구 이름으로 먹어서 프롬프트를 뒤에 두면 안 된다 (10/21 16GB 실패 원인)
+printf '%s' "$PROMPT" | claude -p --chrome \
   --allowedTools "mcp__claude-in-chrome" "Bash(ls:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(node:*)" "Bash(sleep:*)" "Read" "Write" \
   --disallowedTools "WebFetch" "WebSearch" "Agent" \
-  "$PROMPT" >> "$LOG" 2>&1
+  >> "$LOG" 2>&1
 CLAUDE_EXIT=$?
 say "클로드 종료 코드 $CLAUDE_EXIT (자세한 건 $LOG)"
 
