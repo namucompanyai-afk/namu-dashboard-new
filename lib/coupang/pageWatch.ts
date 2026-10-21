@@ -149,7 +149,9 @@ export type Report = {
   reviewDrops: { pid: string; alias: string; from: number; to: number }[]
   foreign: PageOptionState[] // 우리 페이지에 붙은 남의 판매자 옵션 (결합 감시 신호)
   rocket: PageOptionState[] // 쿠팡(주) 옵션인데 시트 1P 행에 없음
-  unregistered: PageOptionState[] // 우리(또는 판매자 미확인) 옵션인데 시트에 없음
+  unregistered: PageOptionState[] // 우리 판매자로 확인된 옵션인데 시트에 없음
+  unreadOptions: PageOptionState[] // 옵션ID도 판매자도 못 읽은 페이지 옵션 (읽기 실패 — 미등록 아님)
+  blocked: string[] // Access Denied 로 못 읽은 pid (그날 전체 중단 신호)
   unmatched: Unmatched[] // 시트엔 있는데 페이지에서 못 찾음 (종류별)
   noBase: PageOptionState[]
   unread: string[]
@@ -163,7 +165,7 @@ export function buildSnapshot(o: { date: string; targets: TargetPage[]; pages: P
   const prevByKey = new Map((prev?.options ?? []).map((s) => [`${s.pid}|${s.oid || s.label}`, s]))
   const prevPage = new Map((prev?.pages ?? []).map((p) => [p.pid, p]))
   const options: PageOptionState[] = []
-  const report: Report = { diffs: [], changed: [], soldOut: [], reviewDrops: [], foreign: [], rocket: [], unregistered: [], unmatched: [], noBase: [], unread: [], pagesTotal: targets.length, optionsTotal: 0 }
+  const report: Report = { diffs: [], changed: [], soldOut: [], reviewDrops: [], foreign: [], rocket: [], unregistered: [], unreadOptions: [], unmatched: [], noBase: [], unread: [], blocked: pages.filter((p) => p.status === 'blocked').map((p) => p.pid), pagesTotal: targets.length, optionsTotal: 0 }
   const mk = (t: TargetPage, po: PageOption, p: PageResult, to: TargetOption | null, by: 'oid' | 'name' | ''): PageOptionState => ({
     pid: t.pid,
     oid: to?.oid ?? '',
@@ -220,10 +222,13 @@ export function buildSnapshot(o: { date: string; targets: TargetPage[]; pages: P
     for (const r of rest) {
       const s = mk(t, r, p, null, '')
       options.push(s)
-      const k = sellerKind(r.seller || p.seller)
+      // 시트에 없는 페이지 옵션은 그 옵션에 적힌 판매자로만 판단 (페이지 판매자를 물려받지 않음 — '1개' 같은 남의 옵션이 우리 것으로 보이지 않게)
+      const k = sellerKind(r.seller)
       if (k === 'foreign') report.foreign.push(s)
       else if (k === 'rocket') report.rocket.push(s)
-      else report.unregistered.push(s)
+      else if (k === 'ours') report.unregistered.push(s)
+      else if (r.oid) report.unregistered.push(s) // 옵션ID는 있는데 판매자 미표시 — 시트에 없는 건 맞음
+      else report.unreadOptions.push(s)
     }
     const pr = prevPage.get(t.pid)
     if (pr?.reviews != null && p.reviews != null && pr.reviews >= REVIEW_DROP_MIN && p.reviews < pr.reviews * (1 - REVIEW_DROP_PCT / 100))
@@ -247,6 +252,7 @@ function listLines<T>(items: T[], line: (x: T) => string): string[] {
 
 export function buildPageMessage(date: string, r: Report, prevDate: string | null): string {
   const L: string[] = []
+  if (r.blocked.length) L.push(`🚫 *차단 발생 (Access Denied) — ${r.blocked[0]} 에서 멈춤. 16GB 크롬 완전 종료 후 다시 열어야 함*`)
   const head = `*[쿠팡 가격 점검 ${md(date)}] 시트와 다름 ${r.diffs.length}건 · 어제와 달라짐 ${r.changed.length}건 · 품절 ${r.soldOut.length} · 남의 옵션 ${r.foreign.length} · 못 읽음 ${r.unread.length}/${r.pagesTotal}페이지*`
   L.push(head + (prevDate ? ` (비교: ${md(prevDate)})` : ' (첫 기록 — 어제 비교 없음)'))
   if (r.diffs.length) {
@@ -283,8 +289,9 @@ export function buildPageMessage(date: string, r: Report, prevDate: string | nul
   if (r.rocket.length) L.push('', `⚪ 쿠팡(주) 로켓 옵션인데 시트 1P 행에 없음 ${r.rocket.length}개: ${[...new Set(r.rocket.map((s) => s.alias))].slice(0, 8).join(', ')}`)
   if (r.unregistered.length) {
     L.push('', `⚪ 시트에 없는 우리 페이지 옵션(미등록) ${r.unregistered.length}건`)
-    L.push(...listLines(r.unregistered, (s) => `${s.alias} 페이지 · ${s.label}: ${won(s.price)}${s.seller ? ` · ${s.seller}` : ' · 판매자 미확인'}${s.soldOut ? ' (품절)' : ''}`))
+    L.push(...listLines(r.unregistered, (s) => `${s.alias} 페이지 · ${s.label}: ${won(s.price)}${s.seller ? ` · ${s.seller}` : ' · 판매자 미표시'}${s.soldOut ? ' (품절)' : ''}`))
   }
+  if (r.unreadOptions.length) L.push('', `⚪ 옵션ID·판매자를 못 읽은 페이지 옵션 ${r.unreadOptions.length}개 (읽기 실패, 미등록 아님): ${[...new Set(r.unreadOptions.map((s) => s.alias))].slice(0, 8).join(', ')}`)
   if (r.noBase.length) L.push('', `⚪ 시트 AE(기준가)가 비어 있어 비교 못 한 옵션 ${r.noBase.length}건: ${r.noBase.slice(0, 8).map((s) => `${s.alias} ${s.label}`).join(', ')}${r.noBase.length > 8 ? ` 외 ${r.noBase.length - 8}개` : ''}`)
   if (r.unmatched.length) {
     const cnt = (k: UnmatchedKind) => r.unmatched.filter((u) => u.kind === k).length

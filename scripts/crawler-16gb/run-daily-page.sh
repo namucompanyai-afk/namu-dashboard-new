@@ -26,7 +26,7 @@ OUT="$CRAWLER/out/$TODAY"
 LOG="$CRAWLER/logs/page-price-$TODAY.log"
 SUMMARY="$CRAWLER/logs/run-page.log"
 TARGETS="$OUT/page_targets.json"
-BATCH=4            # 클로드 세션 1개당 페이지 수 (페이지 읽기 + 대상 옵션별 이동이 세션 기억을 많이 먹어서 작게)
+BATCH=4            # 클로드 세션 1개당 페이지 수 (페이지 읽기가 세션 기억을 많이 먹어서 작게). 페이지 간 8초 + 묶음 간 90초
 mkdir -p "$OUT" "$CRAWLER/logs"
 
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S')	$*" | tee -a "$SUMMARY"; }
@@ -78,8 +78,8 @@ for bf in "$OUT"/page_targets_batch_*.json; do
     >> "$LOG" 2>&1
   code=$?
   if [[ -f "$rf" ]]; then DONE=$((DONE + 1)); say "묶음 $n ✅ (종료 코드 $code)"; else say "묶음 $n ❌ 결과 파일 없음 (종료 코드 $code)"; fi
-  if grep -q '"status": *"blocked"' "$rf" 2>/dev/null || grep -q "^차단:" "$LOG"; then BLOCKED=1; say "❌ 차단 감지 — 남은 묶음 중단"; break; fi
-  sleep 5
+  if grep -q '"status": *"blocked"' "$rf" 2>/dev/null || grep -q "^차단:" "$LOG"; then BLOCKED=1; say "❌ 차단 감지 (Access Denied) — 오늘 남은 묶음 전부 중단. 16GB 크롬 완전 종료 후 다시 열어야 함"; break; fi
+  sleep 90   # 묶음 사이 쉼 — 하루 50~80페이지를 천천히 (10/21 옵션별 이동 20회에서 차단된 뒤 간격 늘림)
 done
 rmdir "$CHROME_LOCK" 2>/dev/null
 
