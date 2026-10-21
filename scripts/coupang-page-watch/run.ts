@@ -2,7 +2,7 @@
  * 쿠팡 상품 페이지 가격 점검 — 대상 뽑기 · 결과 대조 · 저장 · 슬랙 (16GB 크롤링 맥이 매일 아침 실행, scripts/crawler-16gb/run-daily-page.sh)
  *   페이지 읽기 자체는 클로드 크롬 확장(jobs/page-price-check.md)이 하고, 이 스크립트는 그 앞뒤만 맡는다. 비교·메시지는 lib/coupang/pageWatch.ts
  *
- * 1) 대상: 나무_마스터 '마진계산' A2:AE → 채널 쿠팡 1P·3P 행의 노출상품ID(W)·옵션ID(X)·쿠팡 소비자가 기준(AE)·봉수(C)·쿠팡옵션명(AD) → 노출상품ID별 묶음
+ * 1) 대상: 나무_마스터 '마진계산' A2:AE → 채널 **쿠팡 3P만**(1P 는 scripts/coupang-stock-watch 가 맡음, 2026-10-21) 의 노출상품ID(W)·옵션ID(X)·쿠팡 소비자가 기준(AE)·봉수(C)·쿠팡옵션명(AD) → 노출상품ID별 묶음
  *    AE 가 비어 있는 옵션은 페이지는 읽되 비교하지 않고 '기준가 없음' 으로 센다 (D 는 1P 가 납품가라 쓰지 않음)
  *      npx tsx scripts/coupang-page-watch/run.ts --targets <out.json> [--batch 6] [--limit 10]
  *      → out.json 전체 + 같은 폴더에 <이름>_batch_01.json … (클로드 세션 1개당 페이지 수)
@@ -74,7 +74,7 @@ async function readTargets(): Promise<TargetPage[]> {
   const byPid = new Map<string, TargetPage>()
   for (const r of rows) {
     const channel = str(r[0])
-    if (channel !== '쿠팡 1P' && channel !== '쿠팡 3P') continue
+    if (channel !== '쿠팡 3P') continue // 1P 는 scripts/coupang-stock-watch(광고센터 상품 목록)가 맡는다 — 2026-10-21 대표 결정
     const pid = str(r[22])
     if (!/^\d+$/.test(pid)) continue
     const ae = num(r[30])
@@ -231,9 +231,8 @@ async function main() {
       fs.writeFileSync(`${base}_batch_${String(n).padStart(2, '0')}.json`, JSON.stringify(targets.slice(i, i + batch), null, 2))
     }
     const opts = targets.reduce((s, t) => s + t.options.length, 0)
-    const oneP = targets.reduce((s, t) => s + t.options.filter((o) => o.channel === '쿠팡 1P').length, 0)
     const noBase = targets.reduce((s, t) => s + t.options.filter((o) => o.sheetPrice == null).length, 0)
-    console.log(`대상 페이지 ${targets.length} · 옵션 ${opts} (1P ${oneP} · 3P ${opts - oneP} · AE 기준가 없음 ${noBase}) · 묶음 ${n}개(${batch}페이지씩) → ${file}`)
+    console.log(`대상 페이지 ${targets.length} · 옵션 ${opts}(3P) · AE 기준가 없음 ${noBase} · 묶음 ${n}개(${batch}페이지씩) → ${file}`)
     return
   }
   if (flag('--compare')) {

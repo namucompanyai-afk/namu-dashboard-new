@@ -271,5 +271,69 @@
 | 우리 상품이 원부(catalog)로 묶여 다른 ID 로 노출 | 있음 | "80위 밖" 오판 | 시트 URL 셀에 catalog 주소도 같이 |
 | 2페이지 밖 · 첫날 어제 없음 | — | 정상 | — |
 
+---
+
+# 6번째 작업 — 매일 10:00 광고센터 "광고 만들기" 상품 목록 → 1P 재고·현재가 → 슬랙 (2026-10-21)
+
+- 하는 일: 16GB 가 광고센터 캠페인 등록 화면의 "수동 상품 설정 > 전체 상품" 목록(1P 재고를 볼 수 있는 유일한 화면, 읽기만·등록 안 함)을 읽어 옵션ID·상품명·가격·재고·아이템위너·후기 수·배지를 뽑고, 마진계산의 **1P 1봉 옵션 기준가(AE)** 와 대조 → Supabase `coupang_1p_stock_YYYY-MM-DD` 저장 → 슬랙 1장(품절 그룹·재고 적음·재고 급감·가격 다름·후기 급감·아이템위너 아님). 손익 숫자 없음.
+- **로그인 — 중요**: 이 화면은 **허브(SUPPLIER HUB) 로그인**이어야 1P 가 보인다(윙만 로그인돼 있으면 3P만 보임, 10/21 확인). 화면 왼쪽 위 "wing | SUPPLIER HUB" 토글.
+- 1P 담당 역할 분리: 가격 대조(3번째 작업, 상품 페이지 순회)는 이제 **3P만** 본다(1P 는 이 작업이 맡음). 결합 감시(2번째 작업)는 3P 윙 엑셀 그대로.
+- 재고는 봉수별로 따로 표시된다(묶음은 재고를 공유 — 1봉 재고 2면 3봉 옵션은 보통 품절). 그룹(같은 상품) 안에 품절이 하나라도 있으면 그 그룹의 봉수별 재고를 한 줄로 보여준다. 가격 비교는 **1봉 옵션만**(마진계산 1P 행의 봉수=1, AE 기준) — 2봉 이상은 재고만 본다.
+
+## 형이 할 것: 없음 (허브 로그인이 풀렸을 때 16GB 크롬에서 다시 로그인하는 것만 — 7번째 작업이 이걸 줄이려 함)
+
+## 브레인이 할 것
+1. 16GB: `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/coupang-stock-watch`
+2. 시험: `~/crawler/dashboard/scripts/crawler-16gb/run-daily-stock.sh --no-send` → `tail -6 ~/crawler/logs/run-stock.log`, 슬랙 문안은 `~/crawler/logs/adcenter-stock-날짜.log` 끝. 결과 `~/crawler/out/날짜/adcenter_stock.json` 을 대표 캡처(찰흑미 1개 재고2·3개 품절·2개 재고1, 병아리콩 품절, 렌틸콩 366)와 대조 — 옵션ID·가격·재고가 일치하는지
+3. 등록 (대표 OK 뒤):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-adcenter-stock.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-adcenter-stock.plist
+
+4. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 6 crawler/logs/run-stock.log'`
+
+## 조정값 (lib/coupang/stockWatch.ts)
+- LOW_STOCK_MAX = 10 · STOCK_DROP_PCT = 50 · REVIEW_DROP_PCT = 20 · REVIEW_DROP_MIN = 20
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 허브 로그인 풀림 | **있음** (10/21 실측 약 1.5시간 유지) | "형, 허브(SUPPLIER HUB) 로그인 필요" | 7번째 작업(세션 유지)으로 줄임. 그래도 풀리면 16GB 허브 재로그인 |
+| 목록 화면 구조 변경(클래스·버튼 문구) | 있음 | 항목 0개 또는 값 틀림 | jobs/adcenter-stock-read.md 의 정규식 손질 |
+| 제목·순서 매칭이 안 맞음(5번 JS 결과와 6번 접근성 트리 순서가 다름) | 있음 (처음이라 미검증) | 상품명이 옵션과 어긋남 | 결과 JSON 을 보고 지시문의 매칭 방식을 손질 |
+| 재고 "품절"이 봉수 공유가 아니라 옵션별 독립일 수도 (가정 미확인) | 낮음 | 그룹 표시가 과하거나 부족 | 실제 데이터로 확인 |
+| 1만 개 넘는 상품(목록 "최대 1만개" 안내) | 거의 없음(우리는 수십 개) | 2페이지로도 못 봄 | 해당 없음 |
+| 평점 숫자(별 아이콘)를 못 읽음 | 있음 | rating 은 null | 후기 수·가격·재고로 충분 |
+
+---
+
+# 7번째 작업 — 20분마다 윙·허브·광고센터 로그인 유지 확인 (2026-10-21)
+
+- 왜: 10/21 실측 — 윙 로그인 09:5x~14:0x(약 4시간), 허브 12:4x~14:1x(약 1.5시간)만 유지됨. 2·4·6번째 작업(08:45·09:10·10:00)이 자주 "로그인 필요"로 멈출 수 있어, **로그인이 끊기기 전에 홈 화면을 열어 세션을 되살리는** 작업.
+- 방식: 20분마다 **실제 크롬**(클로드 확장 아님, naver-rank-watch/chrome-tab.applescript 재사용)으로 wing.coupang.com·supplier.coupang.com·advertising.coupang.com 홈을 6초씩 열어 로그인 폼이 보이는지만 확인하고 닫는다. 로그인 폼이 보이면(=세션 풀림) 사이트별 마커 파일을 만들고 그날 처음 한 번만 슬랙 "🔑 OO 로그인 풀림". 세션이 살아 있으면(또는 다시 살아나면) 마커를 지운다.
+- 2·4·6번째 작업은 시작할 때 마커 파일이 있으면 로그에 참고 한 줄을 남기고(그래도 시도는 함) — 마커는 안내용이지 막는 용도가 아니다.
+- 다른 크롤링 작업과 **크롬 잠금을 공유하되, 바쁘면 기다리지 않고 이번 20분 주기를 건너뛴다** (대기해서 다른 작업을 늦추지 않음).
+
+## 형이 할 것: 없음
+
+## 브레인이 할 것
+1. 16GB: `git pull` (chrome-tab.applescript 는 네이버 작업과 공용 — 이미 받아져 있으면 생략)
+2. 시험(터미널에서 직접): `~/crawler/dashboard/scripts/crawler-16gb/session-keepalive/run-keepalive.sh` → `tail -10 ~/crawler/logs/keepalive.log` 에 `wing 유지됨` / `hub 유지됨` / `adcenter 유지됨` (또는 지금 로그인 안 돼 있으면 `풀림` + 슬랙 1회)
+3. 등록 (대표 OK 뒤):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/session-keepalive/com.namucompany.crawler-session-keepalive.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-session-keepalive.plist
+
+4. **효과 검증(등록 후 2일)**: `grep -c 풀림 ~/crawler/logs/keepalive.log` 와 로그의 유지→풀림 전환 시각을 보고, 전처럼 몇 시간 안에 풀리면 plist 의 `StartInterval`을 1200(20분) → 600(10분)으로 낮춰 bootout·재등록.
+5. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 10 crawler/logs/keepalive.log'`
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 홈 화면을 여는 것만으론 세션이 안 늘어남(서버 쪽 정책) | **있음** (미검증 — 그래서 2일 효과 검증) | 로그인 유지 시간이 그대로 | 간격을 줄여도 안 되면 이 방식 자체 재검토(예: API 호출로 세션 갱신) |
+| 로그인 폼 감지 오탐(비밀번호 입력칸이 있는 다른 팝업) | 낮음 | 로그인 안 풀렸는데 "풀림" 오보 | keepalive.log 와 실제 상태 비교해 check-login.js 보정 |
+| 20분마다 접근이 쌓여 반대로 차단 유발 | 낮음 (홈 화면만, 검색·목록 아님) | 그 사이트 접근 전반 영향 | 간격을 늘림(30분) |
+| 다른 작업과 겹쳐 매번 건너뜀(크롬이 항상 바쁨) | 낮음 | 로그인 유지 효과 못 봄 | keepalive.log 의 "건너뜀" 비율 확인, 겹치면 각 작업 시간 재조정 |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

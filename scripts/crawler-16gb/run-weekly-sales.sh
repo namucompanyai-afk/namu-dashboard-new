@@ -52,6 +52,8 @@ PERIOD_FILE="$OUT/hub_sales_${START//-/}_${END//-/}.period.json"
 
 if [[ ! -f "$JOB" ]]; then say "❌ 지시문 없음 ($JOB) — git pull"; exit 1; fi
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 5번"; exit 1; fi
+# 세션 유지 작업(7번째)이 로그인 풀림을 미리 표시해 둠 — 참고만, 그래도 시도는 한다
+[[ -f "$CRAWLER/logs/.session-hub-expired" ]] && say "참고: 허브(SUPPLIER HUB) 로그인이 최근 점검에서 풀려 있었음(세션 유지 작업 기록) — 그래도 시도함"
 
 # 크롬 확장은 클로드 세션 하나씩만 (다른 크롤링과 잠금 공유, 최대 50분 대기)
 CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"

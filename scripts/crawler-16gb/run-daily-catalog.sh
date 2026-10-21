@@ -40,6 +40,8 @@ slack_once() {  # $1 = 문장. 연속 실패 중 첫날만 보냄
 
 if [[ ! -f "$JOB" || ! -f "$CHECK" || ! -f "$WATCH" ]]; then say "❌ 저장소 파일 없음 ($DASH) — SETUP.md 2번째 작업 1번 (sparse-checkout add)"; exit 1; fi
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 5번"; exit 1; fi
+# 세션 유지 작업(7번째)이 로그인 풀림을 미리 표시해 둠 — 참고만, 그래도 시도는 한다
+[[ -f "$CRAWLER/logs/.session-wing-expired" ]] && say "참고: 윙 로그인이 최근 점검에서 풀려 있었음(세션 유지 작업 기록) — 그래도 시도함"
 
 # 크롬 확장은 클로드 세션 하나씩만 — 08:00 페이지 순회(run-daily-page.sh)와 겹치면 끝날 때까지 기다림 (최대 50분, 90분 지난 잠금은 버림)
 CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 20분마다 run-keepalive.sh (wing·허브·광고센터 로그인 유지 확인, 실제 크롬 AppleScript — 클로드 확장 안 씀).
+  다른 크롤링 작업과 크롬 잠금을 공유하되, 바쁘면 기다리지 않고 이번 주기를 건너뛴다(비침투적).
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/session-keepalive/com.namucompany.crawler-session-keepalive.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-session-keepalive.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-session-keepalive
+  간격 조정(10분으로): StartInterval 값을 600 으로 바꾸고 bootout 뒤 다시 bootstrap
+  로그: ~/crawler/logs/keepalive.log (한 줄씩 — 유지/풀림/복구) · ~/crawler/logs/launchd-keepalive.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-session-keepalive</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/session-keepalive/run-keepalive.sh" &gt;&gt; "$HOME/crawler/logs/launchd-keepalive.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-keepalive.err"</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>1200</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>
