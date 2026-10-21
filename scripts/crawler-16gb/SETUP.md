@@ -227,39 +227,49 @@
 
 ---
 
-# 5번째 작업 — 매일 08:15 네이버 쇼핑 키워드 순위(광고 제외) → 슬랙 (2026-10-21)
+# 5번째 작업 — 매일 08:15 네이버 쇼핑 키워드 순위(광고 제외) → 슬랙 (2026-10-21, 크롬 AppleScript 방식)
 
-- 하는 일: 16GB 가 나무_마스터 **'네이버 순위 키워드'** 탭(키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)을 읽어, 키워드마다 네이버 쇼핑 검색을 로그인 없이 1번 열고(없으면 2페이지까지) **'광고' 항목을 뺀 순서**로 우리 상품이 몇 번째인지 센다 → Supabase `naver_rank_YYYY-MM-DD` 저장 → 슬랙 1장(오늘 순위 · 어제 대비 ↑↓ · 순위권 이탈 · 못 읽음). 손익 숫자 없음.
-- 상품 식별은 URL 속 ID 로만(products/ID · catalog/ID · nvMid) — 이름 매칭 안 함. 2페이지(80개) 밖이면 "80위 밖".
-- Multi Plus(슬롯 서비스, 11/07 종료) 대체. 그쪽은 '통검' 기준이라 우리 기본(쇼핑검색)과 1~2위 차이 날 수 있음. 통검으로 보고 싶은 키워드는 탭의 '검색 종류'에 '통합검색'.
+- 하는 일: 16GB 가 나무_마스터 **'네이버 순위 키워드'** 탭(키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)을 읽어, 키워드마다 **16GB 의 진짜 크롬을 AppleScript 로 조종**해 네이버 쇼핑 검색 1페이지를 열고(없으면 2페이지까지) 결과 목록에서 **'광고' 항목을 뺀 순서**로 우리 상품이 몇 번째인지 센다 → Supabase `naver_rank_YYYY-MM-DD` 저장 → 슬랙 1장(오늘 순위 · 어제 대비 ↑↓ · 순위권 이탈 · 못 읽음). 손익 숫자 없음.
+- 왜 이 방식인가(10/21): 클로드 크롬 확장은 네이버 쇼핑·통합검색을 "safety restrictions" 로 거부(24GB 도 동일), Playwright 는 캡차, 네이버 쇼핑 검색 API 는 2026-07-31 종료(대체 없음). 남은 길 = 확장을 거치지 않고 보통 크롬에 Apple Events 로 "탭 열어 → JS 실행 → 결과 받기". 자동화 표시가 없는 진짜 크롬이라 캡차 가능성이 가장 낮음.
+- 상품 식별은 URL 속 ID 로만(products/ID · catalog/ID · nvMid) — 이름 매칭 안 함. 2페이지(80개) 밖이면 "80위 밖". 키워드 간 5초, 하루 9~18회 접근.
+- Multi Plus(슬롯 서비스, 11/07 종료) 대체. 그쪽은 '통검' 기준이라 우리 기본(쇼핑검색)과 1~2위 차이 가능. 통검으로 볼 키워드는 탭 '검색 종류'에 '통합검색'.
 
-## 형이 할 것
-1. 슬랙 채널 정하기: 1차는 #쿠팡-결합(Watchman 웹훅) 으로 같이 보냄. 따로 보려면 새 채널(예: #네이버-순위)에 Watchman 앱 웹훅 1개 더 만들어 16GB .env 에 `SLACK_NAVER_WEBHOOK_URL` 로 넣으면 그쪽으로 감 (키 전달은 브레인 SSH).
-2. 키워드 추가·끄기는 시트 탭에서 (ON/OFF 열). 그 외 없음.
+## 형이 할 것 (16GB 에서 1번)
+1. **크롬 설정**: 크롬 메뉴 막대 **보기 → 개발자 → "Apple Events 의 JavaScript 허용"** 체크. (이게 없으면 결과를 못 받아 옴)
+2. **자동화 권한**: 첫 실행 때 "'터미널'(또는 'osascript')이(가) 'Google Chrome'을 제어하려고 합니다" 창이 뜨면 **허용**. 안 떴거나 거부했으면 시스템 설정 → 개인정보 보호 및 보안 → **자동화** 에서 터미널·osascript 항목의 Google Chrome 을 켬.
+   - 10/21 브레인 첫 시험의 "AppleEvent 시간 초과(-1712)" 가 바로 이 허용 창이 떠서 기다린 것. 화면 앞에서 1번 허용하면 다음부터 안 뜸.
+3. 슬랙 채널: 1차는 #쿠팡-결합(Watchman)으로 같이. 따로 보려면 새 채널 웹훅을 `SLACK_NAVER_WEBHOOK_URL` 로.
+4. 키워드 추가·끄기는 시트 탭에서.
 
 ## 브레인이 할 것
-1. 나무_마스터에 탭 '네이버 순위 키워드' 만들고 9개 채움 (A 키워드 · B URL · C 별칭 · D 검색 종류(비우면 쇼핑검색) · E ON/OFF(비우면 ON))
-2. 16GB: `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-rank-watch lib/naver` (lib 전체가 이미 있으면 뒤 항목 생략)
-3. 시험: `~/crawler/dashboard/scripts/crawler-16gb/run-daily-rank.sh --no-send --limit 3` → `tail -5 ~/crawler/logs/run-rank.log`, 슬랙 문안은 `~/crawler/logs/naver-rank-날짜.log` 끝. Multi Plus 표(귀리 2·파로 2·호라산밀 1)와 ±1위 이내면 통과. 결과 JSON `~/crawler/out/날짜/naver_rank_batch_01.json` 에서 광고 항목이 ad:true 로 잡혔는지 확인.
-4. 등록 (대표 OK 뒤):
+1. 16GB: `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-rank-watch`
+2. 시험 1 (터미널에서, 형이 16GB 앞에 있을 때 — 허용 창): `~/crawler/dashboard/scripts/crawler-16gb/run-daily-rank.sh --no-send --limit 3 --dump` → `tail -4 ~/crawler/logs/run-rank.log`, 결과 `~/crawler/out/날짜/naver_rank_batch_01.json` 에서 ad 값·ids 확인, `naver_dump_귀리_p1.html` 을 inbox 로 가져와 대클에 전달 → 광고 식별 규칙 확정(extract-naver.js 손질)
+3. 시험 2 (launchd 로): `launchctl kickstart -k gui/$(id -u)/com.namucompany.crawler-naver-rank` → 같은 결과가 나오면 통과. **-1743(허용 안 됨)·-1712(시간 초과) 가 나오면 TCC 주체가 다른 것** → 아래 '권한 주체' 참고
+4. Multi Plus 표(귀리 2·파로 2·호라산밀 1)와 ±1위 이내면 통과 → 등록:
 
         cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank.plist ~/Library/LaunchAgents/
         launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank.plist
 
-5. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 5 crawler/logs/run-rank.log'`
+5. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 4 crawler/logs/run-rank.log'`
+
+## 권한 주체 (launchd 에서 osascript 가 크롬을 제어할 때) — 미검증, 첫 시험으로 확인
+- 터미널에서 돌리면 권한은 **터미널 앱** 에 붙고, launchd 에이전트에서 돌리면 책임 앱이 없어 보통 **osascript** 자체(또는 /bin/zsh)에 붙는다. 그래서 터미널 시험이 되도 launchd 시험에서 -1743 이 날 수 있음 → launchd 로 1번 더 돌려 그때 뜨는 허용 창을 누르면 됨(Aqua 세션이라 창이 뜸).
+- 그래도 안 되면 **앱 번들로 감싸기**: 16GB 에서 `osacompile -o ~/crawler/NaverRank.app ~/crawler/dashboard/scripts/naver-rank-watch/chrome-tab.applescript` 처럼 AppleScript 앱을 만들고(또는 Automator '셸 스크립트 실행' 앱) 시스템 설정 자동화에서 그 앱에 Google Chrome 제어를 허용, launchd 는 `open -a ~/crawler/NaverRank.app` 로 띄우는 식. 그때 run.ts 의 osascript 호출을 앱 호출로 바꿔야 함(대클).
 
 ## 조정값 (lib/naver/rankWatch.ts)
-- MAX_RANK = 80 (2페이지) · RANK_MOVE_ALERT = 3 (±3 이상이면 🟢/🟠 강조) · 묶음 3키워드(run-daily-rank.sh BATCH)
+- MAX_RANK = 80 · RANK_MOVE_ALERT = 3 (±3 이상이면 🟢/🟠 강조)
+- 광고 식별 규칙: scripts/naver-rank-watch/extract-naver.js (클래스 adProduct · 광고 링크 adcr · '광고' 라벨). **실제 DOM 보고 확정 필요**
 
 ## 이 자동화가 틀리는 경우
 | 경우 | 확률 | 어떻게 되나 | 대응 |
 |---|---|---|---|
-| 캡차·"비정상 접근" 차단 | 낮음~있음 (하루 9~18회 접근, 미검증) | 그 묶음부터 중단, "못 읽음 N" | 첫 2주 관찰, 키워드 간격 늘림. 캡차는 16GB 크롬에서 사람이 1번 풀면 됨 |
-| 개인화 차이 (로그인 없는 16GB 크롬 vs 대표 폰) | 있음 | 1~3위 차이 | 추세로 봄. Multi Plus 와 ±1 이내면 정상 |
-| 광고 표시를 못 가려냄 (결과 구조 바뀜) | 있음 (네이버 자주 바꿈) | 순위가 광고 포함으로 밀림 | 결과 JSON 의 ad 값 확인 → 지시문·JS 손질 |
-| 우리 상품이 원부(catalog)로 묶여 다른 ID 로 노출 | 있음 | "80위 밖" 오판 | 시트 URL 에 catalog 주소도 같이(한 셀에 두 URL 넣어도 ID 둘 다 뽑음) |
-| 2페이지 밖 | — | "80위 밖" | 정상 |
-| 어제 기록 없음 | 첫날 | ↑↓ 없음 | 정상 |
+| 네이버 결과 DOM 변경 → 항목·광고 못 가려냄 | **있음** (자주 바뀜) | 순위 0개 읽힘 또는 광고 포함 순위 | --dump 로 innerHTML 저장해 extract-naver.js 손질 |
+| 캡차·보안확인 | 낮음 (자동화 표시 없는 보통 크롬) | 그 키워드부터 중단, "못 읽음 N" | 16GB 크롬에서 사람이 1번 풀기, 간격 늘림 |
+| 크롬 앞 창 없음(launchd 에서 창 없이 떠 있음) | 있음 | AppleScript 가 창을 새로 만듦(코드에 있음). 그래도 안 되면 -1712 | 스크립트가 `open -ga` 로 먼저 띄움. 실패 시 로그 확인 |
+| 자동화 권한 주체 불일치 (터미널 OK·launchd 실패) | 있음 | -1743 | 위 '권한 주체' |
+| 개인화 차이 (로그인 없는 16GB 크롬 vs 대표 폰) | 있음 | 1~3위 차이 | 추세로 봄. Multi Plus ±1 이내면 정상 |
+| 우리 상품이 원부(catalog)로 묶여 다른 ID 로 노출 | 있음 | "80위 밖" 오판 | 시트 URL 셀에 catalog 주소도 같이 |
+| 2페이지 밖 · 첫날 어제 없음 | — | 정상 | — |
 
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

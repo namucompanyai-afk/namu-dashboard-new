@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  16GB 크롤링 맥 전용 — 매일 08:15 run-daily-rank.sh (네이버 쇼핑 키워드 순위, 광고 제외 → 슬랙).
-  07:30 페이지 순회·08:45 윙 엑셀과 크롬 잠금을 공유해 겹치면 순서대로 돈다.
+  16GB 크롤링 맥 전용 — 매일 08:15 run-daily-rank.sh (실제 크롬을 AppleScript 로 조종해 네이버 쇼핑 순위 → 슬랙). 클로드 확장 안 씀.
+  자동화 권한(osascript→Chrome)·Chrome 'Apple Events 의 JavaScript 허용' 이 먼저 (SETUP.md 5번째 절). 다른 크롤링과 크롬 잠금 공유.
   등록 (16GB 에서, 대표 확인 후):
     cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank.plist ~/Library/LaunchAgents/
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank.plist

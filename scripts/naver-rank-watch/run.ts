@@ -4,10 +4,14 @@
  *
  * 1) 대상: 나무_마스터 '네이버 순위 키워드' 탭 A2:E (키워드 · 우리 상품 URL · 별칭 · 검색 종류 · ON/OFF)
  *      npx tsx scripts/naver-rank-watch/run.ts --targets <out.json> [--batch 3] [--limit 3]
- * 2) 대조: 결과 폴더의 naver_rank_batch_*.json → 직전 스냅샷과 비교 → dashboard_data 'naver_rank_YYYY-MM-DD' → 슬랙(--send)
+ * 2) 수집: 16GB 실제 크롬을 AppleScript 로 조종(chrome-tab.applescript) — 키워드마다 탭 열기 → 6초 → extract-naver.js 실행 → JSON → 탭 닫기.
+ *      1페이지에 우리 ID 없으면 &pagingIndex=2 한 번 더. 키워드 간 5초. 결과는 naver_rank_batch_01.json. 첫 시험은 --dump 로 목록 innerHTML 도 저장(광고 규칙 확인용)
+ *      npx tsx scripts/naver-rank-watch/run.ts --fetch --targets <json> --results <dir> [--dump]
+ *      (클로드 크롬 확장은 네이버 쇼핑을 "safety restrictions" 로 거부, Playwright 는 캡차, 네이버 쇼핑 검색 API 는 2026-07-31 종료 → 남은 길이 이것. 10/21)
+ * 3) 대조: 결과 폴더의 naver_rank_batch_*.json → 직전 스냅샷과 비교 → dashboard_data 'naver_rank_YYYY-MM-DD' → 슬랙(--send)
  *      npx tsx scripts/naver-rank-watch/run.ts --compare --targets <json> --results <dir> [--date] [--send] [--local-store <dir>] [--out <json>]
  * 키: RANK_WATCH_ENV 가 가리키는 파일(기본 저장소 .env.local) — GOOGLE_SERVICE_ACCOUNT · SUPABASE_URL·SUPABASE_SERVICE_ROLE_KEY ·
- *     SLACK_NAVER_WEBHOOK_URL(있으면 그 채널) 없으면 SLACK_REVIEW_WEBHOOK_URL(#쿠팡-결합 Watchman) 로 보냄
+ *     SLACK_NAVER_WEBHOOK_URL(있으면 그 채널) 없으면 SLACK_REVIEW_WEBHOOK_URL(#쿠팡-결합 Watchman). 네이버 키 없음(로그인 없는 크롬)
  */
 import fs from 'fs'
 import os from 'os'
@@ -15,7 +19,7 @@ import path from 'path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { google } from 'googleapis'
 import { MASTER_SHEET_ID } from '../../lib/sheet-ids'
-import { RANK_ID_PREFIX, buildRankMessage, buildRankSnapshot, extractIds, rankSnapshotId, type RankResult, type RankSnapshot, type RankTarget } from '../../lib/naver/rankWatch'
+import { RANK_ID_PREFIX, buildRankMessage, buildRankSnapshot, extractIds, rankSnapshotId, type RankItem, type RankResult, type RankSnapshot, type RankTarget } from '../../lib/naver/rankWatch'
 
 const REPO = path.resolve(__dirname, '..', '..')
 const TAB = '네이버 순위 키워드'
@@ -111,6 +115,67 @@ async function postSlack(text: string) {
   return process.env.SLACK_NAVER_WEBHOOK_URL ? 'SLACK_NAVER_WEBHOOK_URL' : 'SLACK_REVIEW_WEBHOOK_URL(#쿠팡-결합)'
 }
 
+// ── 실제 크롬(AppleScript) 으로 검색 결과 읽기 ──────────────────────
+import { execFileSync } from 'child_process'
+const APPLESCRIPT = path.join(__dirname, 'chrome-tab.applescript')
+const EXTRACT_JS = path.join(__dirname, 'extract-naver.js')
+type Extracted = { url?: string; captcha?: boolean; count?: number; items?: { ad: boolean; title: string; mall: string; link: string; ids: string[]; cls?: string }[]; dump?: string }
+function chromeExtract(url: string, waitSec = 6): Extracted {
+  const raw = execFileSync('osascript', [APPLESCRIPT, url, EXTRACT_JS, String(waitSec)], { encoding: 'utf-8', timeout: 90_000 }).trim()
+  if (raw.startsWith('__ERROR__')) throw new Error(raw.slice(0, 200))
+  if (!raw) throw new Error('execute javascript 결과 없음 — Chrome 보기>개발자>"Apple Events 의 JavaScript 허용" 확인')
+  return JSON.parse(raw) as Extracted
+}
+const searchUrl = (t: RankTarget, page: number) =>
+  t.searchType === 'total'
+    ? `https://search.naver.com/search.naver?query=${encodeURIComponent(t.keyword)}`
+    : `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(t.keyword)}${page > 1 ? `&pagingIndex=${page}` : ''}`
+/** 키워드마다 1페이지 → 우리 ID 없으면 2페이지. 결과는 크롬 확장 방식과 같은 파일 형식으로 저장 */
+async function fetchAll(targets: RankTarget[], dir: string, dump: boolean) {
+  fs.mkdirSync(dir, { recursive: true })
+  const out: RankResult[] = []
+  let loads = 0
+  for (const t of targets) {
+    const readAt = new Date().toISOString()
+    try {
+      const items: RankItem[] = []
+      let pages = 0
+      let n = 0
+      for (const page of [1, 2]) {
+        const ex = chromeExtract(searchUrl(t, page))
+        loads += 1
+        pages += 1
+        if (dump && ex.dump) fs.writeFileSync(path.join(dir, `naver_dump_${t.keyword}_p${page}.html`), ex.dump)
+        if (ex.captcha) {
+          out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'captcha', pagesRead: pages, items, note: '캡차·보안확인 화면' })
+          throw new Error('__CAPTCHA__')
+        }
+        for (const it of ex.items ?? []) {
+          if (!it.ad) n += 1
+          items.push({ rank: it.ad ? null : n, ad: !!it.ad, title: it.title, mall: it.mall, link: it.link, ids: it.ids ?? [] })
+        }
+        if (items.some((x) => !x.ad && x.ids.some((id) => t.ids.includes(id)))) break
+        if (t.searchType === 'total' || !(ex.items ?? []).length) break
+        await new Promise((r) => setTimeout(r, 5000))
+      }
+      out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'ok', pagesRead: pages, items })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg === '__CAPTCHA__') {
+        console.log(`캡차 — ${t.keyword} 에서 중단`)
+        break
+      }
+      out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'error', items: [], note: msg.slice(0, 200) })
+    }
+    await new Promise((r) => setTimeout(r, 5000))
+  }
+  const file = path.join(dir, 'naver_rank_batch_01.json')
+  fs.writeFileSync(file, JSON.stringify(out, null, 1))
+  const ok = out.filter((r) => r.status === 'ok').length
+  console.log(`크롬 페이지 로드 ${loads}회 · 키워드 ${ok}/${targets.length} 읽음 → ${file}`)
+  return out
+}
+
 function readResults(dir: string): RankResult[] {
   const out: RankResult[] = []
   const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /^naver_rank_batch_\d+\.json$/.test(f)).sort() : []
@@ -152,7 +217,7 @@ function readResults(dir: string): RankResult[] {
 
 async function main() {
   loadEnv()
-  if (opt('--targets') && !flag('--compare')) {
+  if (opt('--targets') && !flag('--compare') && !flag('--fetch')) {
     const file = path.resolve(opt('--targets')!)
     const limit = Number(opt('--limit') || 0)
     const batch = Number(opt('--batch') || 3)
@@ -167,6 +232,15 @@ async function main() {
       fs.writeFileSync(`${base}_batch_${String(n).padStart(2, '0')}.json`, JSON.stringify(targets.slice(i, i + batch), null, 2))
     }
     console.log(`대상 키워드 ${targets.length} (통검 ${targets.filter((t) => t.searchType === 'total').length}) · 묶음 ${n}개(${batch}개씩) → ${file}`)
+    return
+  }
+  if (flag('--fetch')) {
+    const tfile = opt('--targets')
+    const rdir = opt('--results')
+    if (!tfile || !rdir) throw new Error('--fetch 에는 --targets <json> --results <dir> 필요')
+    const targets = JSON.parse(fs.readFileSync(tfile, 'utf-8')) as RankTarget[]
+    const out = await fetchAll(targets, rdir, flag('--dump'))
+    if (!out.some((r) => r.status === 'ok')) process.exitCode = 1
     return
   }
   if (flag('--compare')) {
@@ -187,7 +261,7 @@ async function main() {
     if (SEND) console.log(`${date}\t슬랙 보냄 (${await postSlack(text)})`)
     return
   }
-  console.error('사용법: --targets <out.json> [--batch N] [--limit N] | --compare --targets <json> --results <dir> [--date] [--send] [--local-store <dir>] [--out <json>]')
+  console.error('사용법: --targets <out.json> [--batch N] [--limit N] | --fetch --targets <json> --results <dir> [--dump] | --compare --targets <json> --results <dir> [--date] [--send] [--local-store <dir>] [--out <json>]')
   process.exitCode = 2
 }
 main().catch((e) => {

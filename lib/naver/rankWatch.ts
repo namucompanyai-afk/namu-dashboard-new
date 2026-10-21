@@ -12,7 +12,7 @@
 
 export const RANK_ID_PREFIX = 'naver_rank_'
 export const rankSnapshotId = (date: string) => `${RANK_ID_PREFIX}${date}`
-export const MAX_RANK = 80 // 2페이지 × 40
+export const MAX_RANK = 80 // 2페이지 × 40 — 그 밖은 '80위 밖'
 export const RANK_MOVE_ALERT = 3 // 어제보다 이만큼 넘게 움직이면 강조
 
 export type RankTarget = {
@@ -111,13 +111,12 @@ export function buildRankSnapshot(o: { date: string; targets: RankTarget[]; resu
 
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`
 const rk = (n: number | null) => (n == null ? `${MAX_RANK}위 밖` : `${n}위`)
-const st = (s: string) => (s === 'total' ? '통검' : '쇼핑')
 
 export function buildRankMessage(date: string, r: RankReport, prevDate: string | null): string {
   const L: string[] = []
   const big = r.moved.filter((m) => Math.abs(m.delta) >= RANK_MOVE_ALERT)
   L.push(`*[네이버 순위 ${md(date)}] 키워드 ${r.total}개 · 변동 ${r.moved.length}건 (±${RANK_MOVE_ALERT} 이상 ${big.length}) · 순위권 이탈 ${r.lost.length} · 못 읽음 ${r.unread.length}*` + (prevDate ? ` (비교: ${md(prevDate)})` : ' (첫 기록 — 어제 비교 없음)'))
-  L.push('_광고 제외 순위 · 2페이지(80개)까지_')
+  L.push(`_광고 제외 순위 · 2페이지(${MAX_RANK}개)까지 · 로그인 없는 16GB 크롬 기준_`)
   if (r.lost.length) L.push('', `🔴 *순위권 이탈 ${r.lost.length}건*`, ...r.lost.map((x) => `• ${x.s.keyword} · ${x.s.alias}: ${MAX_RANK}위 밖 (어제 ${x.from}위)`))
   L.push('', '*오늘 순위*')
   for (const s of r.ranks) {
@@ -127,6 +126,6 @@ export function buildRankMessage(date: string, r: RankReport, prevDate: string |
     L.push(`${mark} ${s.keyword}${s.searchType === 'total' ? '(통검)' : ''} · ${s.alias}: *${rk(s.rank)}*${arrow}${s.adCount ? ` · 광고 ${s.adCount}` : ''}`)
   }
   if (r.unread.length) L.push('', `_못 읽은 키워드 ${r.unread.length}개: ${r.unread.join(', ')}_`)
-  L.push('', `_한계: 로그인 없는 16GB 크롬 기준(개인화 차이 가능) · 하루 1회 · ${st('shopping')}검색 기준, 통검은 따로 표시_`)
+  L.push('', `_한계: 개인화 차이 가능(첫 주 대표 폰·Multi Plus 와 대조) · 하루 1회 · 통검은 따로 표시_`)
   return L.join('\n')
 }
