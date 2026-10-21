@@ -52,7 +52,7 @@ async function readTargets(): Promise<RankTarget[]> {
   const creds = JSON.parse(raw)
   if (typeof creds.private_key === 'string') creds.private_key = creds.private_key.replace(/\\n/g, '\n')
   const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'] })
-  const res = await google.sheets({ version: 'v4', auth }).spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `'${TAB}'!A2:E`, valueRenderOption: 'UNFORMATTED_VALUE' })
+  const res = await google.sheets({ version: 'v4', auth }).spreadsheets.values.get({ spreadsheetId: MASTER_SHEET_ID, range: `'${TAB}'!A2:G`, valueRenderOption: 'UNFORMATTED_VALUE' }) // G = 네이버 상품 MID(수기, 2026-10-22) — URL 이 브랜드스토어라 네이버 nvMid 와 달라서 따로 매칭용
   const rows = (res.data.values || []) as unknown[][]
   const out: RankTarget[] = []
   for (const r of rows) {
@@ -61,9 +61,10 @@ async function readTargets(): Promise<RankTarget[]> {
     if (!keyword || !url) continue
     const onoff = str(r[4]).toUpperCase()
     if (onoff && onoff !== 'ON' && onoff !== 'Y' && onoff !== 'TRUE') continue
-    const ids = extractIds(url)
+    const mid = str(r[6])
+    const ids = [...new Set([...extractIds(url), ...(/^\d+$/.test(mid) ? [mid] : [])])] // G열 네이버 상품 MID — URL(브랜드스토어 등) ID 와 네이버 검색 결과의 nv_mid 가 다를 수 있어 둘 다 매칭 대상
     if (!ids.length) {
-      console.log(`[경고] ${keyword}: URL 에서 상품 ID 못 뽑음 — 건너뜀 (${url.slice(0, 60)})`)
+      console.log(`[경고] ${keyword}: URL·MID 모두에서 상품 ID 못 뽑음 — 건너뜀 (${url.slice(0, 60)})`)
       continue
     }
     const kind = str(r[3])
