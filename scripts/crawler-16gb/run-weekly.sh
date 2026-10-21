@@ -53,6 +53,7 @@ PROMPT="$(cat "$JOB")
 "
 # 지시문은 stdin 으로 — --allowedTools/--disallowedTools 는 뒤따르는 인자를 전부 도구 이름으로 먹어서 프롬프트를 뒤에 두면 안 된다 (10/21 16GB 실패 원인)
 printf '%s' "$PROMPT" | claude -p --chrome \
+  --add-dir "$HOME/Downloads" \
   --allowedTools "mcp__claude-in-chrome" "Bash(ls:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(node:*)" "Bash(sleep:*)" "Read" "Write" \
   --disallowedTools "WebFetch" "WebSearch" "Agent" \
   >> "$LOG" 2>&1
