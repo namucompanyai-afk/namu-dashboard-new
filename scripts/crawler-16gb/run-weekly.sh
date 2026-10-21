@@ -2,6 +2,7 @@
 # 16GB 크롤링 맥 — 월요일 09:00 launchd 가 부르는 한 묶음 (손으로 돌릴 때: ~/crawler/dashboard/scripts/crawler-16gb/run-weekly.sh)
 #   1) 크롬 켜기 → 2) 클로드가 크롬 확장으로 광고센터 보고서 2개(지난주 월~일 · 최근 30일) 받아 ~/crawler/out/오늘/ 로 옮김
 #   3) 받은 파일 확인(행 수·열 이름, 금액 없음) → 4) 업로드 스크립트(run.ts)가 Supabase 에 저장
+#   5) 업로드 성공하면 허브 판매 분석(4주) 받아 '팔리는데 광고 없는 1P' 대조 → #쿠팡-결합 슬랙 1줄 (2026-10-21 추가)
 # 로그: ~/crawler/logs/ad-report-YYYY-MM-DD.log (클로드 출력 전체) · ~/crawler/logs/run-weekly.log (한 줄 요약)
 # 키는 ~/crawler/.env 에만 (AD_UPLOAD_ENV). 화면·로그에 키·금액을 찍지 않는다.
 #   시험용: run-weekly.sh --no-upload  → 보고서만 받고 Supabase 에는 올리지 않는다 (SETUP.md 6번)
@@ -97,4 +98,19 @@ AD_UPLOAD_DIR="$OUT" AD_UPLOAD_ENV="$CRAWLER/.env" npx --yes tsx scripts/ad-week
 UP_EXIT=$?
 tail -n 5 "$HOME/.namu-ad-upload/upload.log" 2>/dev/null | sed 's/^/    /' | tee -a "$SUMMARY"
 say "$([[ $UP_EXIT -eq 0 ]] && echo '✅' || echo '❌') 업로드 종료 코드 $UP_EXIT"
-exit $UP_EXIT
+if [[ $UP_EXIT -ne 0 ]]; then exit $UP_EXIT; fi
+
+# 5) "팔리는데 광고 없는 1P" 점검 (2026-10-21 추가) — 업로드가 방금 coupang_ad_live_30d 를 새로 올렸으니 그걸 바로 씀.
+#    새 크롤링 없음: 허브 판매 분석 4주 파일만 이 자리에서 받아(기존 run-weekly-sales.sh 재사용) 옵션ID·캠페인명으로 대조.
+say "▶ 1P 광고 없음 점검 — 허브 판매 분석(4주) 받기"
+"$DASH/scripts/crawler-16gb/run-weekly-sales.sh" --no-send --range 4w >> "$LOG" 2>&1
+SALES_FILE=$(ls -t "$OUT"/A00993784_SALES_ANALYSIS_BY_PRODUCT_*.csv 2>/dev/null | head -1)
+if [[ -z "$SALES_FILE" ]]; then
+  say "❌ 허브 판매 분석(4주) 못 받음 — 1P 광고 점검 생략 (허브 로그인 확인)"
+  exit 0
+fi
+AD_GAP_ENV="$CRAWLER/.env" npx --yes tsx scripts/coupang-ad-gap/run.ts --sales "$SALES_FILE" --out "$OUT/ad_gap.json" --send >> "$LOG" 2>&1
+GAP_EXIT=$?
+tail -n 3 "$LOG" | sed 's/^/    /' | tee -a "$SUMMARY"
+say "$([[ $GAP_EXIT -eq 0 ]] && echo '✅' || echo '❌') 1P 광고 없음 점검 종료 코드 $GAP_EXIT"
+exit $GAP_EXIT
