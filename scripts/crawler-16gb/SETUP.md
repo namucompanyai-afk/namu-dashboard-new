@@ -86,7 +86,7 @@
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-ad-report.plist
     launchctl list | grep crawler-ad-report
 
-마지막 줄에 이름이 보이면 등록 끝. 끄려면 `launchctl bootout gui/$(id -u)/com.namucompany.crawler-ad-report`.
+마지막 줄에 이름이 보이면 등록 끝. 처리 기록(~/.namu-ad-upload/processed.json)은 없으면 첫 실행 때 빈 기록으로 자동 생성되니 따로 초기화할 것 없음. 6번 시험 때 받은 파일은 첫 월요일 실행에서 업로드 대상이 아님 (기간이 다른 새 파일만 올라감). 끄려면 `launchctl bootout gui/$(id -u)/com.namucompany.crawler-ad-report`.
 업로드 처리 기록은 16GB 의 ~/.namu-ad-upload/processed.json (24GB 와 따로). 같은 주를 24GB 에서도 받으면 두 번 올라가지만 같은 내용이면 그냥 교체돼서 해 없음.
 
 ## 8. 매주 확인하는 법 (24GB 에서 한 줄)

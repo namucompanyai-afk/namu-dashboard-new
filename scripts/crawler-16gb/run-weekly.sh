@@ -75,8 +75,10 @@ if [[ $NO_UPLOAD -eq 1 ]]; then say "업로드 생략 (--no-upload 시험 실행
 
 # 4) 업로드 — 24GB 와 같은 스크립트·같은 규칙. 처리 기록 ~/.namu-ad-upload/processed.json (이 맥 것)
 cd "$DASH" || exit 1
+# 처리 기록이 없으면 빈 기록으로 시작 (--init 을 $OUT 으로 돌리면 방금 받은 파일을 '처리함'으로만 적고 안 올린다 — 10/21 발견)
 if [[ ! -f "$HOME/.namu-ad-upload/processed.json" ]]; then
-  AD_UPLOAD_DIR="$OUT" AD_UPLOAD_ENV="$CRAWLER/.env" npx --yes tsx scripts/ad-weekly-upload/run.ts --init >> "$LOG" 2>&1
+  mkdir -p "$HOME/.namu-ad-upload" && printf '{}\n' > "$HOME/.namu-ad-upload/processed.json"
+  say "처리 기록 없음 → 빈 기록으로 시작"
 fi
 AD_UPLOAD_DIR="$OUT" AD_UPLOAD_ENV="$CRAWLER/.env" npx --yes tsx scripts/ad-weekly-upload/run.ts >> "$LOG" 2>&1
 UP_EXIT=$?
