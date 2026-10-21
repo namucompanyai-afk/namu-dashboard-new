@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  16GB 크롤링 맥 전용 — 매일 08:00 run-daily-page.sh (쿠팡 상품 페이지 순회 → 시트 기준가 대조 → 슬랙 #쿠팡-결합).
-  08:00 인 이유: 60~80페이지 × (로드 4초 + 읽기) 로 30~40분 걸릴 수 있어, 08:45 윙 엑셀 작업 전에 끝내고 09:00 전에 슬랙이 가게. (크롬 잠금으로 겹쳐도 순서대로 돈다)
+  16GB 크롤링 맥 전용 — 매일 07:30 run-daily-page.sh (쿠팡 상품 페이지 순회 → 시트 기준가 대조 → 슬랙 #쿠팡-결합).
+  07:30 인 이유: 10/21 시험에서 10페이지 8분 → 50페이지 + 대상 옵션별 이동까지 60분쯤 걸릴 수 있어, 08:45 윙 엑셀 작업·09:00 전에 끝내려고. (크롬 잠금으로 겹쳐도 순서대로 돈다)
   등록 (16GB 에서, 대표 확인 후):
     cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-page-price.plist ~/Library/LaunchAgents/
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-page-price.plist
@@ -22,9 +22,9 @@
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>8</integer>
+    <integer>7</integer>
     <key>Minute</key>
-    <integer>0</integer>
+    <integer>30</integer>
   </dict>
   <key>RunAtLoad</key>
   <false/>

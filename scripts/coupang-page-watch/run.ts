@@ -94,6 +94,21 @@ async function readTargets(): Promise<TargetPage[]> {
   return [...byPid.values()].sort((a, b) => a.pid.localeCompare(b.pid))
 }
 
+/** 가장 최근 윙 결합 감시 스냅샷(coupang_catalog_YYYY-MM-DD)의 옵션ID → 판매상태. 못 읽으면 null (필터 안 함) */
+async function latestCatalogSales(): Promise<Map<string, string> | null> {
+  try {
+    const { data } = await sb().from('dashboard_data').select('id').like('id', 'coupang_catalog_20%').order('id', { ascending: false }).limit(1)
+    const id = data?.[0]?.id as string | undefined
+    if (!id) return null
+    const r = await sb().from('dashboard_data').select('data').eq('id', id).single()
+    const rows = (r.data?.data as { rows?: { oid: string; sale: string }[] })?.rows ?? []
+    console.log(`판매상태 기준: ${id} (옵션 ${rows.length}행)`)
+    return new Map(rows.map((x) => [String(x.oid), String(x.sale)]))
+  } catch {
+    return null
+  }
+}
+
 // ── 저장소 ────────────────────────────────────────────────────────
 let _sb: SupabaseClient | null = null
 function sb(): SupabaseClient {
@@ -164,9 +179,11 @@ function readResults(dir: string): PageResult[] {
         rocket: !!x.rocket,
         reviews: n(x.reviews),
         soldOut: !!x.soldOut,
+        vendorItemIds: Array.isArray(x.vendorItemIds) ? (x.vendorItemIds as unknown[]).map(str).filter((v) => /^\d+$/.test(v)) : undefined,
         options: opts.map((o) => ({
           label: str(o.label),
           oid: /^\d+$/.test(str(o.oid)) ? str(o.oid) : undefined,
+          seller: str(o.seller) || undefined,
           price: n(o.price),
           listPrice: n(o.listPrice),
           wowPrice: n(o.wowPrice),
@@ -190,6 +207,20 @@ async function main() {
     const limit = Number(opt('--limit') || 0)
     const batch = Number(opt('--batch') || 6)
     let targets = await readTargets()
+    // 윙에서 판매중지인 3P 옵션은 페이지에 안 보이므로 뺀다 (시트 중복 행 → '못 찾음' 부풀림 방지). --all-options 로 끔
+    let dropped = 0
+    if (!flag('--all-options')) {
+      const sales = await latestCatalogSales()
+      if (sales) {
+        for (const t of targets) {
+          const keep = t.options.filter((o) => o.channel !== '쿠팡 3P' || !o.oid || !sales.has(o.oid) || sales.get(o.oid) === '판매중')
+          dropped += t.options.length - keep.length
+          t.options = keep
+        }
+        targets = targets.filter((t) => t.options.length)
+      }
+    }
+    if (dropped) console.log(`윙 판매중지 옵션 ${dropped}개 제외`)
     if (limit > 0) targets = targets.slice(0, limit)
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, JSON.stringify(targets, null, 2))

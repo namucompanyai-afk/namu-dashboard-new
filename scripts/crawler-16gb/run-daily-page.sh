@@ -26,7 +26,7 @@ OUT="$CRAWLER/out/$TODAY"
 LOG="$CRAWLER/logs/page-price-$TODAY.log"
 SUMMARY="$CRAWLER/logs/run-page.log"
 TARGETS="$OUT/page_targets.json"
-BATCH=6            # 클로드 세션 1개당 페이지 수 (페이지 읽기 결과가 세션 기억을 많이 먹어서 작게)
+BATCH=4            # 클로드 세션 1개당 페이지 수 (페이지 읽기 + 대상 옵션별 이동이 세션 기억을 많이 먹어서 작게)
 mkdir -p "$OUT" "$CRAWLER/logs"
 
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S')	$*" | tee -a "$SUMMARY"; }
