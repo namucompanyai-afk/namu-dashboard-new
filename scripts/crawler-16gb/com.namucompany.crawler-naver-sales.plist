@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매일 08:42 run-naver-sales.sh (네이버 커머스 API 어제 결제완료 상품주문 → naver_product_orders). 아침 보고서(09:05) ① 칸의 입력.
+  크롬 불필요(node 만) — 08:40 어제 광고(crawler-ad-daily)와 겹쳐도 서로 다른 리소스라 무방.
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-sales.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-sales.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-sales
+  로그: ~/crawler/logs/run-naver-sales.log · ~/crawler/logs/naver-sales-YYYY-MM-DD.log · ~/crawler/logs/launchd-naver-sales.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-naver-sales</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-naver-sales.sh" &gt;&gt; "$HOME/crawler/logs/launchd-naver-sales.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-naver-sales.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>42</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>

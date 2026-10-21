@@ -407,5 +407,50 @@
 | 화/목 발주 알림이 실제 발주 여부와 무관하게 뜸(날짜만 봄) | 항상 | 발주 없는 화/목에도 리마인드가 뜸 | 참고용 — 실제 발주 시스템과 연동 아님, 오탐 아님(그냥 "확인해라") |
 | 12:30 이 08:55 데이터를 못 찾음(아침이 실패했던 날) | 가끔 | "오늘 아침 스냅샷 없음 — 비교 없이 저장만" 로그, 슬랙 안 감 | 정상 (비교 기준이 없어서) |
 
+# 10번째 작업 — 매일 08:42 네이버 커머스 API 어제 결제완료 상품주문 → 아침 보고서 ① 칸 (2026-10-22)
+
+- 하는 일: 16GB 가 네이버 커머스 API(apicenter.commerce.naver.com, 토큰 발급 → 상품주문 조회)로 어제(KST) 00:00~24:00 결제완료 상품주문을 전부 받아 Supabase `naver_product_orders` 에 productOrderId 기준 upsert, `dashboard_data` 에 `naver_sales_YYYY-MM-DD`(수집 완료 마커 + 건수)를 남긴다. 아침 보고서(9번째 작업, 09:05)가 그 표를 날짜로 직접 읽어 ① 칸에 "네이버: 주문 N건 · 결제금액 합 · 취소/반품 건수 · 상품별 상위 3" 을 채운다. 쿠팡 쪽 ① 은 여전히 "준비 중".
+- **호출 허용 IP 가 사무실 공인 IP 175.211.53.211 하나로 고정** — 16GB·24GB 둘 다 이 주소에서만 토큰 발급이 된다. 사무실 IP 가 바뀌면 전부 막힌다(대표가 커머스API센터에서 IP 수정).
+- 1차 범위: **결제 기준 합계만.** 취소·반품 금액을 빼는 규칙은 만들지 않았다(대표 확정) — `naver_product_orders` 에 상태값(productOrderStatus·claimStatus)을 원본 그대로 저장해 두었으니, 차감 규칙이 정해지면 그때 그 값으로 다시 계산한다.
+- **응답 필드명 확인됨(브레인, 2026-10-22, 2026-10-20 실데이터 101건)**: `contents[] = {productOrderId, content:{order, productOrder, delivery}}`. productOrder 에 productOrderId·quantity·totalPaymentAmount·productName·productId·productOrderStatus·claimType·claimStatus·정산 칸(expectedSettlementAmount 등) 전부 있음. **paymentDate 는 productOrder 가 아니라 order 쪽**(order.paymentDate) — 처음엔 productOrder 에서 찾게 짜서 브레인이 잡아준 뒤 고쳤다. 상태값 실측: DELIVERED 41·DELIVERING 58·CANCELED 1·PURCHASE_DECIDED 1, claim 없음 100·CANCEL/CANCEL_DONE 1 — CANCEL_LIKE 추정이 맞았음.
+- **개인정보 제외(브레인 지적, 2026-10-22)**: order 에 ordererName·ordererTel·ordererId, productOrder 에 shippingAddress·takingAddress, delivery 블록 전체에 수취인 정보가 있다. `naver_product_orders.raw_safe` 는 이걸 전부 뺀 나머지만 저장한다(delivery 블록은 통째로 안 넣음, order 는 orderId·orderDate·paymentDate·paymentMeans·generalPaymentAmount 만, productOrder 는 주소 두 칸만 제외하고 나머지는 저장) — lib/naver/salesWatch.ts 의 safeOrder·safeProductOrder.
+- **이 작업을 쓴 세션(대클)은 실제 네이버 API 키도 사무실 IP 도 없어 실제 호출로 시험하지 못했다.** 검증은: ① 타입체크(/tmp 클론, 통과) ② bcrypt 서명 생성이 에러 없이 도는지(가짜 시크릿으로) ③ 정규화·집계·개인정보 제외 순수 함수(lib/naver/salesWatch.ts)를 브레인이 확인해준 실제 응답 모양 그대로의 가짜 주문 2건(이름·전화·주소·주문자ID 포함)으로 돌려 — 결제금액 합계·취소 1건 집계가 맞고, 이름·전화·주소·주문자ID 가 결과 어디에도 안 들어가는지 문자열 검사로 확인(통과). **16GB 에서 브레인 시험값(101건·2,009,470원)과 맞는지는 브레인이 직접 대조해야 한다.**
+
+## 형이 할 것: 없음 (사무실 공인 IP 가 바뀌면 커머스API센터에서 재등록 필요 — 그때만)
+
+## 브레인이 SSH 로 할 것 (16GB)
+1. `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-sales-collect lib/naver` (scripts/coupang-morning-report·lib/coupang 는 이미 있음) && `npm ci`
+2. 16GB ~/crawler/.env 에 키 2개 확인/추가: `NAVER_COMMERCE_CLIENT_ID` · `NAVER_COMMERCE_CLIENT_SECRET` (이미 넣어둔 걸로 안내받음 — 없으면 24GB `.env.local` 에서 그 두 줄만 5번 방식으로 `>>` 덧붙이기)
+3. 시험(Supabase 안 쓰고 요약만, 어제 날짜로): `~/crawler/dashboard/scripts/crawler-16gb/run-naver-sales.sh --no-upload` → `tail -5 ~/crawler/logs/run-naver-sales.log` 에 "주문 N건 수신". **여기서 N·합계가 브레인이 24GB 에서 이미 해본 시험값과 같은 날짜면 맞는지 대조.** 토큰 발급부터 실패하면 "HTTP ..." 에러 — IP·시크릿 확인.
+4. 실제 업로드 시험(백필 날짜 하나로, 예: 10/20): `run-naver-sales.sh --date 2026-10-20` → `tail -5 run-naver-sales.log` 에 ✅, Supabase `naver_product_orders` 행 수가 N건인지 확인(SQL: `select count(*) from naver_product_orders where payment_date >= '2026-10-20T00:00:00+09:00' and payment_date < '2026-10-21T00:00:00+09:00'`)
+5. 아침 보고서에 반영되는지: `run-morning-report.sh --no-send --date 2026-10-21` (수집한 날짜의 다음 날로) → 로그에 ① 칸 "네이버(결제 기준): 주문 N건 …" 이 보이는지
+6. 등록 (대표 OK 뒤, 테이블 생성도 이때 같이):
+   - Supabase SQL 에디터에서 `sql/004_naver_product_orders.sql` 실행 (3번 전에 먼저 해야 업로드가 됨 — 순서 주의, 여기 번호는 등록 순서 기준으로 뒤에 적었을 뿐)
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-sales.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-sales.plist
+
+7. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 5 crawler/logs/run-naver-sales.log'`
+
+## 조정값 / 아직 확인 안 된 부분 (lib/naver/salesWatch.ts · lib/naver/commerceApi.ts)
+- 실제 응답 필드명은 2026-10-22 확인됨(위 참고) — productOrderId · productName · quantity · totalPaymentAmount · productOrderStatus · claimStatus 는 productOrder, paymentDate 는 order. 정산 칸(expectedSettlementAmount 등)도 확인됨, 테이블엔 저장하지만 보고서엔 아직 안 씀.
+- **페이지네이션 파라미터(pageNumber·pageSize=300) — 요청은 정상 동작 확인됐지만 두 번째 페이지를 실제로 받아본 적은 없다** (시험이 101건, 1페이지로 끝남). 하루 300건을 넘기는 날이 이 루프의 첫 실전 시험이 됨.
+- claimStatus/productOrderStatus 의 취소·반품 값은 CANCELED·CANCEL·CANCEL_DONE 까지는 실데이터로 확인됨. RETURNED·RETURN·RETURN_DONE·EXCHANGED·EXCHANGE 는 아직 실제 사례가 없어 추정 그대로(반품·교환 건이 생기면 확인 필요).
+- NAVER_SALES_ENV: 다른 작업처럼 환경변수로 키 파일 경로를 바꿀 수 있음(기본은 저장소 .env.local).
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 사무실 공인 IP 변경 | 낮음(바뀌면 반드시 발생) | 토큰 발급부터 HTTP 에러, 그날부터 쭉 "미수신" + 슬랙 "🔒 네이버 API 호출 실패" 1회 | 대표가 커머스API센터에서 IP 재등록 |
+| 시크릿 만료·앱 설정 변경 | 낮음 | 토큰 실패, 위와 동일 알림 | 커머스API센터에서 앱 상태 확인 |
+| 하루 300건 초과 | 낮음(가게 규모상) | 두 번째 페이지 요청이 처음 실전 시험 — 응답 구조가 예상과 다르면 뒤 페이지 주문 누락 → 건수·합계 과소 | 300건 넘는 날 생기면 로그의 건수로 바로 드러남 — 그때 pageNumber 응답 구조 재확인 |
+| 24시간 구간 초과 조회 | — (네이버 쪽 제약) | 하루 단위로만 수집 가능, 과거 여러 날 백필은 하루씩 --date 반복 필요 | 정상 — 설계가 이미 하루 단위 |
+| 반품·교환 건의 claimStatus 값이 추정과 다름 | 있음(아직 실제 사례 없음) | 그 건만 취소/반품 집계에서 빠짐, 결제금액 합계는 영향 없음 | 실제 반품 건 생기면 claimStatus 값 확인 후 CANCEL_LIKE 보정 |
+| naver_sales_{date} 마커 없이 표만 비어 있는 날(수집 자체가 안 돈 날) | 가끔 | 아침 보고서가 "미수신"으로 정확히 구분(표가 비어 있어도 마커 없으면 미수신 처리) | 정상 — 설계 의도대로 |
+| IP 차단·시크릿 실패가 아닌데 주문이 0건인 정상적인 날 | 있음(비수기) | 슬랙 알림 없음(실패 아님), 아침 보고서엔 "주문 0건" 정상 표시 | 정상 |
+| raw_safe 에 남겨둔 productOrder 칸 중 나중에 네이버가 개인정보성 칸을 추가 | 낮음 | safeProductOrder 가 shippingAddress·takingAddress 두 칸만 빼므로, 새 칸이 생기면 걸러지지 않고 저장될 수 있음 | 응답 구조가 바뀌면(특히 새 칸 추가) raw_safe 내용을 사람이 한 번 확인 |
+
+---
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

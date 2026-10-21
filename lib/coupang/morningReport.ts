@@ -23,6 +23,12 @@ export type StockStateLite = {
 }
 export type PageOptionLite = { alias: string; label: string; seller: string; matchedBy: string }
 export type RankLite = { keyword: string; alias: string; rank: number | null }
+export type NaverSalesLite = {
+  orderCount: number
+  paidAmountSum: number
+  cancelCount: number
+  top3: { productName: string; amount: number }[]
+}
 
 export type MorningSources = {
   date: string // 오늘 YYYY-MM-DD
@@ -34,6 +40,7 @@ export type MorningSources = {
   rankToday: { ranks: RankLite[] } | null
   rankYesterday: { ranks: RankLite[] } | null
   adDaily: { rows: AdCampaignRow[] } | null
+  naverSales: NaverSalesLite | null // 2026-10-22 추가 — 네이버 커머스 API 어제 결제완료 상품주문 집계. null 이면 그날 수집 자체가 안 됨(미수신)
   loginExpired: string[] // 예: ['윙', '허브(SUPPLIER HUB)']
 }
 
@@ -53,8 +60,16 @@ export function buildMorningReport(s: MorningSources): { text: string; missing: 
   const missing: string[] = []
   L.push(`*[아침 보고서 ${md(s.date)}]*`)
 
-  // ① 어제 매출 — 2차(허브 1일 판매 소스 아직 없음)
-  L.push('', '*① 어제 매출*', '준비 중')
+  // ① 어제 매출 — 쿠팡은 2차(허브 1일 판매 소스 아직 없음), 네이버는 커머스 API(2026-10-22 추가)
+  L.push('', '*① 어제 매출*', '쿠팡: 준비 중')
+  if (!s.naverSales) {
+    L.push('네이버: 미수신')
+    missing.push('네이버 주문')
+  } else {
+    const n = s.naverSales
+    L.push(`네이버(결제 기준): 주문 ${n.orderCount}건 · 결제금액 ${won(n.paidAmountSum)}원 · 취소/반품 ${n.cancelCount}건`)
+    if (n.top3.length) L.push(...n.top3.map((t, i) => `  ${i + 1}. ${t.productName} ${won(t.amount)}원`))
+  }
 
   // ② 어제 광고
   L.push('', '*② 어제 광고*')

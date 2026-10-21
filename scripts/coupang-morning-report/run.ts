@@ -7,6 +7,7 @@
  * 읽는 소스 (전부 이미 모으는 것, 없으면 그 칸만 '미수신'):
  *   coupang_1p_stock_{date}(6번째) · coupang_catalog_{date}/{date-1}(2번째) · coupang_page_{date}(3번째, 아직 불안정)
  *   naver_rank_{date}/{date-1}(5번째) · coupang_ad_daily_{date-1}(8번째, 어제 1일)
+ *   naver_sales_{date-1} 마커 + naver_product_orders 테이블(10번째, 네이버 커머스 API 어제 결제완료 주문) — ① 칸
  * 키: 저장소 .env.local 또는 MORNING_REPORT_ENV — SUPABASE_URL·SUPABASE_SERVICE_ROLE_KEY · SLACK_REVIEW_WEBHOOK_URL(--send, #쿠팡-결합 재사용)
  */
 import fs from 'fs'
@@ -14,8 +15,9 @@ import os from 'os'
 import path from 'path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { unpackAdRows, type PackedAdRows } from '../../lib/coupang/adRowsPack'
-import { buildMorningReport, type MorningSources, type PageOptionLite, type RankLite, type StockStateLite } from '../../lib/coupang/morningReport'
+import { buildMorningReport, type MorningSources, type NaverSalesLite, type PageOptionLite, type RankLite, type StockStateLite } from '../../lib/coupang/morningReport'
 import type { CatalogRow } from '../../lib/coupang/catalogWatch'
+import { summarizeNaverOrders, type NaverOrderLite } from '../../lib/naver/salesWatch'
 
 const REPO = path.resolve(__dirname, '..', '..')
 const expandHome = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p)
@@ -63,12 +65,37 @@ async function readRaw(id: string): Promise<unknown | null> {
   return data?.data ?? null
 }
 
+/** naver_sales_{date} 마커가 있어야(그날 수집 작업이 실제로 돌았다는 뜻) naver_product_orders 를 읽는다 —
+ *  마커가 없는데 표가 비어 있을 수 있는 경우(수집 안 됨)와 실제로 0건이었던 경우를 구분하기 위해. */
+async function readNaverSales(date: string): Promise<NaverSalesLite | null> {
+  const ran = await readRaw(`naver_sales_${date}`)
+  if (!ran) return null
+  const dayStart = `${date}T00:00:00.000+09:00`
+  const dayEnd = `${addDays(date, 1)}T00:00:00.000+09:00`
+  const { data, error } = await sb()
+    .from('naver_product_orders')
+    .select('product_name, total_payment_amount, product_order_status, claim_status')
+    .gte('payment_date', dayStart)
+    .lt('payment_date', dayEnd)
+  if (error) {
+    console.log(`[경고] naver_product_orders 읽기 실패: ${error.message}`)
+    return null
+  }
+  const rows: NaverOrderLite[] = (data ?? []).map((d) => ({
+    productName: (d as { product_name: string | null }).product_name,
+    totalPaymentAmount: (d as { total_payment_amount: number | null }).total_payment_amount,
+    productOrderStatus: (d as { product_order_status: string | null }).product_order_status,
+    claimStatus: (d as { claim_status: string | null }).claim_status,
+  }))
+  return summarizeNaverOrders(rows)
+}
+
 async function main() {
   loadEnv()
   const date = opt('--date') ?? kstToday()
   const yesterday = addDays(date, -1)
 
-  const [stockRaw, catalogTodayRaw, catalogYdayRaw, pageRaw, rankTodayRaw, rankYdayRaw, adDailyRaw] = await Promise.all([
+  const [stockRaw, catalogTodayRaw, catalogYdayRaw, pageRaw, rankTodayRaw, rankYdayRaw, adDailyRaw, naverSales] = await Promise.all([
     readRaw(`coupang_1p_stock_${date}`),
     readRaw(`coupang_catalog_${date}`),
     readRaw(`coupang_catalog_${yesterday}`),
@@ -76,6 +103,7 @@ async function main() {
     readRaw(`naver_rank_${date}`),
     readRaw(`naver_rank_${yesterday}`),
     readRaw(`coupang_ad_daily_${yesterday}`),
+    readNaverSales(yesterday),
   ])
 
   const stock = stockRaw ? { states: (stockRaw as { states: StockStateLite[] }).states } : null
@@ -96,7 +124,7 @@ async function main() {
     }
   }
 
-  const sources: MorningSources = { date, yesterday, stock, catalogToday, catalogYesterday, pageToday, rankToday, rankYesterday, adDaily, loginExpired }
+  const sources: MorningSources = { date, yesterday, stock, catalogToday, catalogYesterday, pageToday, rankToday, rankYesterday, adDaily, naverSales, loginExpired }
   const { text, missing } = buildMorningReport(sources)
   const out = opt('--out')
   if (out) fs.writeFileSync(out, JSON.stringify({ date, sources, text, missing }, null, 2))
