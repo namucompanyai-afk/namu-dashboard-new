@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매주 월요일 09:10 run-weekly-sales.sh (서플라이어허브 판매 분석 export, 지난주 월~일).
+  09:00 광고 보고서 작업과 크롬 잠금을 공유해 겹치면 순서대로 돈다.
+  등록 (16GB 에서, 대표 확인 후):
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-hub-sales.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-hub-sales.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-hub-sales
+  로그: ~/crawler/logs/run-sales.log (요약) · ~/crawler/logs/hub-sales-YYYY-MM-DD.log · ~/crawler/logs/launchd-sales.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-hub-sales</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-weekly-sales.sh" &gt;&gt; "$HOME/crawler/logs/launchd-sales.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-sales.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>10</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>

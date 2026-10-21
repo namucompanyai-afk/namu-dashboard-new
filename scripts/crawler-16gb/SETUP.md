@@ -189,5 +189,38 @@
 | 어제 기록 없음 (첫날·전날 실패) | 가끔 | "어제와 달라짐·언제부터" 없이 시트 대조만 | 정상 |
 | 크롬 확장 끊김·Claude 로그인 만료 | 낮음 | 묶음 ❌, "못 읽음 N/N" | 16GB 에서 확인 |
 
+---
+
+# 4번째 작업 — 월요일 09:10 서플라이어허브 '판매 분석' export 자동 다운로드 (2026-10-21)
+
+- 하는 일: 16GB 가 허브 > 애널리틱스 > 판매 분석 화면을 기간 주소로 **한 번** 열고 '엑셀 다운로드' → `A00993784_SALES_ANALYSIS_BY_PRODUCT_YYYYMMDDhhmmss.csv` 를 ~/crawler/out/오늘/ 에 두고(파일명에 기간이 없어서 옆에 `hub_sales_시작_끝.period.json` 메모) 슬랙 #쿠팡-결합 에 "받음 — N행" 1줄. 매출 숫자는 안 찍음.
+- 1차 범위: **파일만 받음.** 수집기(namu-ingest)는 아직 코드가 없어서, 24GB `~/NamuData/sales_1p_weekly/` 로는 브레인이 가져감(아래 4번). 대시보드 1P 손익 업로드(onePSales 파서)는 그 파일을 그대로 씀.
+- 차단 주의: 허브는 10/19 에 12회 연속 호출 뒤 Access Denied 가 났음. 실행당 허브 이동 5회 이내, 새로고침 반복 금지, 차단 보이면 즉시 중단(지시문에 박음). 막히면 16GB 크롬 완전 종료 후 다시 열면 풀림.
+
+## 형이 할 것: 없음 (허브 로그인이 풀렸을 때 16GB 크롬에서 다시 로그인 — 계정 namucompanyai, 부계정 만료 2027-04-19)
+
+## 브레인이 SSH 로 할 것 (16GB)
+1. `cd ~/crawler/dashboard && git pull`
+2. **지금 1회용 — 최근 4주 파일** (대표 "로켓 등록·판매 있는데 광고 없는 상품" 표 입력): `~/crawler/dashboard/scripts/crawler-16gb/run-weekly-sales.sh --no-send --range 4w` → `tail -4 ~/crawler/logs/run-sales.log` 에 ✅ 파일명·기간·행 수. 16GB 크롬에 허브 로그인이 안 돼 있으면 "형, 허브 로그인 필요" → 대표가 16GB 에서 로그인(namucompanyai) 후 다시.
+3. 주간 시험: `run-weekly-sales.sh --no-send` (지난주 월~일)
+4. 24GB 로 가져가기 (24GB 터미널): `scp 'namucompany.ai@<16GB이름>.local:crawler/out/*/A00993784_SALES_ANALYSIS_BY_PRODUCT_*.csv' 'namucompany.ai@<16GB이름>.local:crawler/out/*/hub_sales_*.period.json' ~/NamuData/sales_1p_weekly/`
+5. 등록 (대표 OK 뒤):
+
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-hub-sales.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-hub-sales.plist
+
+6. 매주 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 4 crawler/logs/run-sales.log'`
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| 허브 차단 (Access Denied) | **있음** (10/19 사례, 쿠키 단위) | 그 주 파일 없음 → 슬랙 "허브 차단" | 16GB 크롬 완전 종료 후 다시 열고 손으로 1회 |
+| 허브 로그인 풀림 | 있음 | 슬랙 "허브 로그인 필요" | 16GB 크롬 재로그인 |
+| 판매 분석 화면의 기간 선택·export 버튼 이름이 다름 (미확인) | 첫 시험에서 판명 | 클로드가 못 찾아 ❌ | 지시문(jobs/hub-sales-export.md) 손질. 필요하면 브레인이 16GB 크롬 확장으로 화면 확인 |
+| 기간 주소(start_date·end_date)가 화면에 안 먹음 | 낮음 (10/19 확인됨) | 기본 최근 7일 파일 → 기간 메모와 어긋남 | 지시문대로 달력으로 맞춤. 받은 파일 행 수·기간 메모로 검증 |
+| 다운로드가 '요청 내역' 방식이고 5분 넘게 걸림 | 낮음 | ❌ 후 종료 | 손으로 다시 |
+| 파일명 패턴이 다름 (부계정 차이) | 첫 시험에서 판명 | ❌ | 패턴 수정 |
+| 24GB 전달이 수동 | 지금 구조 | NamuData 에 자동 반영 안 됨 | 수집기(namu-ingest) 만들 때 흡수 |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).
