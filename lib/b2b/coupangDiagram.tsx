@@ -112,6 +112,84 @@ export function buildCenterAdvisories(groups: PoPalletGroup[]): CenterAdvisory[]
     }))
 }
 
+// ── 같은 센터·입고예정일에 출고지가 둘 이상(밀크런 접수 1건 + 출고지 분리) ──────
+/**
+ * 밀크런 트럭/팔레트(needsPallet) 대상 한 묶음 — 진도팜·위킵은 shipments(MilkrunShipment),
+ * 곰표는 gompyoShipments 에서 호출부가 만들어 넘긴다. 운임·PLT·박스 계산은 건드리지 않고
+ * 이미 계산된 값만 읽어 문구를 만든다 (2026-10-22 대표 지시).
+ */
+export type OriginEntry = {
+  shipFrom: string // '진도팜' / '위킵' / '곰표'
+  center: string
+  dueDate: string
+  boxes: number
+  plt: number
+  poCount: number
+  kg: number
+  method: string // MilkrunShipment.method / GompyoShipment.fare.method ('BASIC×N' / 'N톤 차량' 등)
+  origin: string // 요금표 출고지명(상품마스터 '요금표 출고지', 없으면 shipFrom)
+}
+
+export type MultiOriginAdvisory = {
+  center: string
+  dueDate: string
+  entries: OriginEntry[]
+  primary: OriginEntry // 접수 원본(① 먼저 접수) — PLT 큰 쪽, 동률이면 트럭(차량) 쪽
+  others: OriginEntry[] // 분리로 떼낼 쪽(② 작은 쪽) — 먼저 접수하면 분리 시 취소됨
+  mode: 'split' | 'merge' // split = 가위(출고지 분리) 필요 / merge = 전부 차량이라 분리 없이 합쳐 접수
+}
+
+/** method 문자열이 BASIC(팔레트당) 방식인지 — 'BASIC×1' 형태만 아니면 차량(트럭) 방식 */
+const isBasicMethod = (method: string): boolean => /^BASIC×\d+$/.test(method ?? '')
+
+/**
+ * (센터, 입고예정일) 묶음에 밀크런 대상 출고지가 2개 이상이면 안내 생성.
+ * 쿠팡 밀크런은 같은 센터·같은 픽업일에 접수를 2건으로 따로 넣지 않고 1건 + 출고지 분리로
+ * 처리해야 하며, 분리 화면은 "사본 PLT ≤ 원본, 원본 0이면 취소" 규칙이라 PLT 큰 쪽을
+ * 먼저 접수해야 한다(작은 쪽부터 넣으면 분리 때 취소됨).
+ */
+export function buildMultiOriginAdvisories(all: OriginEntry[]): MultiOriginAdvisory[] {
+  const byKey = new Map<string, OriginEntry[]>()
+  for (const e of all) {
+    const key = `${e.center}|${e.dueDate}`
+    byKey.set(key, [...(byKey.get(key) ?? []), e])
+  }
+  const out: MultiOriginAdvisory[] = []
+  for (const entries of byKey.values()) {
+    if (new Set(entries.map((e) => e.shipFrom)).size < 2) continue
+    const sorted = [...entries].sort(
+      (a, b) => b.plt - a.plt || Number(isBasicMethod(a.method)) - Number(isBasicMethod(b.method)),
+    )
+    const [primary, ...others] = sorted
+    const mode = entries.every((e) => !isBasicMethod(e.method)) ? 'merge' : 'split'
+    out.push({ center: primary.center, dueDate: primary.dueDate, entries: sorted, primary, others, mode })
+  }
+  return out.sort((a, b) =>
+    a.dueDate === b.dueDate ? a.center.localeCompare(b.center) : a.dueDate.localeCompare(b.dueDate),
+  )
+}
+
+/** 밀크런 접수 안내 문구 — 숫자는 entries 그대로(새로 계산하지 않음) */
+export function multiOriginAdvisoryText(a: MultiOriginAdvisory): string {
+  const won = (n: number) => Math.round(n).toLocaleString('ko-KR')
+  const list = a.entries.map((e) => `${e.shipFrom} ${won(e.boxes)}박스·${won(e.plt)}PLT`).join(' / ')
+  const head = `⚠ ${a.center} · ${a.dueDate}: 출고지 ${a.entries.length}곳(${list})`
+  if (a.mode === 'merge') {
+    return `${head}. 전부 트럭(차량) 출고지 — 밀크런 접수 1건으로 합쳐 넣으면 됨(출고지 분리 불필요)`
+  }
+  const totalBoxes = a.entries.reduce((s, e) => s + e.boxes, 0)
+  const totalPlt = a.entries.reduce((s, e) => s + e.plt, 0)
+  const totalPo = a.entries.reduce((s, e) => s + e.poCount, 0)
+  const totalKg = a.entries.reduce((s, e) => s + e.kg, 0)
+  const dropText = a.others.map((o) => `${o.shipFrom}(${o.origin}) 팔레트 ${won(o.plt)}·박스 ${won(o.boxes)}`).join(', ')
+  return (
+    `${head}. 밀크런은 접수 1건으로 넣고 출고지 분리 — ` +
+    `① ${a.primary.shipFrom}(${a.primary.origin})로 발주 ${won(totalPo)}건 전부, ` +
+    `박스 ${won(totalBoxes)}·팔레트 ${won(totalPlt)}·무게 ${won(totalKg)}kg(박스·팔레트 무게 별도)로 접수 → ` +
+    `② 접수 내역 가위(출고지 분리)로 ${dropText} 떼기. 작은 쪽을 먼저 접수하면 분리 시 취소됨`
+  )
+}
+
 // ── 자리(더미) 모델 ──────────────────────────────────────────────
 // 한 도면 안에서 상품마다 다른 색 — 밝기·색상이 서로 떨어진 14색 (글자는 진한 색으로 위에 얹는다)
 const COLORS = [

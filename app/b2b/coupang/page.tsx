@@ -48,15 +48,18 @@ import {
   SHIP_FROM_GUIDE,
   buildCenterAdvisories,
   buildCoupangPalletPlan,
+  buildMultiOriginAdvisories,
   buildPalletGroups,
   downloadCoupangPalletPlanJpg,
   GRAIN_MAX_BOXES_PER_PLT,
   GRAIN_MAX_TIERS,
   LIMIT_MM,
+  multiOriginAdvisoryText,
   PALLET_MM,
   pltCountOf,
   renderCoupangPalletPlanSvg,
   SCRAP_NOTE,
+  type OriginEntry,
 } from '@/lib/b2b/coupangDiagram'
 import {
   buildMilkrunShipments,
@@ -101,9 +104,12 @@ import {
 const num = (n: number) => n.toLocaleString('ko-KR')
 /** kg — 천 단위 콤마, 소수 첫째 자리까지(정수면 소수점 없이) */
 const kgFmt = (n: number) => n.toLocaleString('ko-KR', { maximumFractionDigits: 1 })
-/** 행 제품 중량 — 매출 요약 kg 와 같은 식(수량 × 1봉 중량), 정수 kg */
+/** 묶음 제품 중량(숫자) — 매출 요약 kg 와 같은 식(수량 × 1봉 중량) */
+const kgSumOf = (items: RoutedItem[], gramByAlias: Record<string, number>): number =>
+  items.reduce((a, it) => a + it.confirmQty * (unitKgOf(it.master?.alias || '', it.productName, gramByAlias) ?? 0), 0)
+/** 행 제품 중량 — 정수 kg 문구 */
 const kgOfItems = (items: RoutedItem[], gramByAlias: Record<string, number>): string =>
-  `${num(Math.round(items.reduce((a, it) => a + it.confirmQty * (unitKgOf(it.master?.alias || '', it.productName, gramByAlias) ?? 0), 0)))}kg`
+  `${num(Math.round(kgSumOf(items, gramByAlias)))}kg`
 type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
@@ -663,6 +669,41 @@ export default function CoupangB2BPage() {
     [gompyo, milkrunPrices, priceOrigin, parcelSettings],
   )
   const gompyoTotals = useMemo(() => sumGompyo(gompyoShipments), [gompyoShipments])
+  // 같은 센터·입고예정일에 출고지가 둘 이상(밀크런 접수 1건 + 출고지 분리 안내) — 값은 기존 계산 결과만 읽는다
+  const originEntries = useMemo((): OriginEntry[] => {
+    const out: OriginEntry[] = []
+    for (const g of palletGroups) {
+      if (!g.needsPallet) continue
+      const ship = shipments.find((s) => s.shipFrom === g.shipFrom && s.center === g.center && s.dueDate === g.dueDate)
+      out.push({
+        shipFrom: g.shipFrom,
+        center: g.center,
+        dueDate: g.dueDate,
+        boxes: g.boxes,
+        plt: ship?.plt ?? pltCountOf(g),
+        poCount: g.poNumbers.length,
+        kg: kgSumOf(g.items, gramByAlias),
+        method: ship?.method || ship?.vehicleLabel || '',
+        origin: priceOrigin[g.shipFrom] || g.shipFrom,
+      })
+    }
+    for (const s of gompyoShipments) {
+      if (s.parcel) continue
+      out.push({
+        shipFrom: '곰표',
+        center: s.center,
+        dueDate: s.dueDate,
+        boxes: s.boxes,
+        plt: s.plt,
+        poCount: s.poNumbers.length,
+        kg: kgSumOf(s.items, gramByAlias),
+        method: s.fare.method,
+        origin: priceOrigin['곰표'] || '곰표',
+      })
+    }
+    return out
+  }, [palletGroups, shipments, gompyoShipments, priceOrigin, gramByAlias])
+  const multiOriginAdvisories = useMemo(() => buildMultiOriginAdvisories(originEntries), [originEntries])
   // 위킵·곰표 전달 양식 — 진도팜과 같은 로켓 양식(택배/트럭 판정·주소 규칙은 buildRocketRows 그대로)
   // 위킵 제조일자는 위킵 섹션에서 따로 지정 (곰표는 엑셀 없이 카톡 멘트만)
   const wikeepRocket = useMemo(() => {
@@ -1454,6 +1495,14 @@ export default function CoupangB2BPage() {
               </div>
             )}
             <div className="px-4 py-3 border-t border-gray-100 space-y-1 text-xs">
+              {multiOriginAdvisories.map((a) => (
+                <p
+                  key={`${a.center}-${a.dueDate}-multi`}
+                  className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 font-semibold text-amber-800"
+                >
+                  {multiOriginAdvisoryText(a)}
+                </p>
+              ))}
               {advisories.map((a) => (
                 <p key={`${a.shipFrom}-${a.center}-${a.dueDate}`} className="text-amber-700 font-semibold">
                   ※ {a.center} · {a.dueDate}: 발주 {a.poCount}건 합산 {num(a.boxes)}박스 — 트럭
