@@ -6,7 +6,7 @@
  *
  * 읽는 소스 (전부 이미 모으는 것, 없으면 그 칸만 '미수신'):
  *   coupang_1p_stock_{date}(6번째) · coupang_catalog_{date}/{date-1}(2번째) · coupang_page_{date}(3번째, 아직 불안정)
- *   naver_rank_{date}/{date-1}(5번째) · coupang_ad_daily_{date-1}(8번째, 어제 1일)
+ *   naver_rank_history 테이블(date/{date-1}, run_slot='morning' — 네이버 순위 v2, 2026-10-22) · coupang_ad_daily_{date-1}(8번째, 어제 1일)
  *   naver_sales_{date-1} 마커 + naver_product_orders 테이블(10번째, 네이버 커머스 API 어제 결제완료 주문) — ① 칸
  * 키: 저장소 .env.local 또는 MORNING_REPORT_ENV — SUPABASE_URL·SUPABASE_SERVICE_ROLE_KEY · SLACK_REVIEW_WEBHOOK_URL(--send, #쿠팡-결합 재사용)
  */
@@ -74,7 +74,7 @@ async function readNaverSales(date: string): Promise<NaverSalesSummary | null> {
   const dayEnd = `${addDays(date, 1)}T00:00:00.000+09:00`
   const { data, error } = await sb()
     .from('naver_product_orders')
-    .select('product_name, total_payment_amount, product_order_status, claim_status')
+    .select('product_name, product_option, total_payment_amount, product_order_status, claim_status')
     .gte('payment_date', dayStart)
     .lt('payment_date', dayEnd)
   if (error) {
@@ -83,6 +83,7 @@ async function readNaverSales(date: string): Promise<NaverSalesSummary | null> {
   }
   const rows: NaverOrderLite[] = (data ?? []).map((d) => ({
     productName: (d as { product_name: string | null }).product_name,
+    productOption: (d as { product_option: string | null }).product_option,
     totalPaymentAmount: (d as { total_payment_amount: number | null }).total_payment_amount,
     productOrderStatus: (d as { product_order_status: string | null }).product_order_status,
     claimStatus: (d as { claim_status: string | null }).claim_status,
@@ -90,18 +91,44 @@ async function readNaverSales(date: string): Promise<NaverSalesSummary | null> {
   return summarizeNaverOrders(rows)
 }
 
+/**
+ * 네이버 순위 v2(2026-10-22, 10번째 작업과 별개) — naver_rank_history 테이블을 날짜+슬롯으로 직접 읽는다.
+ * v1(dashboard_data 'naver_rank_{date}' 블롭) 은 더 안 읽음 — v2 등록 후 그 저장 자체를 끈다.
+ * 추적 ON 상품 행(is_tracked=true) + "이 키워드에 우리 상품 없음" 요약 행(product_no='')만 가져온다 —
+ * 요약 행이 있어야 "그 키워드는 수집은 됐는데 우리 상품이 없었다"를 "애초에 수집 안 됨"과 구분할 수 있다.
+ * 보고서는 항상 그날 아침(08:55, run_slot='morning') 수집분을 본다 — 09:05 가 그 다음이라 이게 맞는 짝.
+ */
+async function readRankHistory(date: string): Promise<{ ranks: RankLite[] } | null> {
+  const { data, error } = await sb()
+    .from('naver_rank_history')
+    .select('keyword, alias, product_no, rank')
+    .eq('collected_date', date)
+    .eq('run_slot', 'morning')
+    .or('is_tracked.eq.true,product_no.eq.')
+  if (error) {
+    console.log(`[경고] naver_rank_history 읽기 실패: ${error.message}`)
+    return null
+  }
+  if (!data || !data.length) return null
+  const ranks: RankLite[] = data.map((d) => {
+    const row = d as { keyword: string; alias: string | null; product_no: string; rank: number | null }
+    return { keyword: row.keyword, alias: row.alias || row.keyword, productNo: row.product_no, rank: row.rank == null ? null : Number(row.rank) }
+  })
+  return { ranks }
+}
+
 async function main() {
   loadEnv()
   const date = opt('--date') ?? kstToday()
   const yesterday = addDays(date, -1)
 
-  const [stockRaw, catalogTodayRaw, catalogYdayRaw, pageRaw, rankTodayRaw, rankYdayRaw, adDailyRaw, naverSales] = await Promise.all([
+  const [stockRaw, catalogTodayRaw, catalogYdayRaw, pageRaw, rankToday, rankYesterday, adDailyRaw, naverSales] = await Promise.all([
     readRaw(`coupang_1p_stock_${date}`),
     readRaw(`coupang_catalog_${date}`),
     readRaw(`coupang_catalog_${yesterday}`),
     readRaw(`coupang_page_${date}`),
-    readRaw(`naver_rank_${date}`),
-    readRaw(`naver_rank_${yesterday}`),
+    readRankHistory(date),
+    readRankHistory(yesterday),
     readRaw(`coupang_ad_daily_${yesterday}`),
     readNaverSales(yesterday),
   ])
@@ -110,8 +137,6 @@ async function main() {
   const catalogToday = catalogTodayRaw ? { rows: (catalogTodayRaw as { rows: CatalogRow[] }).rows } : null
   const catalogYesterday = catalogYdayRaw ? { rows: (catalogYdayRaw as { rows: CatalogRow[] }).rows } : null
   const pageToday = pageRaw ? { options: (pageRaw as { options: PageOptionLite[] }).options } : null
-  const rankToday = rankTodayRaw ? { ranks: (rankTodayRaw as { ranks: RankLite[] }).ranks } : null
-  const rankYesterday = rankYdayRaw ? { ranks: (rankYdayRaw as { ranks: RankLite[] }).ranks } : null
   const adDaily = adDailyRaw ? { rows: unpackAdRows((adDailyRaw as { rows?: PackedAdRows }).rows) } : null
 
   // 로그인 풀림 — 7번째 작업이 남긴 로컬 마커 (이 맥 자신의 ~/crawler/logs/.session-*-expired)

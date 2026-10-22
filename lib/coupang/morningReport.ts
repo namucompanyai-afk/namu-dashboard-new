@@ -23,7 +23,7 @@ export type StockStateLite = {
   itemWinner: boolean | null
 }
 export type PageOptionLite = { alias: string; label: string; seller: string; matchedBy: string }
-export type RankLite = { keyword: string; alias: string; rank: number | null }
+export type RankLite = { keyword: string; alias: string; productNo: string; rank: number | null } // productNo: '' = 이 키워드에 우리 상품 없음(요약 행, v2)
 
 export type MorningSources = {
   date: string // 오늘 YYYY-MM-DD
@@ -151,14 +151,25 @@ export function buildMorningReport(s: MorningSources): { text: string; missing: 
     L.push('미수신')
     missing.push('네이버 순위')
   } else {
-    const prevByKw = new Map((s.rankYesterday?.ranks ?? []).map((r) => [r.keyword, r.rank]))
-    const outOf = s.rankToday.ranks.filter((r) => r.rank == null).length
-    const big = s.rankToday.ranks.filter((r) => {
-      const p = prevByKw.get(r.keyword)
-      return p != null && r.rank != null && Math.abs(p - r.rank) >= 3
-    })
-    L.push(`${s.rankToday.ranks.length}개 키워드 · 순위권 밖 ${outOf}개 · 큰 변동(±3↑) ${big.length}개`)
-    if (big.length) L.push(...listLines(big, (r) => `${r.keyword}: 어제 ${prevByKw.get(r.keyword)}위 → 오늘 ${r.rank}위`))
+    // v2(2026-10-22)부터 키워드당 상품 여러 개가 있을 수 있어 비교 키를 키워드+상품번호로 묶는다(이전엔 키워드 1개=상품 1개라 키워드만으로 충분했음).
+    // 오늘 아예 안 나온(= 그 상품 행 자체가 없는) 것도 "이탈"로 잡으려면 오늘·어제 상품번호를 합쳐서 봐야 한다 — 오늘 쪽만 보면 이탈이 통째로 빠진다.
+    const key = (r: RankLite) => `${r.keyword}|${r.productNo}`
+    const curByKey = new Map(s.rankToday.ranks.filter((r) => r.productNo).map((r) => [key(r), r]))
+    const prevByKey = new Map((s.rankYesterday?.ranks ?? []).filter((r) => r.productNo).map((r) => [key(r), r]))
+    const keywordCount = new Set(s.rankToday.ranks.map((r) => r.keyword)).size
+    let outOf = 0
+    const big: { keyword: string; alias: string; from: number; to: number | null }[] = []
+    for (const k of new Set([...curByKey.keys(), ...prevByKey.keys()])) {
+      const cur = curByKey.get(k)
+      const prev = prevByKey.get(k)
+      if ((cur?.rank ?? null) == null) outOf += 1
+      if (prev?.rank != null && (cur?.rank != null ? Math.abs(prev.rank - cur.rank) >= 3 : true)) {
+        const label = cur ?? prev!
+        big.push({ keyword: label.keyword, alias: label.alias, from: prev.rank, to: cur?.rank ?? null })
+      }
+    }
+    L.push(`${keywordCount}개 키워드 · 순위권 밖 ${outOf}건 · 큰 변동(±3↑)·이탈 ${big.length}건`)
+    if (big.length) L.push(...listLines(big, (b) => `${b.keyword}(${b.alias}): 어제 ${b.from}위 → 오늘 ${b.to == null ? '1페이지 밖' : `${b.to}위`}`))
   }
 
   // ⑧ 오늘 할 일 / 미수신

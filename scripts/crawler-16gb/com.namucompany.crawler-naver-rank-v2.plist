@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  16GB 크롤링 맥 전용 — 매일 08:55 run-naver-rank-v2.sh (네이버 순위 v2, 상품×키워드 전체 매칭 → naver_rank_history). 2026-10-22.
+  v1(com.namucompany.crawler-naver-rank)과는 다른 Label·다른 결과 폴더(out/날짜/naver-rank-v2) — 같이 떠 있어도 안 겹침.
+  등록 순서(16GB 에서, 대표 확인 후) — v1 을 먼저 내리고 v2 를 올린다(둘 다 08:55 라 같이 떠 있으면 크롬 잠금을 서로 기다리느라 늦어짐):
+    launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-rank 2>/dev/null
+    launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-rank-noon 2>/dev/null
+    cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank-v2.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank-v2.plist
+  해제: launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-rank-v2
+  로그: ~/crawler/logs/run-rank-v2.log · ~/crawler/logs/naver-rank-v2-YYYY-MM-DD.log · ~/crawler/logs/launchd-rank-v2.err
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.namucompany.crawler-naver-rank-v2</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>"$HOME/crawler/dashboard/scripts/crawler-16gb/run-naver-rank-v2.sh" &gt;&gt; "$HOME/crawler/logs/launchd-rank-v2.out" 2&gt;&gt; "$HOME/crawler/logs/launchd-rank-v2.err"</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>55</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>LimitLoadToSessionType</key>
+  <string>Aqua</string>
+</dict>
+</plist>

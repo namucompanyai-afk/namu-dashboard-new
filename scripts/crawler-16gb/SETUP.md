@@ -452,5 +452,49 @@
 
 ---
 
+# 11번째 작업 — 네이버 순위 v2: 매일 08:55·12:30, 상품 전체 × 키워드 전체 매칭 (2026-10-22, 대표 설계 확정)
+
+- 하는 일: 5번째 작업(v1, "키워드 1개=상품 1개")을 대체. 16GB 가 '네이버 순위 키워드' 탭(A 키워드·E ON/OFF만)과 '네이버 상품' 탭(상품번호·상품명·별칭·MID·추적 ON/OFF, 72개)을 읽어, 키워드마다 1페이지를 그대로(v1과 같은 크롬 AppleScript·같은 접근 횟수) 읽고 **상품 목록 전체와 매칭**(식별은 MID) → `naver_rank_history` 테이블에 매회 전부 insert(리셋 없음, 키워드에 우리 상품이 없어도 요약 행 1개는 남겨 "수집했는데 없음"과 "미수집"을 구분) → 슬랙(08:55 추적 ON 전체 / 12:30 아침 대비 변동만, 없으면 생략).
+- v1 과 공유하는 것: chrome-tab.applescript·extract-naver.js(코드 안 바뀜) — 상품 식별은 MID 로 충분하다고 확인됨(2026-10-22, 네이버쇼핑상품번호=MID). 결과 폴더는 `out/날짜/naver-rank-v2/` 로 v1 과 분리해서 파일명이 겹치지 않는다.
+- 아침 보고서(9번째 작업) ⑦ 칸도 이 테이블(run_slot='morning') 을 직접 읽도록 바뀜 — v1 블롭(`naver_rank_YYYY-MM-DD`) 은 이 작업 등록 후 더 안 읽는다(저장은 5번째 작업이 계속 돌면 계속 쌓이지만, 등록 후 5번째를 내리면 자연히 멈춘다).
+- 시트 '네이버 순위 키워드' 탭의 URL·별칭·MID·검색종류(D열) 칸은 v2 가 안 읽는다(별칭은 '네이버 상품' 탭에서, 검색종류는 전부 쇼핑검색으로 고정) — 탭 정리(안 쓰는 칸 삭제)는 이번엔 안 함, 필요하면 나중에.
+
+## 형이 할 것: 없음 (키워드·상품 ON/OFF·별칭은 시트에서, '네이버 상품' 탭은 브레인이 채워둠)
+
+## 브레인이 SSH 로 할 것 (16GB)
+1. `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-rank-watch-v2 scripts/naver-rank-watch lib/naver scripts/coupang-morning-report lib/coupang && npm ci` (naver-rank-watch 는 chrome-tab.applescript·extract-naver.js 공용 재사용 때문에 필요)
+2. Supabase SQL 에디터에서 `sql/005_naver_rank_history.sql` 실행 (대표 OK 뒤, run-naver-rank-v2.sh 보다 먼저 — 순서 중요)
+3. 시험(Supabase 저장·슬랙 없이, 키워드 3개만): `~/crawler/dashboard/scripts/crawler-16gb/run-naver-rank-v2.sh --no-send --limit 3 --dump` → `tail -6 ~/crawler/logs/run-rank-v2.log` 에 "주문 N개 수신", 결과 `~/crawler/out/날짜/naver-rank-v2/naver_rank_v2_report_morning.json` 의 rows 에서 productNo·rank·alias 확인. --dry-run 이라 전날 비교 데이터가 없으면(첫 시험) 모든 상품이 "1페이지 밖(어제 기록 없음)" 꼴로 나올 수 있음 — 정상
+4. 전체 키워드로 1회(Supabase 에는 여전히 안 씀): `run-naver-rank-v2.sh --no-send`
+5. 실제 저장 시험(키워드 전체, naver_rank_history 에 실제로 씀): `run-naver-rank-v2.sh` (슬랙도 감 — 첫날이라 전날 비교가 없어도 08:55 는 항상 전체를 보내니 결과는 보임) → `tail -6 run-rank-v2.log`
+   - 대조: v1 의 최근 슬랙(Multi Plus 표 또는 v1 결과)과 같은 날 순위가 ±1 이내인지 비교
+6. 다음날 아침 1회 더 돌려서(또는 `run-naver-rank-v2.sh --noon` 손으로) 어제 대비 ↑↓ 가 제대로 나오는지, 12:30 로직이 "변동 없으면 슬랙 생략"하는지 확인
+7. 등록 (대표 OK 뒤, v1 두 개 bootout 먼저 — 같은 08:55 라 같이 떠 있으면 크롬 잠금을 서로 기다림):
+
+        launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-rank 2>/dev/null
+        launchctl bootout gui/$(id -u)/com.namucompany.crawler-naver-rank-noon 2>/dev/null
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank-v2.plist ~/Library/LaunchAgents/
+        cp ~/crawler/dashboard/scripts/crawler-16gb/com.namucompany.crawler-naver-rank-v2-noon.plist ~/Library/LaunchAgents/
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank-v2.plist
+        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.namucompany.crawler-naver-rank-v2-noon.plist
+
+8. 매일 확인: `ssh namucompany.ai@<16GB이름>.local 'tail -n 6 crawler/logs/run-rank-v2.log'`
+
+## 조정값 (lib/naver/rankWatchV2.ts · scripts/naver-rank-watch-v2/run.ts)
+- MAX_RANK·WAIT_SEC·SCROLL_TIMES·KEYWORD_INTERVAL_MS 는 v1 그대로(run.ts 상수, 변경 없음)
+- 비교 기준: morning → 전날 같은 슬롯(어제 08:55) · noon → 오늘 자신의 morning. 둘 다 Supabase 에서 run_slot='morning' 행만 읽음
+- naver_rank_history 는 리셋 없음 — 쌓이는 속도는 (키워드 수 × (매칭 상품 수+1)) × 하루 2회. 지금 키워드 9개·상품 72개 기준이면 하루 수백 행(브레인 설계 메모의 "~800행/일" 추정과 비슷한 규모)
+
+## 이 자동화가 틀리는 경우
+| 경우 | 확률 | 어떻게 되나 | 대응 |
+|---|---|---|---|
+| v1·v2 가 같은 날 같이 떠 있음(등록 순서를 안 지킴) | 등록 실수 시 | 크롬 잠금을 서로 기다려 둘 다 늦어짐(실패는 아님) | 7번 순서대로 v1 bootout 먼저 |
+| '네이버 상품' 탭 MID 가 비어 있는 상품 | 있음(시트 입력 전) | 그 상품은 매칭 대상에서 조용히 빠짐(에러 안 남) — "순위 추적 안 됨" 상태가 눈에 안 보임 | 시트에 MID 채우면 자동 포함, 당장은 한계로 알려둠 |
+| 같은 mid 가 광고+일반 둘 다로 노출 | 있음(v1 부터의 한계) | extract-naver.js 가 하나로 합치며 ad=true 로 남아 일반 순위를 놓칠 수 있음 | 이번엔 손보지 않음(다음 숙제) |
+| '네이버 순위 키워드' 탭에 통합검색(D열) 설정이 남아있던 키워드 | 낮음(지금 9개는 전부 쇼핑검색으로 보임) | v2 는 전부 쇼핑검색으로 처리 — 통합검색이 필요했던 키워드면 결과가 달라짐 | 실제로 필요하면 v2 에 검색종류 분기 추가 |
+| 캡차·보안확인 | **있음**(v1 때 확인) | 그날 중단, 슬랙 1회(v1 과 마커 분리) | 16GB 크롬에서 직접 풀기 |
+| 첫 등록일 전날 비교 데이터 없음 | 처음 1회만 | "1페이지 밖(어제 기록 없음)" 처럼 비교 없이 당일 값만 나옴 | 정상 — 다음날부터 비교됨 |
+| 아침 보고서 ⑦칸이 naver_rank_history 에 그날 'morning' 행이 아직 없음(등록 전·실패한 날) | 가끔 | ⑦칸 "미수신" | 정상 — 11번째 작업 등록되면 해소 |
+
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).
