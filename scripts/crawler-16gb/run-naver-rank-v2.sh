@@ -10,6 +10,7 @@
 # 결과 폴더: ~/crawler/out/YYYY-MM-DD/naver-rank-v2/ (v1 의 naver-rank 폴더와 분리 — 같은 날 batch 파일명이 같아서 안 겹치게)
 # 로그: ~/crawler/logs/naver-rank-v2-YYYY-MM-DD.log · ~/crawler/logs/run-rank-v2.log (요약)
 set -u
+setopt null_glob 2>/dev/null  # 매칭 없는 글롭을 빈 값으로(기본 zsh는 "no matches found" 에러 — 첫 실행 등 naver_rank_batch_*.json 이 없을 때 대비)
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 NO_SEND=0; LIMIT=0; DUMP=(); NOON=0
 while [[ $# -gt 0 ]]; do
@@ -60,7 +61,8 @@ RANK_WATCH_V2_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --fetch --targets "$TARGE
 F_EXIT=$?
 rmdir "$CHROME_LOCK" 2>/dev/null
 say "$([[ $F_EXIT -eq 0 ]] && echo '✅' || echo '❌') $(tail -n 1 "$LOG")"
-if grep -q '"status": *"captcha"' "$OUT"/naver_rank_batch_*.json 2>/dev/null; then
+BATCH_FILES=("$OUT"/naver_rank_batch_*.json)
+if [[ ${#BATCH_FILES[@]} -gt 0 ]] && grep -q '"status": *"captcha"' "${BATCH_FILES[@]}" 2>/dev/null; then
   say "🔒 네이버 캡차(보안확인) 감지(v2) — 16GB 크롬에서 한 번 풀어줘야 함"
   if [[ "$(cat "$CAPTCHA_MARK" 2>/dev/null)" != "$TODAY" && $NO_SEND -eq 0 ]]; then
     url=$(webhook)

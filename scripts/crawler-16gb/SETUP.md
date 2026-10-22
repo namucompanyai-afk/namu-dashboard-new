@@ -463,8 +463,9 @@
 
 ## 브레인이 SSH 로 할 것 (16GB)
 1. `cd ~/crawler/dashboard && git pull && git sparse-checkout add scripts/naver-rank-watch-v2 scripts/naver-rank-watch lib/naver scripts/coupang-morning-report lib/coupang && npm ci` (naver-rank-watch 는 chrome-tab.applescript·extract-naver.js 공용 재사용 때문에 필요)
-2. Supabase SQL 에디터에서 `sql/005_naver_rank_history.sql` 실행 (대표 OK 뒤, run-naver-rank-v2.sh 보다 먼저 — 순서 중요)
+2. Supabase SQL 에디터에서 `sql/005_naver_rank_history.sql` 실행 (대표 OK 뒤, run-naver-rank-v2.sh 보다 먼저 — 순서 중요) — ✅ 완료(2026-10-22, 대클이 Supabase MCP로 실행, 칼럼 14개 확인됨)
 3. 시험(Supabase 저장·슬랙 없이, 키워드 3개만): `~/crawler/dashboard/scripts/crawler-16gb/run-naver-rank-v2.sh --no-send --limit 3 --dump` → `tail -6 ~/crawler/logs/run-rank-v2.log` 에 "주문 N개 수신", 결과 `~/crawler/out/날짜/naver-rank-v2/naver_rank_v2_report_morning.json` 의 rows 에서 productNo·rank·alias 확인. --dry-run 이라 전날 비교 데이터가 없으면(첫 시험) 모든 상품이 "1페이지 밖(어제 기록 없음)" 꼴로 나올 수 있음 — 정상
+   — ✅ 완료(2026-10-22): 키워드 3개·매칭 행 6개, 슬랙 문장 설계대로("귀리 — [보배마을] 귀리 1위" 등), 캡차 없음
 4. 전체 키워드로 1회(Supabase 에는 여전히 안 씀): `run-naver-rank-v2.sh --no-send`
 5. 실제 저장 시험(키워드 전체, naver_rank_history 에 실제로 씀): `run-naver-rank-v2.sh` (슬랙도 감 — 첫날이라 전날 비교가 없어도 08:55 는 항상 전체를 보내니 결과는 보임) → `tail -6 run-rank-v2.log`
    - 대조: v1 의 최근 슬랙(Multi Plus 표 또는 v1 결과)과 같은 날 순위가 ±1 이내인지 비교
@@ -494,7 +495,7 @@
 | '네이버 순위 키워드' 탭에 통합검색(D열) 설정이 남아있던 키워드 | 낮음(지금 9개는 전부 쇼핑검색으로 보임) | v2 는 전부 쇼핑검색으로 처리 — 통합검색이 필요했던 키워드면 결과가 달라짐 | 실제로 필요하면 v2 에 검색종류 분기 추가 |
 | 캡차·보안확인 | **있음**(v1 때 확인) | 그날 중단, 슬랙 1회(v1 과 마커 분리) | 16GB 크롬에서 직접 풀기 |
 | 첫 등록일 전날 비교 데이터 없음 | 처음 1회만 | "1페이지 밖(어제 기록 없음)" 처럼 비교 없이 당일 값만 나옴 | 정상 — 다음날부터 비교됨 |
-| 아침 보고서 ⑦칸이 naver_rank_history 에 그날 'morning' 행이 아직 없음(등록 전·실패한 날) | 가끔 | ⑦칸 "미수신" | 정상 — 11번째 작업 등록되면 해소 |
+| 아침 보고서 ⑦칸이 naver_rank_history 에 그날 'morning' 행이 아직 없음(등록 전·실패한 날) | 등록 전까지는 **항상** | ⑦칸 "미수신" (v1 폴백은 이 교체 커밋에서 제거함 — v1이 계속 돌아도 더 안 봄) | 정상 — 7번 등록하고 다음 'morning' 수집(08:55) 한 번 지나면 해소 |
 
 ## 숙제 (다음에)
 - **키 범위 좁히기**: 16GB 는 자동 로그인·FileVault 꺼짐이라 기계를 손에 넣으면 ~/crawler/.env 의 서비스 키(모든 표 읽기·쓰기 가능)가 그대로 노출된다. dashboard_data 의 두 행(coupang_ad_weekly_snapshots · coupang_ad_live_30d)만 쓸 수 있는 별도 키 + RLS 정책으로 바꾸고, 나무_마스터 시트도 읽기 전용 서비스 계정을 따로 만드는 안 (브레인 2026-10-20 지적).

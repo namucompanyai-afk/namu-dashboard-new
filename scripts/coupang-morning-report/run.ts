@@ -6,7 +6,7 @@
  *
  * 읽는 소스 (전부 이미 모으는 것, 없으면 그 칸만 '미수신'):
  *   coupang_1p_stock_{date}(6번째) · coupang_catalog_{date}/{date-1}(2번째) · coupang_page_{date}(3번째, 아직 불안정)
- *   naver_rank_history 테이블(date/{date-1}, run_slot='morning' — 네이버 순위 v2, 2026-10-22) · coupang_ad_daily_{date-1}(8번째, 어제 1일)
+ *   naver_rank_history 테이블(date/{date-1}, run_slot='morning' — 네이버 순위 v2, 2026-10-22, v1 블롭은 더 안 읽음) · coupang_ad_daily_{date-1}(8번째, 어제 1일)
  *   naver_sales_{date-1} 마커 + naver_product_orders 테이블(10번째, 네이버 커머스 API 어제 결제완료 주문) — ① 칸
  * 키: 저장소 .env.local 또는 MORNING_REPORT_ENV — SUPABASE_URL·SUPABASE_SERVICE_ROLE_KEY · SLACK_REVIEW_WEBHOOK_URL(--send, #쿠팡-결합 재사용)
  */
