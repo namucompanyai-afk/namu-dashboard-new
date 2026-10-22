@@ -35,6 +35,7 @@ export type CoupangOrderItem = {
   centerPhone: string // 주소 괄호부에서 분리한 택배수령담당자 번호
   lotKey: LotMgmt // 발주서 관리 구분('제조일자관리'/'소비기한관리') — 진도팜 자투리 판정용 (못 읽으면 '')
   madeDate: string // 확정 발주서 '제조(수입)일자' (YYYY-MM-DD, 없으면 '') — 있으면 화면 선택값보다 우선
+  prodYear: string // 확정 발주서 '생산년도' (예: '2025', 없으면 '') — 진도팜 햇곡/구곡 포장 구분용
   sourceFile: string
   // 발주서를 받은 시각 (ISO) — 발주서에 '발주 일시' 칸이 없어 xlsx 생성 시각(SUPPLIER HUB 다운로드 시각)을 쓰고,
   // 없으면 업로드 시각. 입고예정일 촉박 경고(coupangLeadTime)용
@@ -169,6 +170,8 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
   // 그 전 18칸 양식은 납품가능수량이 차 있어도 날짜 칸이 미리 채워진 값이라 믿을 수 없다
   const madeEntered = headerCol(rows, prodIdx, '입고금액', -1) >= 0
   const madeCol = madeEntered ? headerCol(rows, prodIdx, '제조(수입)일자', -1) : -1
+  // 생산년도는 확정 발주서 상품 행(제조일자와 별개 칸)에 있다 — 못 찾으면 빈칸
+  const yearCol = headerCol(rows, prodIdx, '생산년도', -1)
 
   const raw: CoupangOrderItem[] = []
   for (let r = prodIdx + 4; r < rows.length; r += 2) {
@@ -195,6 +198,7 @@ export function parseCoupangRows(rows: unknown[][], sourceFile = ''): CoupangOrd
       centerPhone,
       lotKey: lotKeyOf(cellAt(rows, r, lotCol), cellAt(rows, r + 1, lotCol)),
       madeDate: madeCol >= 0 ? madeDateOf(cellAt(rows, r, madeCol)) : '',
+      prodYear: yearCol >= 0 ? textAt(rows, r, yearCol) : '',
       sourceFile,
       receivedAt: '',
       receivedBasis: 'upload',
@@ -442,7 +446,7 @@ export const gompyoPltOf = (units: number): number =>
   Math.ceil(Math.max(0, units) / GOMPYO_UNITS_PER_PLT)
 
 // ── 쿠팡 로켓 양식 (진도팜분) ────────────────────────────────────
-/** 택배 발송분 컬럼 (기존 9개 그대로) */
+/** 택배 발송분 컬럼 (제조일자 옆에 생산년도, 2026-10-22 추가) */
 export const ROCKET_HEADERS = [
   '받는분성명',
   '받는분전화번호',
@@ -452,10 +456,11 @@ export const ROCKET_HEADERS = [
   '내품수량',
   '박스 수',
   '제조일자',
+  '생산년도',
   '송장',
 ] as const
 
-/** 트럭 발송분 컬럼 (9칸) — 배송메세지1·송장 없음. 센터·전화·주소·총 박스·파렛 수는 묶음 병합 */
+/** 트럭 발송분 컬럼 (배송메세지1·송장 없음. 센터·전화·주소·총 박스·파렛 수는 묶음 병합) */
 export const TRUCK_HEADERS = [
   '입고 센터',
   '센터 전화번호',
@@ -464,11 +469,12 @@ export const TRUCK_HEADERS = [
   '수량',
   '박스수',
   '제조일자',
+  '생산년도',
   '총 박스',
   '파렛 수',
 ] as const
 /** 트럭 발송분에서 묶음(센터 × 입고예정일)마다 세로 병합하는 열 (0-based) */
-export const TRUCK_MERGE_COLS = [0, 1, 2, 7, 8] as const
+export const TRUCK_MERGE_COLS = [0, 1, 2, 8, 9] as const
 
 export type RocketMode = '택배' | '트럭'
 
@@ -488,6 +494,7 @@ export type RocketRow = {
   itemQty: number // 내품수량 = 납품가능수량
   boxes: number | null // 박스 수
   madeDate: string // 제조일자
+  prodYear: string // 생산년도 (발주서 값, 없으면 공란)
   pallet: number | null // 파렛트 수 — 트럭분 묶음 첫 행에만 기입, 나머지는 null
   invoice: string // 송장 (공란)
   centerKnown: boolean // 주소를 못 구하면 false → 행 강조
@@ -544,6 +551,7 @@ export function buildRocketRows(
       itemQty: it.confirmQty,
       boxes: it.boxes,
       madeDate: it.madeDate || madeDate, // 발주서 제조일자 우선, 없을 때만 화면 선택값
+      prodYear: it.prodYear,
       pallet,
       invoice: '',
       centerKnown: !!address,
@@ -642,6 +650,7 @@ export function rocketAoa(rows: RocketRow[], mode: RocketMode): (string | number
       r.itemQty,
       r.boxes ?? '',
       r.madeDate,
+      r.prodYear,
       r.invoice,
     ]),
   ]
@@ -660,7 +669,7 @@ export function truckAoa(rows: RocketRow[]): {
   const head = 2 // 제목 + 헤더
   const blocks = truckBlocks(rows)
   const firstOf = new Map(blocks.map((b) => [b.start, b]))
-  const cols = 'ABCDEFGHI'
+  const cols = 'ABCDEFGHIJ'
   const merges = blocks
     .filter((b) => b.len > 1)
     .flatMap((b) => TRUCK_MERGE_COLS.map((c) => `${cols[c]}${head + b.start + 1}:${cols[c]}${head + b.start + b.len}`))
@@ -677,6 +686,7 @@ export function truckAoa(rows: RocketRow[]): {
       r.itemQty,
       r.boxes ?? '',
       r.madeDate,
+      r.prodYear,
       lead ? (block?.boxes ?? '') : '',
       lead ? (block?.pallet ?? '') : '',
     ]
@@ -686,7 +696,7 @@ export function truckAoa(rows: RocketRow[]): {
     merges,
     blockStarts: blocks.slice(1).map((b) => head + b.start),
     // 병합 칸: 센터·전화 가운데, 총 박스·파렛 수 가운데·굵게 (주소는 한 줄·세로 가운데 그대로)
-    colStyles: { 0: 'center', 1: 'center', 7: 'centerBold', 8: 'centerBold' },
+    colStyles: { 0: 'center', 1: 'center', 8: 'centerBold', 9: 'centerBold' },
   }
 }
 

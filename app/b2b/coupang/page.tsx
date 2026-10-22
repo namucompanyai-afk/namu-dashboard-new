@@ -107,7 +107,7 @@ const kgOfItems = (items: RoutedItem[], gramByAlias: Record<string, number>): st
 type SheetState = 'idle' | 'loading' | 'loaded' | 'error'
 
 // 로켓 양식 열 너비 (받는분성명 … 송장)
-const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 14]
+const ROCKET_WIDTHS = [14, 16, 60, 14, 40, 10, 8, 12, 10, 14]
 // 쉽먼트 등록용 송장 — 개별 복사한 송장번호 (브라우저별, 최근 것만 유지)
 const INVOICE_CHECK_KEY = 'coupangInvoiceCopied'
 const INVOICE_CHECK_MAX = 2000
@@ -2376,6 +2376,7 @@ function RocketTable({
                       {qtyCell(r)}
                       {boxCell(r)}
                       <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
+                      <td className="px-3 py-2 text-gray-600">{r.prodYear}</td>
                       {b && (
                         <>
                           <td rowSpan={span} className="px-3 py-2 align-middle text-center font-bold border-l border-gray-100">
@@ -2403,6 +2404,7 @@ function RocketTable({
                     {qtyCell(r)}
                     {boxCell(r)}
                     <td className="px-3 py-2 text-gray-600">{r.madeDate}</td>
+                    <td className="px-3 py-2 text-gray-600">{r.prodYear}</td>
                     <td className="px-3 py-2" />
                   </tr>
                 )
