@@ -155,6 +155,18 @@ export function compareFreight(
   }
 }
 
+/**
+ * 밀크런 운임 산정 방식(chooseFare.method / MilkrunShipment.method) → 화면 표시 라벨.
+ * 'BASIC×1' → '파렛(BASIC)×1' · '1톤 차량' → '트럭 1톤' · 진도팜 bare 라벨('1톤')도 '트럭 1톤'
+ * (2026-10-22 대표 지시 — 숫자·방식 선택은 안 건드리고 표시 문구만 교체)
+ */
+export function freightMethodLabel(method: string): string {
+  const basic = /^BASIC×(\d+)$/.exec(method ?? '')
+  if (basic) return `파렛(BASIC)×${basic[1]}`
+  const vehicle = String(method ?? '').replace(/\s*차량$/, '').trim()
+  return vehicle ? `트럭 ${vehicle}` : '트럭'
+}
+
 /** 표 '개당 운임 (트럭 vs 택배)' 칸 문구 */
 export function freightCompareText(f: FreightCompare): string {
   const won = (n: number) => Math.round(n).toLocaleString('ko-KR')

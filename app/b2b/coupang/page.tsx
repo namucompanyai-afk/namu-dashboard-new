@@ -78,6 +78,7 @@ import {
   DEFAULT_GOMPYO_BOX_FEE,
   DEFAULT_GOMPYO_PARCEL_FEE,
   DEFAULT_PARCEL_FEE,
+  freightMethodLabel,
   missingSettings,
   isParcelReviewTarget,
   PARCEL_KEEP_BOXES,
@@ -225,8 +226,16 @@ function ParcelReduceTable({
   )
 }
 
-/** 팔레트 필요 안내 '개당 운임' 칸 — 1줄 트럭 vs 택배(최저 입수), 2줄 손익분기 · 나머지 입수 */
-function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; parcelTarget: boolean }) {
+/** 팔레트 필요 안내 '개당 운임' 칸 — 1줄 파렛(BASIC)/트럭 vs 택배(최저 입수), 2줄 손익분기 · 나머지 입수 */
+function FreightCell({
+  freight: f,
+  parcelTarget,
+  method = '',
+}: {
+  freight: FreightCompare
+  parcelTarget: boolean
+  method?: string
+}) {
   // 택배 1봉당 = 센터 묶음 박스 × 택배 단가 ÷ 봉수 / 입수별 값은 참고(입수 2종 이상일 때만)
   const byQty = f.parcelPerBag.length > 1 ? f.parcelPerBag : []
   const truckCheaper = f.truckPerBag < f.parcelPerBagAll
@@ -236,7 +245,9 @@ function FreightCell({ freight: f, parcelTarget }: { freight: FreightCompare; pa
   return (
     <div className="space-y-0.5">
       <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-        <span className={`text-base font-bold ${truckColor}`}>트럭 {num(Math.round(f.truckPerBag))}원</span>
+        <span className={`text-base font-bold ${truckColor}`}>
+          {freightMethodLabel(method)} {num(Math.round(f.truckPerBag))}원
+        </span>
         <span className="text-gray-400">vs</span>
         <span className={`text-base font-bold ${parcelColor}`}>택배 {num(Math.round(f.parcelPerBagAll))}원</span>
         <span className="text-xs text-gray-400">/봉</span>
@@ -679,7 +690,9 @@ export default function CoupangB2BPage() {
           vehicle: ship ? ship.method || ship.vehicleLabel : '',
           fee: !ship ? undefined : lead ? ship.fee : 'merged',
           verdict: g.needsPallet ? 'pallet' : 'parcel',
-          freight: !freight ? null : !lead ? 'merged' : <FreightCell freight={freight} parcelTarget={false} />,
+          freight: !freight ? null : !lead ? 'merged' : (
+            <FreightCell freight={freight} parcelTarget={false} method={ship?.method || ship?.vehicleLabel || ''} />
+          ),
         }
       })
   }, [palletGroups, shipmentOf, freightOf, gramByAlias])
@@ -701,7 +714,7 @@ export default function CoupangB2BPage() {
           s.fare.fee === null || s.units <= 0 ? null : (
             <div className="space-y-0.5">
               <div className="text-base font-bold text-gray-900 whitespace-nowrap">
-                {s.parcel ? '택배' : '트럭'} {num(Math.round(s.fare.fee / s.units))}원/봉
+                {s.parcel ? '택배' : freightMethodLabel(s.fare.method)} {num(Math.round(s.fare.fee / s.units))}원/봉
               </div>
               <div className="text-xs text-gray-500 whitespace-nowrap">
                 {num(s.units)}봉 · {s.parcel ? `${num(s.boxes)}박스 밀크런택배` : `${PALLET_BOX_LIMIT}박스 초과 → 트럭`}
@@ -1324,7 +1337,11 @@ export default function CoupangB2BPage() {
                             ) : !feeLead ? (
                               <span className="text-gray-400">↑ 합산</span>
                             ) : (
-                              <FreightCell freight={freight} parcelTarget={isParcelReviewTarget(g)} />
+                              <FreightCell
+                                freight={freight}
+                                parcelTarget={isParcelReviewTarget(g)}
+                                method={ship?.method || ship?.vehicleLabel || ''}
+                              />
                             )}
                           </td>
                         </tr>
