@@ -97,6 +97,7 @@ export function normalizeProductOrder(item: unknown): NaverOrderRow {
 
 export type NaverOrderLite = {
   productName: string | null
+  productOption: string | null
   totalPaymentAmount: number | null
   productOrderStatus: string | null
   claimStatus: string | null
@@ -115,6 +116,16 @@ const CANCEL_LIKE = new Set(['CANCELED', 'CANCEL', 'CANCEL_DONE', 'RETURNED', 'R
 const isCancelLike = (v: string | null): boolean => !!v && CANCEL_LIKE.has(v.toUpperCase())
 
 /**
+ * Top3 묶는 이름 — 상품명 + (옵션 있으면) " / 옵션명". "선택사항: " 접두는 네이버가 옵션명 앞에 그대로 붙여 보내는 걸 제거(2026-10-22 실데이터 확인).
+ * 옵션 없는 상품(101건 중 48건)은 상품명 그대로 — 대표 질문(호라산밀/파로 택일처럼 옵션으로 실제 상품이 갈리는 경우) 대응, 2026-10-22.
+ */
+function productKey(r: NaverOrderLite): string {
+  const name = r.productName ?? '(상품명 없음)'
+  const opt = (r.productOption ?? '').replace(/^\s*선택사항\s*[:：]\s*/, '').trim()
+  return opt ? `${name} / ${opt}` : name
+}
+
+/**
  * 결제 기준 합계 — 취소·반품 금액은 빼지 않는다(1차 범위, 대표 확정: 차감 규칙은 나중에).
  * cancelCount 는 별도 참고용 건수일 뿐, paidAmountSum 계산에는 영향 없음.
  */
@@ -124,7 +135,7 @@ export function summarizeNaverOrders(rows: NaverOrderLite[]): NaverSalesSummary 
   const cancelCount = rows.filter((r) => isCancelLike(r.claimStatus) || isCancelLike(r.productOrderStatus)).length
   const byProduct = new Map<string, number>()
   for (const r of rows) {
-    const key = r.productName ?? '(상품명 없음)'
+    const key = productKey(r)
     byProduct.set(key, (byProduct.get(key) ?? 0) + (r.totalPaymentAmount ?? 0))
   }
   const top3 = [...byProduct.entries()]
