@@ -191,3 +191,70 @@ export function buildStockMessage(date: string, r: StockReport, prevDate: string
   L.push('', '_기준: 광고센터 "광고 만들기 > 전체 상품" 목록(1페이지, 최대 2페이지). 가격 비교는 1봉 옵션만, 2봉 이상은 재고만 표시_')
   return L.join('\n')
 }
+
+// ── 새 슬랙 형식 (2026-10-24 대표 확정): 본문 = 볼 것만 / 바로 뒤 별도 메시지 = 자세히 (웹훅은 스레드 댓글 불가라 메시지 2개) ──────────
+/** 본문에 올리는 가격 이상 기준 — 시트 기준가 대비 ±이 % 넘는 것만 (그 이하는 자세히 메시지) */
+export const PRICE_ALERT_PCT = 10
+
+const brandOf = (t: string) => /^\[([^\]]+)\]/.exec(t)?.[1] ?? /^(보배마을|쌀쌀쌀|토지랑)/.exec(t)?.[1] ?? ''
+/** 슬랙에 쓰는 상품 이름 — 별칭이 있으면 "별칭 N개", 없으면 "[브랜드] 핵심이름 용량 N개" (앞의 국내산·국산·프리미엄·유기농 같은 수식어는 뺌) */
+export function stockDisplayName(s: StockState): string {
+  if (s.alias && s.alias !== groupKeyFromTitle(s.title)) return `${s.alias} ${s.bagCount ?? '?'}개`
+  const b = brandOf(s.title)
+  const g = groupKeyFromTitle(s.title)
+    .replace(/^\[[^\]]+\]\s*/, '')
+    .replace(new RegExp(`^${b}\\s*`), '')
+    .replace(/^((국내산|국산|프리미엄|유기농|캐나다산 햇|불릴 필요 없는)\s*)+/, '') // 앞의 수식어는 몇 개가 붙어 있든 전부 뺀다
+    .replace(/,\s*/g, ' ')
+    .trim()
+  return `${b ? `[${b}] ` : ''}${g} ${s.bagCount ?? '?'}개`
+}
+
+export type StockMainItem = { s: StockState; tags: string[]; section: 'winner' | 'price' | 'soldout' }
+/** 본문에 올릴 항목 — 상품(옵션) 1개는 한 번만 세고 여러 칸에 걸리면 한 줄에 태그로 같이 표시 */
+export function stockMainItems(states: StockState[], r: StockReport): StockMainItem[] {
+  const by = new Map<string, StockMainItem>()
+  const add = (s: StockState, tag: string, section: StockMainItem['section']) => {
+    const x = by.get(s.optionId)
+    if (x) x.tags.push(tag)
+    else by.set(s.optionId, { s, tags: [tag], section })
+  }
+  for (const s of states) if (s.itemWinner === false && !s.soldOut) add(s, '위너 아님', 'winner') // 1P 재고가 없어서 위너가 아닌 건 '위너 뺏김'이 아니라 품절 쪽
+  for (const d of r.priceDiffs) if (Math.abs(d.pct) > PRICE_ALERT_PCT) add(d.s, `로켓 ${won(d.s.price)}원 / 기준가 ${won(d.s.sheetPrice)}원 (${d.pct > 0 ? '+' : ''}${d.pct.toFixed(1)}%)`, 'price')
+  for (const s of states) {
+    if (s.soldOut && s.bagCount === 1) add(s, '품절', 'soldout') // 1개 구성이 품절 = 그 상품을 아예 못 삼. 2개 이상 구성만 품절인 건 자세히
+    else if (s.soldOut && s.bagCount === null) add(s, '품절(구성 수 미상 — 제목에 "N개"가 없어 1개 구성인지 못 알아봄)', 'soldout') // 못 읽었다고 본문에서 빼지 않는다
+  }
+  return [...by.values()]
+}
+
+export function buildStockMainMessage(date: string, states: StockState[], r: StockReport): string {
+  const items = stockMainItems(states, r)
+  const side = `품절 ${r.soldOutGroups.length} · 재고 적음 ${r.lowStock.length}`
+  if (!items.length) return `[쿠팡 1P 점검 ${md(date)}] 이상 없음 (${side}, 아래 자세히)`
+  const L: string[] = [`*[쿠팡 1P 점검 ${md(date)}] 볼 것 ${items.length}개*`]
+  const sections: [StockMainItem['section'], string][] = [['winner', '🔴 위너 아님'], ['price', '🔴 가격 이상'], ['soldout', '🔴 1개 구성 품절']]
+  const order = ['위너 아님', '로켓', '품절']
+  for (const [sec, label] of sections) {
+    const xs = items.filter((x) => x.section === sec)
+    if (!xs.length) continue
+    L.push('', `${label} ${xs.length}개`)
+    for (const x of xs) {
+      const tags = [...x.tags].sort((a, b) => order.findIndex((k) => a.startsWith(k)) - order.findIndex((k) => b.startsWith(k)))
+      L.push(`• ${stockDisplayName(x.s)} — ${tags.join(' · ')}`)
+    }
+  }
+  L.push('', `나머지 정상 (${side}) → 바로 아래 자세히`)
+  return L.join('\n')
+}
+
+/** 자세히 메시지 — 예전 슬랙 본문 전체 그대로(제목만 바뀜) + "위너 아님인데 1P 품절" 칸 덧붙임 (본문에서 뺀 것을 따로 보여줌) */
+export function buildStockDetailMessage(date: string, states: StockState[], r: StockReport, prevDate: string | null): string {
+  const base = buildStockMessage(date, r, prevDate).replace('[쿠팡 1P 재고·가격 점검', '[쿠팡 1P 자세히')
+  const soldWinner = states.filter((s) => s.itemWinner === false && s.soldOut)
+  if (!soldWinner.length) return base
+  const extra = `⚪ *위너 아님 중 1P 품절* ${soldWinner.length}건 (위 "아이템위너 아님"에 포함, 본문에서는 뺌)\n` + soldWinner.map((s) => `• ${stockDisplayName(s)}`).join('\n')
+  // 예전 칸은 그대로 두고, 끝 설명줄(_마진계산… / _기준…) 바로 앞에 끼운다. 상품명에 $ 같은 글자가 있어도 안전하게 문자열을 잘라 붙인다(replace 아님)
+  const at = [base.indexOf('\n\n_마진계산'), base.indexOf('\n\n_기준')].filter((i) => i >= 0).sort((x, y) => x - y)[0]
+  return at === undefined ? `${base}\n\n${extra}` : `${base.slice(0, at)}\n\n${extra}${base.slice(at)}`
+}

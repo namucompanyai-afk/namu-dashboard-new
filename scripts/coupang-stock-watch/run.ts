@@ -17,7 +17,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { google } from 'googleapis'
 import { MASTER_SHEET_ID } from '../../lib/sheet-ids'
 import { MARGIN_TAB } from '../../lib/coupang/marginFromSheet'
-import { STOCK_ID_PREFIX, buildStockMessage, buildStockSnapshot, stockSnapshotId, type SheetOneP, type StockItem, type StockSnapshot } from '../../lib/coupang/stockWatch'
+import { STOCK_ID_PREFIX, buildStockDetailMessage, buildStockMainMessage, buildStockSnapshot, stockSnapshotId, type SheetOneP, type StockItem, type StockSnapshot } from '../../lib/coupang/stockWatch'
 
 const REPO = path.resolve(__dirname, '..', '..')
 const expandHome = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p)
@@ -117,7 +117,7 @@ async function postSlack(text: string) {
   const url = process.env.SLACK_REVIEW_WEBHOOK_URL
   if (!url) throw new Error('SLACK_REVIEW_WEBHOOK_URL 없음')
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
-  if (!res.ok) throw new Error(`슬랙 전송 실패 HTTP ${res.status}`)
+  if (!res.ok) throw new Error(`슬랙 전송 실패 HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 80)}`) // 응답 본문 앞부분(주소는 안 적음)
 }
 
 // ── 결과 읽기 (클로드가 쓴 adcenter_stock.json — 배열 또는 { items: [...] }) ──
@@ -172,17 +172,56 @@ async function main() {
   const oneP = await readOneP()
   const prev = await loadPrev(date)
   const { snapshot, report } = buildStockSnapshot({ date, items, oneP, prev })
-  const text = buildStockMessage(date, report, prev?.date ?? null)
+  // 새 슬랙 형식(2026-10-24): 본문(볼 것만) + 바로 뒤 별도 메시지(자세히). 계산·판정은 그대로, 보이는 형식만 다름
+  const mainText = buildStockMainMessage(date, snapshot.states, report)
+  const detailText = buildStockDetailMessage(date, snapshot.states, report, prev?.date ?? null)
   const out = opt('--out')
   if (out) fs.writeFileSync(out, JSON.stringify({ snapshot, report }, null, 2))
   const id = await save(snapshot)
   console.log(
     `${date}\t${id}\t상품 ${report.total} · 품절 ${report.soldOutGroups.length}그룹 · 재고적음 ${report.lowStock.length} · 가격다름 ${report.priceDiffs.length} · 위너아님 ${report.notItemWinner.length} · 시트매칭안됨 ${report.unmatched}`,
   )
-  console.log('----- 슬랙 메시지 -----\n' + text + '\n-----------------------')
+  console.log('----- 슬랙 메시지 1 (본문) -----\n' + mainText + '\n----- 슬랙 메시지 2 (자세히) -----\n' + detailText + '\n-----------------------')
   if (SEND) {
-    await postSlack(text)
-    console.log(`${date}\t슬랙 보냄`)
+    // 재실행 중복 방지: 자세히만 실패했던 날(마커 state=main)은 본문을 다시 안 보내고 자세히만 보낸다. 마커는 날짜가 다르면 무시
+    const markerFile = opt('--sent-marker')
+    const readMarker = (): string => {
+      try {
+        const [d, st] = fs.readFileSync(markerFile!, 'utf-8').trim().split(' ')
+        return d === date ? st : ''
+      } catch {
+        return ''
+      }
+    }
+    const writeMarker = (st: string) => {
+      if (!markerFile) return
+      try {
+        fs.writeFileSync(markerFile, `${date} ${st}\n`)
+      } catch (e) {
+        console.log(`[경고] 발송 마커 쓰기 실패(재실행하면 중복 발송될 수 있음): ${e instanceof Error ? e.message : String(e)}`) // 마커가 안 써져도 발송 자체는 계속한다
+      }
+    }
+    const marker = readMarker()
+    if (marker === 'both') {
+      console.log(`${date}\t오늘 본문·자세히 모두 이미 보냄 — 다시 안 보냄 (마커 ${markerFile})`)
+      return
+    }
+    const mainAlready = marker === 'main'
+    if (mainAlready) console.log(`${date}\t본문은 이미 보냈음 — 자세히만 다시 보냄`)
+    else {
+      await postSlack(mainText)
+      writeMarker('main')
+    }
+    let detailOk = true
+    try {
+      await postSlack(detailText) // 본문이 먼저 가야 하므로 순서대로. 자세히만 실패해도 본문은 이미 나갔다
+      writeMarker('both')
+    } catch (e) {
+      detailOk = false
+      console.log(`[경고] 자세히 메시지 전송 실패: ${e instanceof Error ? e.message : String(e)}`)
+      process.exitCode = 1
+    }
+    console.log(`${date}\t슬랙 ${mainAlready ? '자세히만' : detailOk ? '본문+자세히' : '본문만(자세히 실패)'} 보냄`)
   }
 }
 main().catch((e) => {
