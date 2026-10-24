@@ -50,6 +50,7 @@ function loadEnv() {
   }
 }
 const kstToday = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10)
+const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`
 const addDays = (ymd: string, n: number) => {
   const d = new Date(`${ymd}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + n)
@@ -77,7 +78,7 @@ async function readKeywordTargets(): Promise<KeywordTarget[]> {
   const out: KeywordTarget[] = []
   for (const r of rows) {
     const keyword = str(r[0])
-    if (!keyword) continue
+    if (!keyword || keyword.startsWith('※')) continue // 안내문(※ …) 행은 키워드가 아님 — 2026-10-24: 안내문이 키워드로 검색돼 매번 오류 1건이 끼고 요청만 낭비됨
     const onoff = str(r[4]).toUpperCase()
     if (onoff && onoff !== 'ON' && onoff !== 'Y' && onoff !== 'TRUE') continue
     out.push({ keyword, searchType: 'shopping' }) // v2 는 검색종류(D열)도 안 읽는다 — 전부 쇼핑검색으로 고정(대표 지시, 지금 키워드 전부 쇼핑검색)
@@ -106,9 +107,12 @@ const APPLESCRIPT = path.join(REPO, 'scripts', 'naver-rank-watch', 'chrome-tab.a
 const EXTRACT_JS = path.join(REPO, 'scripts', 'naver-rank-watch', 'extract-naver.js')
 type ExtractedItem = { id: string; ad: boolean; title: string; mall: string; price: number | string | null; link: string }
 type Extracted = { url?: string; captcha?: boolean; count?: number; items?: ExtractedItem[]; dump?: string }
+const MIN_PAGE_ORGANIC = 10 // 광고 뺀 상품이 이보다 적게 뜬 페이지는 '일부만 뜸'으로 보고 못 읽음 처리 (평소 24~37개)
 const WAIT_SEC = 8
 const SCROLL_TIMES = 4
-const KEYWORD_INTERVAL_MS = 30_000
+const KEYWORD_INTERVAL_MIN_MS = 70_000 // 키워드 사이 쉬는 시간 70~130초 무작위 (10/22·10/23 캡차는 30초 고정 간격으로 연속 읽다가 4~5번째에서 걸림)
+const KEYWORD_INTERVAL_MAX_MS = 130_000
+const keywordGapMs = () => (process.env.RANK_V2_TEST_GAP_MS ? Number(process.env.RANK_V2_TEST_GAP_MS) : KEYWORD_INTERVAL_MIN_MS + Math.floor(Math.random() * (KEYWORD_INTERVAL_MAX_MS - KEYWORD_INTERVAL_MIN_MS)))
 function chromeExtract(url: string): Extracted {
   const raw = execFileSync('osascript', [APPLESCRIPT, url, EXTRACT_JS, String(WAIT_SEC), String(SCROLL_TIMES)], { encoding: 'utf-8', timeout: 90_000 }).trim()
   if (raw.startsWith('__ERROR__')) throw new Error(raw.slice(0, 200))
@@ -117,11 +121,12 @@ function chromeExtract(url: string): Extracted {
 }
 const searchUrl = (t: KeywordTarget) => `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(t.keyword)}`
 
-async function fetchAll(targets: KeywordTarget[], dir: string, dump: boolean) {
+async function fetchAll(targets: KeywordTarget[], dir: string, dump: boolean, fileName = 'naver_rank_batch_01.json') {
   fs.mkdirSync(dir, { recursive: true })
   const out: RankResult[] = []
   let loads = 0
-  for (const t of targets) {
+  for (let ti = 0; ti < targets.length; ti++) {
+    const t = targets[ti]
     const readAt = new Date().toISOString()
     try {
       const ex = chromeExtract(searchUrl(t))
@@ -137,18 +142,40 @@ async function fetchAll(targets: KeywordTarget[], dir: string, dump: boolean) {
         if (!it.ad) n += 1
         return { rank: it.ad ? null : n, ad: !!it.ad, title: it.title, mall: it.mall, link: it.link, ids: it.id ? [it.id] : [] }
       })
-      out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'ok', pagesRead: 1, items })
+      // 결과 0개는 '읽음'이 아니다 — 페이지가 안 뜸/차단·빈 화면 의심. ok 로 저장하면 어제 순위가 '1페이지 밖'으로 오보됨 (2026-10-24 12:30 파로)
+      if (n < MIN_PAGE_ORGANIC) {
+        const why = n === 0 ? '결과 0개(페이지 안 뜸·차단 의심)' : `결과 일부만 뜸(상품 ${n}개 < ${MIN_PAGE_ORGANIC})`
+        out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'error', items: [], note: why })
+        console.log(`${why} — ${t.keyword} 는 못 읽음으로 처리`)
+      } else {
+        out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'ok', pagesRead: 1, items })
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       out.push({ keyword: t.keyword, searchType: t.searchType, readAt, status: 'error', items: [], note: msg.slice(0, 200) })
     }
-    await new Promise((r) => setTimeout(r, KEYWORD_INTERVAL_MS))
+    if (ti < targets.length - 1) await new Promise((r) => setTimeout(r, keywordGapMs())) // 마지막 키워드 뒤에는 쉬지 않는다(저장이 그만큼 늦어져 아침 보고서에 못 들어갔음)
   }
-  const file = path.join(dir, 'naver_rank_batch_01.json')
+  const file = path.join(dir, fileName)
   fs.writeFileSync(file, JSON.stringify(out, null, 1))
   const ok = out.filter((r) => r.status === 'ok').length
   console.log(`크롬 페이지 로드 ${loads}회 · 키워드 ${ok}/${targets.length} 읽음 → ${file}`)
+  console.log(`NAVER_V2_READ ${ok}/${targets.length}`) // run-naver-rank-v2.sh 가 이 줄로 못 읽은 개수를 판단
   return out
+}
+
+/** 이어 읽기(batch_02 이후)에서 새로 ok 로 읽은 키워드 — 이어 읽기 뒤 슬랙은 이것만 다룬다(1차에 이미 나간 내용을 다시 보내지 않으려고) */
+function newlyReadKeywords(dir: string): string[] {
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /^naver_rank_batch_\d+\.json$/.test(f) && f !== 'naver_rank_batch_01.json').sort() : []
+  const out = new Set<string>()
+  for (const f of files) {
+    try {
+      for (const x of JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')) as { keyword?: string; status?: string }[]) if (x.status === 'ok' && x.keyword) out.add(String(x.keyword))
+    } catch {
+      /* 깨진 파일은 건너뜀 */
+    }
+  }
+  return [...out]
 }
 
 function readResults(dir: string): RankResult[] {
@@ -262,7 +289,21 @@ async function main() {
     const rdir = opt('--results')
     if (!tfile || !rdir) throw new Error('--fetch 에는 --targets <json> --results <dir> 필요')
     const { keywords } = JSON.parse(fs.readFileSync(tfile, 'utf-8')) as { keywords: KeywordTarget[] }
-    const out = await fetchAll(keywords, rdir, flag('--dump'))
+    let todo = keywords
+    let fileName = 'naver_rank_batch_01.json'
+    if (flag('--resume')) {
+      // 이어 읽기: 이미 ok 로 읽은 키워드는 다시 안 읽고, 못 읽은 것(캡차·오류·누락)만 다음 번호 파일(02, 03…)에 쓴다 — readResults 가 번호 순으로 합쳐 뒤 파일이 이김
+      const done = new Set(readResults(rdir).filter((r) => r.status === 'ok').map((r) => r.keyword))
+      todo = keywords.filter((k) => !done.has(k.keyword))
+      const n = fs.existsSync(rdir) ? fs.readdirSync(rdir).filter((f) => /^naver_rank_batch_\d+\.json$/.test(f)).length : 0
+      fileName = `naver_rank_batch_${String(n + 1).padStart(2, '0')}.json`
+      console.log(`이어 읽기 — 이미 읽음 ${done.size}개 제외, 남은 ${todo.length}/${keywords.length}개`)
+      if (!todo.length) {
+        console.log(`NAVER_V2_READ ${keywords.length}/${keywords.length}`)
+        return
+      }
+    }
+    const out = await fetchAll(todo, rdir, flag('--dump'), fileName)
     if (!out.some((r) => r.status === 'ok')) process.exitCode = 1
     return
   }
@@ -298,18 +339,36 @@ async function main() {
     for (const r of prevRows) previousByKeyword.set(r.keyword, [...(previousByKeyword.get(r.keyword) ?? []), r])
 
     const keywordNames = keywords.map((k) => k.keyword)
+    const okCount = keywordNames.filter((k) => results.find((x) => x.keyword === k)?.status === 'ok').length
+    const retryDone = flag('--retry-done')
+    // 이어 읽기 뒤(--retry-done)에는 새로 읽은 키워드만 다룬다 — 1차 때 이미 나간 변동·줄을 다시 보내면 중복
+    const newly = retryDone ? newlyReadKeywords(rdir) : null
+    const msgKeywords = newly ? keywordNames.filter((k) => newly.includes(k)) : keywordNames
     // morning: 전체 보고(항상 보냄) · noon: 변동분만(바뀐 게 없으면 안 보냄)
-    let text: string
+    let text = ''
     let shouldSend: boolean
     if (runSlot === 'morning') {
-      text = buildRankV2Message(date, keywordNames, currentByKeyword, previousByKeyword)
-      shouldSend = true
+      if (!retryDone || msgKeywords.length) text = buildRankV2Message(date, msgKeywords, currentByKeyword, previousByKeyword)
+      if (retryDone && text) text = text.replace(/^(\*\[네이버 순위 [^\]]*\]\*)/, '$1 (이어 읽기)').replace(/ \(읽은 키워드 \d+\/\d+\)/, '')
+      shouldSend = !retryDone || msgKeywords.length > 0
     } else {
-      const delta = buildRankV2DeltaMessage(date, keywordNames, currentByKeyword, previousByKeyword)
-      text = delta.text
+      const delta = buildRankV2DeltaMessage(date, msgKeywords, currentByKeyword, previousByKeyword)
+      text = retryDone ? delta.text.replace(/ \(읽은 키워드 \d+\/\d+\)/, '') : delta.text // 이어 읽기 뒤엔 일부 키워드만 다뤄서 N/M 을 뗀다. 낮 첫 실행은 제목에 그대로
+      if (retryDone && text) text = text.replace(/^(\*\[네이버 순위 변동 [^\]]*\]\*)/, '$1 (이어 읽기)')
       shouldSend = delta.changed
     }
 
+    // 일부만 읽은 경우 슬랙 끝에 안내 한 줄 (--retry-at HH:MM = 자동 재시도 예정 시각, --retry-done = 재시도까지 끝난 뒤의 최종 결과)
+    if (okCount < keywordNames.length) {
+      const retryAt = opt('--retry-at')
+      const tail = retryDone ? '재시도 후에도 못 읽은 키워드는 오늘 건너뜀' : retryAt ? `나머지 ${keywordNames.length - okCount}개 ${retryAt} 재시도 예정` : '나머지는 이번에 못 읽음'
+      const note = `_읽은 키워드 ${okCount}/${keywordNames.length} — ${tail}_`
+      const emptyTitle = retryDone ? `*[네이버 순위 이어 읽기 ${md(date)}${runSlot === 'noon' ? ' 낮' : ' 아침'}]* 새로 읽은 키워드 없음` : `*[네이버 순위 ${md(date)} ${runSlot === 'noon' ? '낮' : '아침'}]* 읽은 키워드는 변동 없음` // 이어 읽기 제목은 이어 읽기일 때만
+      text = text ? `${text}\n${note}` : `${emptyTitle}\n${note}`
+      shouldSend = true // 못 읽은 게 남았다는 소식은 항상 보낸다
+    } else if (retryDone && text) {
+      text += `\n_재시도로 전체 ${keywordNames.length}/${keywordNames.length} 완료_`
+    }
     const out = opt('--out')
     if (out) fs.writeFileSync(out, JSON.stringify({ date, runSlot, rows: allRows, text }, null, 2))
     console.log(`${date}\t${runSlot}\t키워드 ${keywords.length}개 · 매칭 행 ${allRows.filter((r) => r.productNo).length}개${DRY ? ' (--dry-run: naver_rank_history 저장 안 함)' : ' 저장'}`)

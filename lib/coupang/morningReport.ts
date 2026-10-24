@@ -23,7 +23,7 @@ export type StockStateLite = {
   itemWinner: boolean | null
 }
 export type PageOptionLite = { alias: string; label: string; seller: string; matchedBy: string }
-export type RankLite = { keyword: string; alias: string; productNo: string; rank: number | null } // productNo: '' = 이 키워드에 우리 상품 없음(요약 행, v2)
+export type RankLite = { keyword: string; alias: string; productNo: string; rank: number | null; status?: string } // status: 수집 상태(ok/captcha/blocked/error). 비어 있으면 ok 로 본다(옛 자료) // productNo: '' = 이 키워드에 우리 상품 없음(요약 행, v2)
 
 export type MorningSources = {
   date: string // 오늘 YYYY-MM-DD
@@ -155,9 +155,12 @@ export function buildMorningReport(s: MorningSources): { text: string; missing: 
     // v2(2026-10-22)부터 키워드당 상품 여러 개가 있을 수 있어 비교 키를 키워드+상품번호로 묶는다(이전엔 키워드 1개=상품 1개라 키워드만으로 충분했음).
     // 오늘 아예 안 나온(= 그 상품 행 자체가 없는) 것도 "이탈"로 잡으려면 오늘·어제 상품번호를 합쳐서 봐야 한다 — 오늘 쪽만 보면 이탈이 통째로 빠진다.
     const key = (r: RankLite) => `${r.keyword}|${r.productNo}`
-    const curByKey = new Map(s.rankToday.ranks.filter((r) => r.productNo).map((r) => [key(r), r]))
-    const prevByKey = new Map((s.rankYesterday?.ranks ?? []).filter((r) => r.productNo).map((r) => [key(r), r]))
-    const keywordCount = new Set(s.rankToday.ranks.map((r) => r.keyword)).size
+    // 못 읽은 키워드(그 키워드의 오늘 행이 전부 ok 가 아님 — 캡차·오류·미수집)는 비교·'밖' 판정에서 뺀다 (2026-10-24: 4/9만 읽었는데 9개 읽은 것처럼 표기, 못 읽은 키워드가 이탈로 잡힘)
+    const allKeywords = [...new Set(s.rankToday.ranks.map((r) => r.keyword))].filter((k) => !k.startsWith('※')) // 시트 안내문 행이 키워드로 저장돼 있던 옛 자료 제외
+    const unread = allKeywords.filter((k) => s.rankToday!.ranks.filter((r) => r.keyword === k).every((r) => (r.status ?? 'ok') !== 'ok'))
+    const unreadSet = new Set(unread)
+    const curByKey = new Map(s.rankToday.ranks.filter((r) => r.productNo && !unreadSet.has(r.keyword)).map((r) => [key(r), r]))
+    const prevByKey = new Map((s.rankYesterday?.ranks ?? []).filter((r) => r.productNo && !unreadSet.has(r.keyword) && (r.status ?? 'ok') === 'ok').map((r) => [key(r), r]))
     let outOf = 0
     const big: { keyword: string; alias: string; from: number; to: number | null }[] = []
     for (const k of new Set([...curByKey.keys(), ...prevByKey.keys()])) {
@@ -169,7 +172,9 @@ export function buildMorningReport(s: MorningSources): { text: string; missing: 
         big.push({ keyword: label.keyword, alias: label.alias, from: prev.rank, to: cur?.rank ?? null })
       }
     }
-    L.push(`${keywordCount}개 키워드 · 순위권 밖 ${outOf}건 · 큰 변동(±3↑)·이탈 ${big.length}건`)
+    const readN = allKeywords.length - unread.length
+    L.push(`읽은 키워드 ${readN}/${allKeywords.length} · 순위권 밖 ${outOf}건 · 큰 변동(±3↑)·이탈 ${big.length}건`)
+    if (unread.length) L.push(`못 읽음(캡차·오류, 비교 제외): ${unread.join(', ')}`)
     if (big.length) L.push(...listLines(big, (b) => `${b.keyword}(${b.alias}): 어제 ${b.from}위 → 오늘 ${b.to == null ? '1페이지 밖' : `${b.to}위`}`))
   }
 

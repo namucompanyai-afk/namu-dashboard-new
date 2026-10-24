@@ -44,15 +44,8 @@ if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 
 [[ -f "$CRAWLER/logs/.session-wing-expired" ]] && say "참고: 윙 로그인이 최근 점검에서 풀려 있었음(세션 유지 작업 기록) — 그래도 시도함"
 
 # 크롬 확장은 클로드 세션 하나씩만 — 08:00 페이지 순회(run-daily-page.sh)와 겹치면 끝날 때까지 기다림 (최대 50분, 90분 지난 잠금은 버림)
-CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
-chrome_lock() {
-  for i in {1..100}; do
-    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
-    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
-    sleep 30
-  done
-  say "❌ 크롬 잠금을 50분 기다려도 안 풀림 ($CHROME_LOCK)"; return 1
-}
+source "${0:A:h}/chrome-lock.sh"   # 공용 크롬 잠금(주인 PID) — 2026-10-24 함수 안 trap 버그 수정
+trap chrome_unlock EXIT
 
 # 이미 오늘 파일을 받아 뒀으면 다운로드는 건너뛴다 (손으로 다시 돌릴 때)
 if [[ ! -f "$OUT/$FILE" ]]; then
@@ -79,7 +72,7 @@ if [[ ! -f "$OUT/$FILE" ]]; then
     --disallowedTools "WebFetch" "WebSearch" "Agent" \
     >> "$LOG" 2>&1
   say "클로드 종료 코드 $? (자세한 건 $LOG)"
-  rmdir "$CHROME_LOCK" 2>/dev/null
+  chrome_unlock
 fi
 
 # 클로드 자기 보고와 별개로 파일 존재 확인

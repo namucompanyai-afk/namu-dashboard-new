@@ -32,17 +32,10 @@ say() { echo "$(date '+%Y-%m-%d %H:%M:%S')	$*" | tee -a "$SUMMARY"; }
 if [[ ! -f "$RUN" ]]; then say "❌ 저장소 파일 없음 ($RUN) — git pull + sparse-checkout add scripts/naver-rank-watch"; exit 1; fi
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음"; exit 1; fi
 # 크롬은 한 번에 한 작업만 (클로드 확장 작업과 탭이 섞이지 않게) — 다른 크롤링과 잠금 공유
-CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
 CAPTCHA_MARK="$CRAWLER/logs/.naver-captcha"   # 있으면 오늘 이미 캡차 슬랙 보냄
 webhook() { grep -E '^SLACK_REVIEW_WEBHOOK_URL=' "$CRAWLER/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" ; }
-chrome_lock() {
-  for i in {1..100}; do
-    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
-    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
-    sleep 30
-  done
-  say "❌ 크롬 잠금을 50분 기다려도 안 풀림 ($CHROME_LOCK)"; return 1
-}
+source "${0:A:h}/chrome-lock.sh"   # 공용 크롬 잠금(주인 PID) — 2026-10-24 함수 안 trap 버그 수정
+trap chrome_unlock EXIT
 
 cd "$DASH" || exit 1
 LIM=(); [[ "$LIMIT" -gt 0 ]] && LIM=(--limit "$LIMIT")
@@ -55,7 +48,7 @@ open -ga "Google Chrome"
 sleep 8
 RANK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --fetch --targets "$TARGETS" --results "$OUT" "${DUMP[@]}" >> "$LOG" 2>&1
 F_EXIT=$?
-rmdir "$CHROME_LOCK" 2>/dev/null
+chrome_unlock
 say "$([[ $F_EXIT -eq 0 ]] && echo '✅' || echo '❌') $(tail -n 1 "$LOG")"
 if grep -q '"status": *"captcha"' "$OUT"/naver_rank_batch_*.json 2>/dev/null; then
   say "🔒 네이버 캡차(보안확인) 감지 — 16GB 크롬에서 한 번 풀어줘야 함"

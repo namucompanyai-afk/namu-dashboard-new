@@ -70,12 +70,22 @@ export function matchKeywordToProducts(keyword: string, result: Pick<RankResult,
 
 const rk = (n: number | null) => (n == null ? '1페이지 밖' : `${n}위`)
 
+/** 이 키워드를 못 읽었는지 — 행이 있고 전부 status 가 ok 가 아님(캡차·오류·차단·미수집 요약 행). 못 읽은 키워드는 순위 비교·'1페이지 밖' 판정에서 뺀다 (2026-10-24: 캡차로 못 읽은 키워드가 어제 순위만 남아 '밖'으로 오보됨) */
+export function isUnread(rows: RankRowV2[]): boolean {
+  return rows.length > 0 && rows.every((r) => r.status !== 'ok')
+}
+const unreadLabel = (rows: RankRowV2[]) => {
+  const st = rows[0]?.status
+  return st === 'captcha' ? '캡차' : st === 'blocked' ? '차단' : '오류/미수집'
+}
+
 /**
  * 키워드 한 줄 — 추적 ON 상품만, 오늘(current)·이전(previous, 같은 키워드) 비교.
  * "이전에 있었는데 오늘 없는" 상품도 보여준다(없어진 걸 알아야 하므로) — current ∪ previous 의 추적 ON 상품 전체.
  * 둘 다 비어 있으면(추적 ON 상품이 이 키워드에 전혀 없음) "1페이지에 우리 상품 없음".
  */
 export function buildKeywordLine(keyword: string, current: RankRowV2[], previous: RankRowV2[]): string {
+  if (isUnread(current)) return `${keyword} — 못 읽음(${unreadLabel(current)}) · 순위 비교 안 함`
   const curBy = new Map(current.filter((r) => r.productNo && r.isTracked).map((r) => [r.productNo, r]))
   const prevBy = new Map(previous.filter((r) => r.productNo && r.isTracked).map((r) => [r.productNo, r]))
   const productNos = [...new Set([...curBy.keys(), ...prevBy.keys()])]
@@ -107,11 +117,13 @@ const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10
 /** 08:55 전체 — 수집된(ON) 키워드마다 한 줄씩, 전부 보여준다 */
 export function buildRankV2Message(date: string, keywords: string[], currentByKeyword: Map<string, RankRowV2[]>, previousByKeyword: Map<string, RankRowV2[]>): string {
   const lines = keywords.map((kw) => buildKeywordLine(kw, currentByKeyword.get(kw) ?? [], previousByKeyword.get(kw) ?? []))
-  return `*[네이버 순위 ${md(date)} 08:55]*\n${lines.join('\n')}`
+  const readN = keywords.filter((kw) => !isUnread(currentByKeyword.get(kw) ?? [])).length
+  return `*[네이버 순위 ${md(date)} 아침]*${readN < keywords.length ? ` (읽은 키워드 ${readN}/${keywords.length})` : ''}\n${lines.join('\n')}`
 }
 
 /** 추적 ON 상품 기준으로, 이 키워드의 순위가 하나라도 바뀌었는지(진입·이탈 포함) */
 function keywordChanged(current: RankRowV2[], previous: RankRowV2[]): boolean {
+  if (isUnread(current) || isUnread(previous)) return false // 못 읽은 쪽이 있으면 변동으로 보지 않는다
   const curBy = new Map(current.filter((r) => r.productNo && r.isTracked).map((r) => [r.productNo, r.rank]))
   const prevBy = new Map(previous.filter((r) => r.productNo && r.isTracked).map((r) => [r.productNo, r.rank]))
   for (const pn of new Set([...curBy.keys(), ...prevBy.keys()])) {
@@ -125,5 +137,6 @@ export function buildRankV2DeltaMessage(date: string, keywords: string[], curren
   const changedKeywords = keywords.filter((kw) => keywordChanged(currentByKeyword.get(kw) ?? [], previousByKeyword.get(kw) ?? []))
   if (!changedKeywords.length) return { text: '', changed: false }
   const lines = changedKeywords.map((kw) => buildKeywordLine(kw, currentByKeyword.get(kw) ?? [], previousByKeyword.get(kw) ?? []))
-  return { text: `*[네이버 순위 변동 ${md(date)} 낮]*\n${lines.join('\n')}`, changed: true }
+  const readN = keywords.filter((kw) => !isUnread(currentByKeyword.get(kw) ?? [])).length
+  return { text: `*[네이버 순위 변동 ${md(date)} 낮]*${readN < keywords.length ? ` (읽은 키워드 ${readN}/${keywords.length})` : ''}\n${lines.join('\n')}`, changed: true }
 }

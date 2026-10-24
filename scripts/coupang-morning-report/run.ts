@@ -101,7 +101,7 @@ async function readNaverSales(date: string): Promise<NaverSalesSummary | null> {
 async function readRankHistory(date: string): Promise<{ ranks: RankLite[] } | null> {
   const { data, error } = await sb()
     .from('naver_rank_history')
-    .select('keyword, alias, product_no, rank')
+    .select('keyword, alias, product_no, rank, status')
     .eq('collected_date', date)
     .eq('run_slot', 'morning')
     .or('is_tracked.eq.true,product_no.eq.')
@@ -111,8 +111,8 @@ async function readRankHistory(date: string): Promise<{ ranks: RankLite[] } | nu
   }
   if (!data || !data.length) return null
   const ranks: RankLite[] = data.map((d) => {
-    const row = d as { keyword: string; alias: string | null; product_no: string; rank: number | null }
-    return { keyword: row.keyword, alias: row.alias || row.keyword, productNo: row.product_no, rank: row.rank == null ? null : Number(row.rank) }
+    const row = d as { keyword: string; alias: string | null; product_no: string; rank: number | null; status: string | null }
+    return { keyword: row.keyword, alias: row.alias || row.keyword, productNo: row.product_no, rank: row.rank == null ? null : Number(row.rank), status: row.status ?? 'ok' }
   })
   return { ranks }
 }

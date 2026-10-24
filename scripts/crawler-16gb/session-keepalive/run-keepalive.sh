@@ -23,13 +23,9 @@ slack1() {  # $1=문구 $2=마커파일 — 마커 없을 때만(오늘 1회), �
 if [[ ! -f "$APPLESCRIPT" || ! -f "$JS" ]]; then say "❌ 저장소 파일 없음 — git pull"; exit 1; fi
 
 # 다른 크롤링 작업과 크롬 잠금 공유 — 바쁘면 기다리지 않고 이번 주기 건너뜀(20분 뒤 다시 옴)
-CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
-if ! mkdir "$CHROME_LOCK" 2>/dev/null; then
-  if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -le 5400 ]]; then say "건너뜀 — 크롬 사용 중"; exit 0; fi
-  rmdir "$CHROME_LOCK" 2>/dev/null
-  mkdir "$CHROME_LOCK" 2>/dev/null || { say "건너뜀 — 크롬 사용 중"; exit 0; }
-fi
-trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT
+source "$DASH/scripts/crawler-16gb/chrome-lock.sh"   # 공용 크롬 잠금(주인 PID)
+if ! chrome_lock_try; then say "건너뜀 — 크롬 사용 중"; exit 0; fi
+trap chrome_unlock EXIT
 open -ga "Google Chrome"
 sleep 5
 
@@ -119,7 +115,7 @@ check adcenter "https://advertising.coupang.com"
 # 로그인이 풀려서 아침 작업이 실패했고 지금 복구됐으면, 실패한 작업만 하루 1번씩 다시 돌린다 (작업 사이 5분).
 #   · 예정 시각이 안 지난 작업은 건드리지 않음 (원래 스케줄이 돈다) · 오늘 이미 ✅ 인 작업은 안 돌림 · 오늘 ❌ 기록이 없는 작업(아직 안 돈 것)도 안 돌림
 #   · 아침 보고서(09:05)는 재실행 대상 아님 · 재실행한 작업은 마커(.rerun-<이름>-<날짜>)로 하루 1번만
-rmdir "$CHROME_LOCK" 2>/dev/null   # 재실행되는 래퍼가 크롬 잠금을 직접 잡는다
+chrome_unlock   # 재실행되는 래퍼가 크롬 잠금을 직접 잡는다
 trap - EXIT
 #   · 윙·광고센터가 둘 다 로그인된 상태일 때만 (2026-10-24 시험: 광고센터만 복구되고 윙은 추가 인증에서 멈췄는데 재실행이 시작돼 헛걸음)
 if [[ $RECOVERED -eq 1 && ${LOGGED_wing:-0} -eq 1 && ${LOGGED_adcenter:-0} -eq 1 && -z "${KEEPALIVE_NO_RERUN:-}" ]]; then

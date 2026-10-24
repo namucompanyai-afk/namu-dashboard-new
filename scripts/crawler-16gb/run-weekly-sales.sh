@@ -56,15 +56,8 @@ if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 
 [[ -f "$CRAWLER/logs/.session-hub-expired" ]] && say "참고: 허브(SUPPLIER HUB) 로그인이 최근 점검에서 풀려 있었음(세션 유지 작업 기록) — 그래도 시도함"
 
 # 크롬 확장은 클로드 세션 하나씩만 (다른 크롤링과 잠금 공유, 최대 50분 대기)
-CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
-chrome_lock() {
-  for i in {1..100}; do
-    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
-    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
-    sleep 30
-  done
-  say "❌ 크롬 잠금을 50분 기다려도 안 풀림 ($CHROME_LOCK)"; return 1
-}
+source "${0:A:h}/chrome-lock.sh"   # 공용 크롬 잠금(주인 PID) — 2026-10-24 함수 안 trap 버그 수정
+trap chrome_unlock EXIT
 chrome_lock || exit 1
 open -ga "Google Chrome"
 sleep 10
@@ -89,7 +82,7 @@ printf '%s' "$PROMPT" | claude -p --chrome \
   --disallowedTools "WebFetch" "WebSearch" "Agent" \
   >> "$LOG" 2>&1
 say "클로드 종료 코드 $? (자세한 건 $LOG)"
-rmdir "$CHROME_LOCK" 2>/dev/null
+chrome_unlock
 
 # 클로드 자기 보고와 별개로 파일 확인 — 이번 실행 이후 시각의 export 1개
 GOT=""

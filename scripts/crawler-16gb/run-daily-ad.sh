@@ -24,15 +24,8 @@ if [[ ! -f "$JOB" || ! -f "$CHECK" ]]; then say "❌ 저장소 없음 — git pu
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 5번"; exit 1; fi
 [[ -f "$CRAWLER/logs/.session-wing-expired" ]] && say "참고: 윙 로그인이 최근 점검에서 풀려 있었음(세션 유지 작업 기록) — 그래도 시도함"
 
-CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
-chrome_lock() {
-  for i in {1..100}; do
-    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
-    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
-    sleep 30
-  done
-  say "❌ 크롬 잠금을 50분 기다려도 안 풀림"; return 1
-}
+source "${0:A:h}/chrome-lock.sh"   # 공용 크롬 잠금(주인 PID) — 2026-10-24 함수 안 trap 버그 수정
+trap chrome_unlock EXIT
 
 if [[ ! -f "$OUT/$FILE" ]]; then
   chrome_lock || exit 1
@@ -57,7 +50,7 @@ if [[ ! -f "$OUT/$FILE" ]]; then
     --disallowedTools "WebFetch" "WebSearch" "Agent" \
     >> "$LOG" 2>&1
   code=$?
-  rmdir "$CHROME_LOCK" 2>/dev/null
+  chrome_unlock
   say "클로드 종료 코드 $code (자세한 건 $LOG)"
   # 파일이 실제로 있으면 성공 — 문구는 파일이 없을 때 이유를 붙이는 용도로만 쓴다
   if [[ ! -f "$OUT/$FILE" ]] && tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -q "윙 로그인 필요"; then say "❌ 형, 윙 로그인 필요 (16GB 크롬)"; exit 1; fi

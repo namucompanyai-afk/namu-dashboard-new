@@ -21,15 +21,8 @@ mkdir -p "$OUT" "$CRAWLER/logs"
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S')	$*" | tee -a "$SUMMARY"; }
 
 # 크롬은 한 번에 한 작업만 (다른 크롤링과 잠금 공유)
-CHROME_LOCK="$CRAWLER/logs/.chrome-claude.lock"
-chrome_lock() {
-  for i in {1..100}; do
-    if mkdir "$CHROME_LOCK" 2>/dev/null; then trap 'rmdir "$CHROME_LOCK" 2>/dev/null' EXIT; return 0; fi
-    if [[ $(( $(date +%s) - $(stat -f %m "$CHROME_LOCK") )) -gt 5400 ]]; then rmdir "$CHROME_LOCK" 2>/dev/null; continue; fi
-    sleep 30
-  done
-  say "❌ 크롬 잠금을 50분 기다려도 안 풀림 ($CHROME_LOCK)"; return 1
-}
+source "${0:A:h}/chrome-lock.sh"   # 공용 크롬 잠금(주인 PID) — 2026-10-24 함수 안 trap 버그 수정
+trap chrome_unlock EXIT
 
 if [[ ! -f "$JOB" || ! -f "$RUN" ]]; then say "❌ 저장소 파일 없음 ($DASH) — git pull + sparse-checkout add scripts/coupang-stock-watch"; exit 1; fi
 if [[ ! -f "$CRAWLER/.env" ]]; then say "❌ ~/crawler/.env 없음 — SETUP.md 5번"; exit 1; fi
@@ -57,7 +50,7 @@ if [[ ! -f "$RESULT" ]]; then
     --disallowedTools "WebFetch" "WebSearch" "Agent" \
     >> "$LOG" 2>&1
   code=$?
-  rmdir "$CHROME_LOCK" 2>/dev/null
+  chrome_unlock
   say "클로드 종료 코드 $code (자세한 건 $LOG)"
   # 결과 파일이 실제로 있으면 성공 — 문구는 파일이 없을 때만 실패 이유로 쓴다
   if [[ ! -f "$RESULT" ]] && tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -qE "(광고센터|허브\(SUPPLIER HUB\)) 로그인 필요"; then
@@ -76,7 +69,7 @@ if [[ $NO_SEND -eq 1 ]]; then
   say "$([[ $? -eq 0 ]] && echo '✅' || echo '❌') 대조 검증 실행 (--no-send: Supabase·슬랙 없음, 메시지는 $LOG 에)"
   exit 0
 fi
-STOCK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --results "$OUT" --date "$TODAY" --out "$OUT/stock_report.json" --send >> "$LOG" 2>&1
+STOCK_WATCH_ENV="$CRAWLER/.env" npx --yes tsx "$RUN" --results "$OUT" --date "$TODAY" --out "$OUT/stock_report.json" --sent-marker "$OUT/.stock_slack_sent" --send >> "$LOG" 2>&1
 C_EXIT=$?
 say "$([[ $C_EXIT -eq 0 ]] && echo '✅' || echo '❌') 대조·슬랙 종료 코드 $C_EXIT"
 exit $C_EXIT
