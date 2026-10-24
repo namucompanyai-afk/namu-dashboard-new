@@ -91,7 +91,7 @@ kc_integrity_check() {
 # 감사 로그 1줄 쓰기 (+상태 파일 갱신).   $1=감사로그 $2=상태파일 $3=시각 $4=사이트 $5=호출자 $6=직전점검 $7=결과
 kc_audit_append() {
   local alog="$1" st="$2" n prev
-  n=$(wc -l < "$alog" 2>/dev/null | tr -d ' '); n=${n:-0}
+  n=0; [[ -f "$alog" ]] && n=$(wc -l < "$alog" | tr -d ' ')
   prev="00000000"; [[ $n -gt 0 ]] && prev=$(kc_hash8 "$(sed -n "${n}p" "$alog")")
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$((n + 1))" "$3" "$4" "$5" "$6" "$7" "$prev" >> "$alog"
   printf 'lines=%s last=%s\n' "$((n + 1))" "$(kc_hash8 "$(sed -n "$((n + 1))p" "$alog")")" > "$st"
