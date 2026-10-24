@@ -71,6 +71,8 @@ if [[ ! -f "$OUT/$FILE" ]]; then
 - 확인 명령: npx tsx $CHECK <파일>  (작업 폴더 $DASH 에서)
 "
   # 지시문은 stdin 으로 (--allowedTools 뒤에 프롬프트를 두면 도구 이름으로 먹힘)
+  # 이번 실행에서 새로 붙은 줄만 보고 판정 (로그는 하루치가 한 파일에 이어 붙음 — 10/23 아침 실패 문구가 남아 오판정)
+  LOG_START=$(wc -l < "$LOG" 2>/dev/null | tr -d ' '); LOG_START=${LOG_START:-0}
   printf '%s' "$PROMPT" | claude -p --chrome \
     --add-dir "$HOME/Downloads" \
     --allowedTools "mcp__claude-in-chrome" "Bash(ls:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(npx tsx:*)" "Bash(sleep:*)" "Read" "Write" \
@@ -82,7 +84,7 @@ fi
 
 # 클로드 자기 보고와 별개로 파일 존재 확인
 if [[ ! -f "$OUT/$FILE" ]]; then
-  if grep -q "윙 로그인 필요" "$LOG" 2>/dev/null; then
+  if { tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -q "윙 로그인 필요"; }; then
     say "❌ $FILE 없음 — 형, 윙 로그인 필요 (16GB 크롬)"
     [[ $NO_SEND -eq 0 ]] && slack_once "오늘 윙 파일 없음 — 16GB 윙 로그인 필요"
   else

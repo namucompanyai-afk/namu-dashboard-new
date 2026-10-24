@@ -117,6 +117,31 @@ async function readRankHistory(date: string): Promise<{ ranks: RankLite[] } | nu
   return { ranks }
 }
 
+/** 자동 로그인 어제 요약 — 16GB 감사 로그(relogin-audit.log)·이상 기록(relogin-anomaly.log)에서 집계. 값(아이디·비번)은 애초에 로그에 없다 */
+function summarizeAutoLogin(dir: string, date: string): string | null {
+  const alog = path.join(dir, 'relogin-audit.log')
+  const state = path.join(dir, '.relogin-audit.state')
+  if (!fs.existsSync(alog) && !fs.existsSync(state)) return null // 이 기능을 아직 안 쓰는 맥
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  const ymd = d.toISOString().slice(0, 10)
+  const lines = fs.existsSync(alog) ? fs.readFileSync(alog, 'utf-8').split('\n').filter(Boolean) : []
+  const cnt: Record<string, number> = { wing: 0, adcenter: 0, eland: 0 }
+  for (const l of lines) {
+    const f = l.split('\t') // 번호·시각·사이트·호출자·직전점검·결과·앞줄해시
+    if ((f[1] ?? '').startsWith(ymd) && f[5] === '읽음' && f[2] in cnt) cnt[f[2]] += 1
+  }
+  const alines = fs.existsSync(path.join(dir, 'relogin-anomaly.log')) ? fs.readFileSync(path.join(dir, 'relogin-anomaly.log'), 'utf-8').split('\n').filter(Boolean) : []
+  let anomalies = alines.filter((l) => l.startsWith(ymd)).length
+  // 감사 로그가 통째로 사라졌거나 줄어든 경우 — 읽기 시도가 없어서 kc-read 가 못 잡았을 수 있으니 여기서도 확인
+  if (fs.existsSync(state)) {
+    const m = /lines=(\d+)/.exec(fs.readFileSync(state, 'utf-8'))
+    if (m && Number(m[1]) > lines.length) anomalies += 1
+  }
+  const total = cnt.wing + cnt.adcenter + cnt.eland
+  return `어제 자동 로그인 ${total}회(윙 ${cnt.wing}·광고센터 ${cnt.adcenter}·이랜드 ${cnt.eland}), 이상 ${anomalies}건`
+}
+
 async function main() {
   loadEnv()
   const date = opt('--date') ?? kstToday()
@@ -149,7 +174,8 @@ async function main() {
     }
   }
 
-  const sources: MorningSources = { date, yesterday, stock, catalogToday, catalogYesterday, pageToday, rankToday, rankYesterday, adDaily, naverSales, loginExpired }
+  const autoLogin = markersDir && fs.existsSync(markersDir) ? summarizeAutoLogin(markersDir, date) : null
+  const sources: MorningSources = { date, yesterday, stock, catalogToday, catalogYesterday, pageToday, rankToday, rankYesterday, adDaily, naverSales, loginExpired, autoLogin }
   const { text, missing } = buildMorningReport(sources)
   const out = opt('--out')
   if (out) fs.writeFileSync(out, JSON.stringify({ date, sources, text, missing }, null, 2))

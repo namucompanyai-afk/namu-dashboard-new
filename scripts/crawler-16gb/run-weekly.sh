@@ -65,6 +65,8 @@ PROMPT="$(cat "$JOB")
 - 확인 명령: node $CHECK <파일>
 "
 # 지시문은 stdin 으로 — --allowedTools/--disallowedTools 는 뒤따르는 인자를 전부 도구 이름으로 먹어서 프롬프트를 뒤에 두면 안 된다 (10/21 16GB 실패 원인)
+# 이번 실행에서 새로 붙은 줄만 보고 판정 (로그는 하루치가 한 파일에 이어 붙음 — 10/23 아침 실패 문구가 남아 오판정)
+LOG_START=$(wc -l < "$LOG" 2>/dev/null | tr -d ' '); LOG_START=${LOG_START:-0}
 printf '%s' "$PROMPT" | claude -p --chrome \
   --add-dir "$HOME/Downloads" \
   --allowedTools "mcp__claude-in-chrome" "Bash(ls:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(node:*)" "Bash(sleep:*)" "Read" "Write" \
@@ -83,7 +85,7 @@ for f in "$WEEK_FILE" "$MONTH_FILE"; do
     say "❌ $f 없음"
   fi
 done
-if grep -q "윙 로그인 필요" "$LOG" 2>/dev/null; then say "❌ 형, 윙 로그인 필요 (16GB 크롬)"; fi
+if { tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -q "윙 로그인 필요"; }; then say "❌ 형, 윙 로그인 필요 (16GB 크롬)"; fi
 if [[ $OK -eq 0 ]]; then say "업로드 생략 — 받은 파일 없음"; exit 1; fi
 if [[ $NO_UPLOAD -eq 1 ]]; then say "업로드 생략 (--no-upload 시험 실행) — 파일은 $OUT 에 있음"; exit 0; fi
 

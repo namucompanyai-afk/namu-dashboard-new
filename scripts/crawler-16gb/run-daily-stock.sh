@@ -49,6 +49,8 @@ if [[ ! -f "$RESULT" ]]; then
 - 오늘: $TODAY
 - 결과 파일: $RESULT
 "
+  # 로그는 하루치가 한 파일에 이어 붙는다 → 이번 실행에서 새로 붙은 줄만 보고 판정 (10/23: 아침 실패 문구가 남아 성공을 실패로 오판정)
+  LOG_START=$(wc -l < "$LOG" 2>/dev/null | tr -d ' '); LOG_START=${LOG_START:-0}
   # 지시문은 stdin 으로 (--allowedTools 뒤에 프롬프트를 두면 도구 이름으로 먹힘)
   printf '%s' "$PROMPT" | claude -p --chrome \
     --allowedTools "mcp__claude-in-chrome" "Bash(mkdir:*)" "Bash(sleep:*)" "Read" "Write" \
@@ -57,7 +59,8 @@ if [[ ! -f "$RESULT" ]]; then
   code=$?
   rmdir "$CHROME_LOCK" 2>/dev/null
   say "클로드 종료 코드 $code (자세한 건 $LOG)"
-  if grep -qE "(광고센터|허브\(SUPPLIER HUB\)) 로그인 필요" "$LOG" 2>/dev/null; then
+  # 결과 파일이 실제로 있으면 성공 — 문구는 파일이 없을 때만 실패 이유로 쓴다
+  if [[ ! -f "$RESULT" ]] && tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -qE "(광고센터|허브\(SUPPLIER HUB\)) 로그인 필요"; then
     say "❌ 로그인 필요 (로그에서 확인, 16GB 크롬)"
     exit 1
   fi

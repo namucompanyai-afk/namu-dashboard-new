@@ -49,6 +49,8 @@ if [[ ! -f "$OUT/$FILE" ]]; then
 - 기대 파일명: $FILE
 - 확인 명령: node $CHECK <파일>
 "
+  # 로그는 하루치가 한 파일에 이어 붙는다 → 이번 실행에서 새로 붙은 줄만 보고 판정 (10/23: 아침 실패 문구가 남아 성공을 실패로 오판정)
+  LOG_START=$(wc -l < "$LOG" 2>/dev/null | tr -d ' '); LOG_START=${LOG_START:-0}
   printf '%s' "$PROMPT" | claude -p --chrome \
     --add-dir "$HOME/Downloads" \
     --allowedTools "mcp__claude-in-chrome" "Bash(ls:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(node:*)" "Bash(sleep:*)" "Read" "Write" \
@@ -57,7 +59,8 @@ if [[ ! -f "$OUT/$FILE" ]]; then
   code=$?
   rmdir "$CHROME_LOCK" 2>/dev/null
   say "클로드 종료 코드 $code (자세한 건 $LOG)"
-  if grep -q "윙 로그인 필요" "$LOG" 2>/dev/null; then say "❌ 형, 윙 로그인 필요 (16GB 크롬)"; exit 1; fi
+  # 파일이 실제로 있으면 성공 — 문구는 파일이 없을 때 이유를 붙이는 용도로만 쓴다
+  if [[ ! -f "$OUT/$FILE" ]] && tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -q "윙 로그인 필요"; then say "❌ 형, 윙 로그인 필요 (16GB 크롬)"; exit 1; fi
 else
   say "파일 이미 있음 — 다운로드 생략 ($OUT/$FILE)"
 fi

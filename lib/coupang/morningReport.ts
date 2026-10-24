@@ -37,6 +37,7 @@ export type MorningSources = {
   adDaily: { rows: AdCampaignRow[] } | null
   naverSales: NaverSalesSummary | null // 2026-10-22 추가 — 네이버 커머스 API 어제 결제완료 상품주문 집계. null 이면 그날 수집 자체가 안 됨(미수신)
   loginExpired: string[] // 예: ['윙', '허브(SUPPLIER HUB)']
+  autoLogin?: string | null // 2026-10-24: 자동 로그인 어제 요약 한 줄(감사 로그에서 집계, 없으면 null) — ⑧ 칸에 그대로
 }
 
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}/${Number(ymd.slice(8, 10))}`
@@ -178,6 +179,7 @@ export function buildMorningReport(s: MorningSources): { text: string; missing: 
   const dow = new Date(`${s.date}T00:00:00+09:00`).getDay() // 0=일 ... 2=화 4=목
   if (dow === 2 || dow === 4) todo.push('오늘 화/목 — 쿠팡 로켓 발주 확인')
   if (s.loginExpired.length) todo.push(`로그인 풀림: ${s.loginExpired.join(', ')}`)
+  if (s.autoLogin) todo.push(s.autoLogin)
   if (missing.length) todo.push(`못 받은 소스: ${missing.join(', ')}`)
   L.push(...(todo.length ? todo.map((x) => `• ${x}`) : ['• 특이사항 없음']))
 

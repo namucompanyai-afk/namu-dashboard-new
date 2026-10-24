@@ -81,6 +81,8 @@ PROMPT="$(cat "$JOB")
 - 저장 폴더: $OUT
 - 기간 메모 파일: $PERIOD_FILE
 "
+# 이번 실행에서 새로 붙은 줄만 보고 판정 (로그는 하루치가 한 파일에 이어 붙음 — 10/23 아침 실패 문구가 남아 오판정)
+LOG_START=$(wc -l < "$LOG" 2>/dev/null | tr -d ' '); LOG_START=${LOG_START:-0}
 printf '%s' "$PROMPT" | claude -p --chrome \
   --add-dir "$HOME/Downloads" \
   --allowedTools "mcp__claude-in-chrome" "Bash(ls:*)" "Bash(mv:*)" "Bash(mkdir:*)" "Bash(wc:*)" "Bash(sleep:*)" "Read" "Write" \
@@ -96,8 +98,8 @@ for f in "$OUT"/A00993784_SALES_ANALYSIS_BY_PRODUCT_*.csv; do
   [[ "$ts" -ge "$RUN_STAMP" ]] && GOT="$f"
 done
 if [[ -z "$GOT" ]]; then
-  if grep -q "허브 로그인 필요" "$LOG" 2>/dev/null; then say "❌ 파일 없음 — 형, 허브 로그인 필요 (16GB 크롬)"; slack "*[허브 판매 분석]* ${START}~${END} export 못 받음 — 16GB 허브 로그인 필요"
-  elif grep -q "차단" "$LOG" 2>/dev/null; then say "❌ 파일 없음 — 허브 차단(Access Denied). 크롬 재시작 후 다시"; slack "*[허브 판매 분석]* ${START}~${END} export 못 받음 — 허브 차단, 크롬 재시작 필요"
+  if { tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -q "허브 로그인 필요"; }; then say "❌ 파일 없음 — 형, 허브 로그인 필요 (16GB 크롬)"; slack "*[허브 판매 분석]* ${START}~${END} export 못 받음 — 16GB 허브 로그인 필요"
+  elif { tail -n +$((LOG_START + 1)) "$LOG" 2>/dev/null | grep -q "차단"; }; then say "❌ 파일 없음 — 허브 차단(Access Denied). 크롬 재시작 후 다시"; slack "*[허브 판매 분석]* ${START}~${END} export 못 받음 — 허브 차단, 크롬 재시작 필요"
   else say "❌ 파일 없음 — 다운로드 실패 (로그 확인)"; slack "*[허브 판매 분석]* ${START}~${END} export 못 받음 — 로그 확인 필요"
   fi
   exit 1
