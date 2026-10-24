@@ -64,4 +64,16 @@ reset; run "$KEEPCHAIN" >/dev/null; run "$KEEPCHAIN" >/dev/null
 sed -i '' '1s/wing/adcenter/' "$T/relogin-audit.log"; run "$KEEPCHAIN" >/dev/null
 [[ "$(rc)" == 3 ]] && grep -q "줄이 바뀜" "$T/err.txt" && ok "줄 내용 변경 → 거부 + 알림(줄이 바뀜)" || no "줄 변경을 못 잡음"
 
+echo "알림 문구가 슬랙에 보낼 수 있는 JSON 인지 (2026-10-24: 역슬래시 때문에 JSON 이 깨져 알림이 사라졌던 회귀 방지)"
+source "$HERE/kc-lib.sh"
+for case in "정해진 점검 작업($(kc_allowed_caller wing)) 밖에서 비번 읽기" "ssh·터미널·클로드 경유로 점검 작업을 직접 실행해 비번 읽기" '따옴표 "와" 역슬래시 \\ 와 줄바꿈
+둘째 줄'; do
+  msg="⚠️ 자동 로그인 이상: ${case} (사이트 wing, 2026-10-24 17:33:44)"
+  payload="{\"text\":\"$(kc_json_escape "$msg")\"}"
+  if printf '%s' "$payload" | python3 -c 'import json,sys; json.loads(sys.stdin.read())' 2>/dev/null; then ok "JSON 유효: ${case:0:24}…"; else no "JSON 깨짐: ${case:0:24}…"; fi
+done
+# 실제 거부 문구(정규식 역슬래시 없음)
+reset; run "$MANUALCHAIN" >/dev/null
+grep -q '\\' "$T/err.txt" && no "알림 문구에 역슬래시가 남음" || ok "거부 알림 문구에 역슬래시 없음"
+
 echo; echo "통과 $PASS · 실패 $FAIL"; rm -rf "$T"; [[ $FAIL -eq 0 ]]

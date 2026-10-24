@@ -30,7 +30,7 @@ kc_chain() {
 kc_caller_check() {
   local site="$1" chain="$2" allowed
   allowed=$(kc_allowed_caller "$site")
-  if ! echo "$chain" | grep -Eq "$allowed"; then echo "정해진 점검 작업($allowed) 밖에서 비번 읽기"; return 1; fi
+  if ! echo "$chain" | grep -Eq "$allowed"; then echo "정해진 점검 작업(${allowed//\\/}) 밖에서 비번 읽기"; return 1; fi
   if echo "$chain" | grep -Eqi 'sshd|ssh-session|/login |Terminal|iTerm|claude|ssh '; then echo "ssh·터미널·클로드 경유로 점검 작업을 직접 실행해 비번 읽기"; return 1; fi
   return 0
 }
@@ -95,4 +95,47 @@ kc_audit_append() {
   prev="00000000"; [[ $n -gt 0 ]] && prev=$(kc_hash8 "$(sed -n "${n}p" "$alog")")
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$((n + 1))" "$3" "$4" "$5" "$6" "$7" "$prev" >> "$alog"
   printf 'lines=%s last=%s\n' "$((n + 1))" "$(kc_hash8 "$(sed -n "$((n + 1))p" "$alog")")" > "$st"
+}
+
+# ── 슬랙 발송 (알림이 조용히 사라지지 않게) ─────────────────────────────────
+#   2026-10-24: 이상 알림 문구에 정규식 역슬래시가 들어가 JSON 이 깨져(Slack 400) 알림이 조용히 사라졌다 → ① JSON 글자 이스케이프 ② 응답 코드·본문 기록 ③ 실패 시 다른 웹훅으로 재시도 ④ 다 실패하면 보류 파일에 쌓아 두었다가 다음 점검 때 다시 보냄
+kc_json_escape() { local t="$1"; t="${t//\\/\\\\}"; t="${t//\"/\\\"}"; t="${t//$'\n'/\\n}"; t="${t//$'\t'/ }"; printf '%s' "$t"; }
+kc_webhooks() {  # $1=.env 경로 → 웹훅 주소 후보 (중복 제거, 이름만 로그에 남기려고 "이름=주소" 형태로)
+  local env="$1" n u; local -a seen
+  for n in SLACK_REVIEW_WEBHOOK_URL SLACK_SALES_WEBHOOK_URL KIMS_SLACK_WEBHOOK_URL; do
+    u=$(grep -E "^${n}=" "$env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'")
+    [[ -z "$u" ]] && continue
+    [[ " ${seen[*]} " == *" $u "* ]] && continue
+    seen+=("$u"); echo "$n=$u"
+  done
+}
+# 보내기: 웹훅 후보를 차례로 시도, 첫 성공에서 끝. 성공 0 / 전부 실패 1. 기록은 $2(relogin-alert.log) — 주소·값은 안 적고 이름·응답 코드만
+kc_slack_send() {  # $1=문구 $2=알림로그 $3=.env 경로
+  local text="$1" alog="$2" env="$3" entry name url res code body payload; local -i any=0
+  payload="{\"text\":\"$(kc_json_escape "$text")\"}"
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    any=1; name="${entry%%=*}"; url="${entry#*=}"
+    res=$(curl -sS -m 20 -w $'\n%{http_code}' -X POST -H 'Content-Type: application/json' --data "$payload" "$url" 2>&1); code="${res##*$'\n'}"; body="${res%$'\n'*}"
+    printf '%s\t%s\tHTTP %s\t%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$name" "$code" "${body:0:40}" >> "$alog"
+    [[ "$code" == "200" && "$body" == "ok" ]] && return 0
+  done < <(kc_webhooks "$env")
+  [[ $any -eq 0 ]] && printf '%s\t웹훅 주소 없음\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$alog"
+  return 1
+}
+# 보내기 + 실패하면 보류 파일($4)에 쌓음 (다음 점검 때 kc_flush_pending 이 다시 보냄)
+kc_slack_notify() {  # $1=문구 $2=알림로그 $3=.env $4=보류파일
+  kc_slack_send "$1" "$2" "$3" && return 0
+  printf '%s\n' "$(kc_json_escape "$1" | sed 's/\\n/ /g')" >> "$4"
+  printf '%s\t발송 실패 — 보류 파일에 저장\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$2"
+  return 1
+}
+kc_flush_pending() {  # $1=알림로그 $2=.env $3=보류파일
+  [[ -s "$3" ]] || return 0
+  local keep; keep=$(mktemp); local line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    kc_slack_send "$line" "$1" "$2" || printf '%s\n' "$line" >> "$keep"
+  done < "$3"
+  cat "$keep" > "$3"; rm -f "$keep"
 }

@@ -22,13 +22,15 @@ if [[ $TEST -eq 1 && -n "${KC_DOW:-}" ]]; then DOW="$KC_DOW"; else DOW=$(date '+
 HHMM=$(echo "${NOW#* }" | cut -c1,2,4,5)
 if [[ $TEST -eq 1 && -n "${KC_CHAIN:-}" ]]; then CHAIN="$KC_CHAIN"; else CHAIN=$(kc_chain); fi   # 호출자 흉내도 시험 모드에서만
 
-webhook() { grep -E '^SLACK_REVIEW_WEBHOOK_URL=' "$CRAWLER/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'" ; }
+PENDING="$LOGDIR/.relogin-alert-pending"; ALERTLOG="$LOGDIR/relogin-alert.log"
 alert() {  # $1=이상 내용
   local text="⚠️ 자동 로그인 이상: $1 (사이트 $SITE, $NOW)"
   printf '%s\t%s\t%s\n' "$NOW" "$SITE" "$1" >> "$ANOM"
   if [[ $TEST -eq 1 ]]; then echo "[알림 문구] $text" >&2; return; fi
-  local url; url=$(webhook); [[ -z "$url" ]] && return
-  curl -sS -m 20 -o /dev/null -X POST -H 'Content-Type: application/json' --data "{\"text\":\"$text\"}" "$url" || true
+  kc_flush_pending "$ALERTLOG" "$CRAWLER/.env" "$PENDING"
+  if ! kc_slack_notify "$text" "$ALERTLOG" "$CRAWLER/.env" "$PENDING"; then
+    printf '%s\t%s\t알림 발송 실패(보류 파일에 저장, 로그 relogin-alert.log)\n' "$NOW" "$SITE" >> "$ANOM"
+  fi
 }
 CALLER_SHORT=$(echo "$CHAIN" | grep -Eo 'run-[a-z-]+\.sh|sshd|ssh|claude|Terminal|iTerm|launchd' | awk '!s[$0]++' | head -4 | paste -sd'>' -)
 [[ -z "$CALLER_SHORT" ]] && CALLER_SHORT="알수없음"

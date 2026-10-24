@@ -42,10 +42,12 @@ RELOGIN_AS="$DASH/scripts/crawler-16gb/session-keepalive/relogin.applescript"
 RELOGIN_FILL="$DASH/scripts/crawler-16gb/session-keepalive/relogin-fill.js"
 RELOGIN_STATE="$DASH/scripts/crawler-16gb/session-keepalive/relogin-state.js"
 KEYCHAIN_SVC="namu-coupang-xauth"
-slack_now() {  # $1=문구 — 하루 1회 규칙 없이 바로 (성공 알림 용)
-  local url; url=$(webhook); [[ -z "$url" ]] && return
-  curl -sS -m 20 -o /dev/null -X POST -H 'Content-Type: application/json' --data "{\"text\":\"$1\"}" "$url" || true
+slack_now() {  # $1=문구 — 하루 1회 규칙 없이 바로. 실패하면 보류 파일에 쌓아 다음 점검 때 다시 보냄 (kc-lib.sh)
+  kc_slack_notify "$1" "$CRAWLER/logs/relogin-alert.log" "$CRAWLER/.env" "$CRAWLER/logs/.relogin-alert-pending"
 }
+source "$DASH/scripts/crawler-16gb/session-keepalive/kc-lib.sh"
+kc_flush_pending "$CRAWLER/logs/relogin-alert.log" "$CRAWLER/.env" "$CRAWLER/logs/.relogin-alert-pending"   # 지난번에 못 보낸 알림이 있으면 먼저 다시 보냄
+
 # 사이트 이름 → 알림에 쓰는 한글 이름
 site_ko() { case "$1" in wing) echo "윙" ;; adcenter) echo "광고센터" ;; *) echo "$1" ;; esac }
 relogin_fail() {  # $1=사이트 $2=사유(인증번호/비번 오류/화면 인식 실패/키체인 읽기 실패 …) $3=keepalive.log 에 남길 상세
